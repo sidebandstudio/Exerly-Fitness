@@ -78,10 +78,6 @@ struct NutritionEntryEditor: View {
                             if let error = libraryActions.error { Text(error).foregroundStyle(Color.exError) }
                         }.id("errors").accessibilityFocused($errorsFocused)
                     }
-                    if editing != nil {
-                        Button("Delete entry", role: .destructive) { typing = false; confirmation = .delete }
-                            .font(.exLabel).frame(minHeight: 44).accessibilityIdentifier("nutrition.deleteEntry")
-                    }
                 }
                 .onChange(of: draft.errors) { _, errors in
                     guard !errors.isEmpty else { return }
@@ -104,6 +100,13 @@ struct NutritionEntryEditor: View {
                     }.accessibilityIdentifier("nutrition.cancelEntry")
                 }
                 ToolbarItem(placement: .primaryAction) { favoriteButton }
+                if editing != nil {
+                    // Up here rather than under the nutrients, where it took three swipes to reach.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Delete entry", systemImage: "trash", role: .destructive) { typing = false; confirmation = .delete }
+                            .accessibilityIdentifier("nutrition.deleteEntry")
+                    }
+                }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { typing = false } }
             }
         }
@@ -114,7 +117,7 @@ struct NutritionEntryEditor: View {
         .sheet(item: $confirmation) { kind in
             if kind == .delete, let editing {
                 NutritionConfirmation(title: "Delete this entry?",
-                                      message: "Remove \(editing.food.name) from \(editing.meal) on \(editing.date)? You can undo this from the diary.",
+                                      message: "Remove \(editing.food.name) from \(editing.meal) \(Self.onDay(editing.date, timeZone: timeZone))? You can undo this from the diary.",
                                       confirm: "Delete entry", destructive: true) {
                     confirmation = nil
                     if actions.delete(editing) {
@@ -270,6 +273,13 @@ struct NutritionEntryEditor: View {
         short.timeZone = BodyDates.utc
         spoken.timeZone = BodyDates.utc
         return (BodyDates.anchor(draft.date).formatted(short), BodyDates.anchor(draft.date).formatted(spoken))
+    }
+
+    /// "today", "yesterday" or "on Fri, Oct 9", mid-sentence.
+    static func onDay(_ date: LocalDate, timeZone: TimeZone) -> String {
+        let today = LocalDate(Date(), in: timeZone)
+        let day = BodyFormat.day(date, today: today)
+        return date == today || date == today.adding(days: -1) ? day.lowercased() : "on \(day)"
     }
 
     private func hideKeyboard() {

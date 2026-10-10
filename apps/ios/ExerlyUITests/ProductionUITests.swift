@@ -528,7 +528,14 @@ final class ProductionUITests: ExerlyUITestCase {
         XCTAssertNotEqual(copiedID, "nutrition.entry.\(seeded.id)")
         capture(app, "nutrition-copied-day")
         tap(copied, in: app)
-        tap(app.buttons["Delete entry"], in: app)
+        // Delete sits in the sheet's toolbar, and its question names the day in words.
+        let delete = app.navigationBars.buttons["nutrition.deleteEntry"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5) && delete.isHittable, app.debugDescription)
+        delete.tap()
+        let question = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Remove ")).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 5))
+        XCTAssertNil(question.label.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression), question.label)
+        XCTAssertTrue(question.label.contains(" from Dinner on "), question.label)
         capture(app, "nutrition-delete-review")
         tap(app.buttons["nutrition.confirm"], in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))

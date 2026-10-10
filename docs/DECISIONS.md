@@ -867,3 +867,12 @@ the meal on the new day. An entry saved with its time on another day (a late
 snack an import counted for the day before) shows on its diary day and keeps its
 exact time unless someone changes it. Logging to another day names it on the
 button: "Log to Breakfast · Sun" within a week, else "Log to Breakfast · Oct 3".
+
+## 2026-10-10: Delete sits in the entry sheet's toolbar
+
+Delete entry was three swipes down, under the full nutrient panel. It's now a
+trash button in the sheet's toolbar beside the favorite star, still behind the
+confirmation, which names the day in words ("from Dinner on Sun, Oct 11",
+"today", "yesterday") instead of "2026-10-10". Today's rows get no swipe action:
+Today is a scroll view, not a list, and its meal list is being reworked for
+multi-select.
