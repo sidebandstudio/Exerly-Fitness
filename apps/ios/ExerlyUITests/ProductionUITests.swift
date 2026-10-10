@@ -3294,7 +3294,7 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         // Done saves the edit, then closes once the account has it.
         tap(app.buttons["preferences.save"], in: app)
-        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.navigationBars["Preferences"])
+        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.navigationBars["Your details"])
         await fulfillment(of: [closed], timeout: 15)
         let saved = try await request("GET", "/api/preferences", token: token)
         XCTAssertEqual((saved["values"] as? [String: Any])?["name"] as? String, "Upgraded Taylor")
@@ -3415,9 +3415,11 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         tap(app.buttons["Log In"], in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
-        openPreferences(app)
+        openReminders(app)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         XCTAssertFalse(springboard.alerts.firstMatch.exists, "Loading saved reminder intent must not request OS permission")
+        XCTAssertEqual(app.switches["reminders.sleep"].value as? String, "1", "Reminders show the account's saved choice")
+        XCTAssertEqual(app.switches["reminders.device"].value as? String, "0")
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let due = calendar.dateComponents([.hour, .minute], from: Date().addingTimeInterval(130))
@@ -3426,15 +3428,17 @@ final class ProductionUITests: ExerlyUITestCase {
         _ = try await request("PATCH", "/api/preferences", body: [
             "base_revision": current["revision"]!, "changes": ["timezone": "UTC", "reminderTimes": ["sleep": dueTime]]
         ], token: token)
-        tap(app.buttons["Refresh reminder delivery"], in: app)
-        let ready = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["Enable reminders on this iPhone"])
-        await fulfillment(of: [ready], timeout: 15)
-        tap(app.buttons["Enable reminders on this iPhone"], in: app)
+        // Reopening reads the account again.
+        tap(app.navigationBars.buttons["Profile"], in: app)
+        openReminders(app)
+        tap(app.switches["reminders.device"], in: app)
         if springboard.alerts.firstMatch.waitForExistence(timeout: 5) {
             springboard.alerts.buttons["Allow"].tap()
         }
-        reveal(app.staticTexts["preferences.scheduled-reminders"], in: app)
-        XCTAssertTrue(app.staticTexts["1 reminder scheduled"].waitForExistence(timeout: 15))
+        let scheduled = app.descendants(matching: .any)["reminders.scheduled.0"]
+        reveal(scheduled, in: app)
+        XCTAssertTrue(scheduled.waitForExistence(timeout: 15))
+        XCTAssertTrue(scheduled.label.hasPrefix("Sleep · every day at "), scheduled.label)
         capture(app, "reminder-device-scheduled")
         // Scheduling, permission, cancellation and saved intent run everywhere.
         // A busy hosted simulator can miss the wall-clock delivery window before
@@ -3449,20 +3453,27 @@ final class ProductionUITests: ExerlyUITestCase {
         let values = try XCTUnwrap(retained["values"] as? [String: Any])
         XCTAssertEqual((values["reminders"] as? [String: Bool])?["sleep"], true)
         XCTAssertEqual((values["reminderTimes"] as? [String: String])?["sleep"], dueTime)
-        tap(app.buttons["Turn off delivery on this iPhone"], in: app)
-        XCTAssertTrue(app.staticTexts["Delivery off on this iPhone"].waitForExistence(timeout: 10))
+        tap(app.switches["reminders.device"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["reminders.scheduled.none"].waitForExistence(timeout: 10))
         capture(app, "reminder-device-disabled")
         app.terminate(); app.launchArguments = []; app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
-        openPreferences(app)
-        reveal(app.staticTexts["Delivery off on this iPhone"], in: app)
-        XCTAssertTrue(app.staticTexts["Delivery off on this iPhone"].exists)
+        openReminders(app)
+        XCTAssertEqual(app.switches["reminders.device"].value as? String, "0")
+        XCTAssertEqual(app.switches["reminders.sleep"].value as? String, "1")
+    }
+
+    private func openReminders(_ app: XCUIApplication) {
+        tap(app.buttons["Profile"], in: app)
+        tap(app.buttons["profile.reminders"], in: app)
+        XCTAssertTrue(app.navigationBars["Reminders"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.switches["reminders.sleep"].waitForExistence(timeout: 15))
     }
 
     private func openPreferences(_ app: XCUIApplication) {
         tap(app.buttons["Profile"], in: app)
         tap(app.buttons["profile.preferences"], in: app)
-        XCTAssertTrue(app.navigationBars["Preferences"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["Your details"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.textFields["preferences.name"].waitForExistence(timeout: 15))
         let ready = NSPredicate(format: "enabled == true")
         expectation(for: ready, evaluatedWith: app.buttons["Refresh preferences"])

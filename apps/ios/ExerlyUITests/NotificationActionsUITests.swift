@@ -36,27 +36,29 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         return String(format: "%02d:%02d", parts.hour!, parts.minute!)
     }
 
-    /// Turns on delivery in Preferences (or refreshes it), then goes Home.
+    /// Opens Profile's Reminders.
+    private func openReminders(_ app: XCUIApplication) {
+        guard !app.navigationBars["Reminders"].exists else { return }
+        tap(app.buttons["Profile"], in: app)
+        tap(app.buttons["profile.reminders"], in: app)
+        XCTAssertTrue(app.navigationBars["Reminders"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.switches["reminders.weighIn"].waitForExistence(timeout: 15), app.debugDescription)
+    }
+
+    /// Turns on delivery on this iPhone in Reminders, checks the one reminder
+    /// it lists, then goes Home.
     private func deliverReminders(_ app: XCUIApplication, capturing name: String? = nil) {
-        if !app.navigationBars["Preferences"].exists {
-            tap(app.buttons["Profile"], in: app)
-            tap(app.buttons["profile.preferences"], in: app)
-            XCTAssertTrue(app.navigationBars["Preferences"].waitForExistence(timeout: 10))
-        }
-        let enable = app.buttons["Enable reminders on this iPhone"]
-        let refresh = app.buttons["Refresh reminder delivery"]
-        reveal(refresh, in: app)
-        if enable.waitForExistence(timeout: 3) {
-            let ready = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: enable)
-            wait(for: [ready], timeout: 20)
-            tap(enable, in: app)
+        openReminders(app)
+        let device = app.switches["reminders.device"]
+        reveal(device, in: app)
+        if device.value as? String != "1" {
+            tap(device, in: app)
             if springboard.alerts.firstMatch.waitForExistence(timeout: 5) { springboard.alerts.buttons["Allow"].tap() }
-        } else {
-            tap(refresh, in: app)
         }
-        let scheduled = app.staticTexts["preferences.scheduled-reminders"]
+        let scheduled = app.descendants(matching: .any)["reminders.scheduled.0"]
         reveal(scheduled, in: app)
-        XCTAssertTrue(app.staticTexts["1 reminder scheduled"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(scheduled.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["reminders.scheduled.1"].exists, "One reminder: \(app.debugDescription)")
         if let name { capture(app, name) }
         XCUIDevice.shared.press(.home)
     }
@@ -81,10 +83,71 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.entry."))
     }
 
-    private func closePreferences(_ app: XCUIApplication) {
-        if app.navigationBars["Preferences"].exists { tap(app.buttons["preferences.save"], in: app) }
+    private func closeReminders(_ app: XCUIApplication) {
         tap(app.tabBars.buttons["Today"], in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+    }
+
+    /// A 7:30 AM weigh-in reminder from Profile: open Reminders, turn it on by
+    /// its title (asking iOS the first time), turn the minutes to 30, close the
+    /// picker. It's saved and scheduled with no other step, then listed in words.
+    func testAWeighInReminderAtSevenThirtyFromProfile() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "notify-reminders", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tap(app.buttons["Profile"], in: app)
+        capture(app, "reminders-profile")
+        var actions = 0
+        tap(app.buttons["profile.reminders"], in: app); actions += 1
+        let weighIn = app.switches["reminders.weighIn"]
+        XCTAssertTrue(weighIn.waitForExistence(timeout: 15))
+        XCTAssertEqual(weighIn.value as? String, "0")
+        capture(app, "reminders-off")
+        // The title turns it on, as the switch does.
+        app.staticTexts["Weigh-in"].tap(); actions += 1
+        if springboard.alerts.firstMatch.waitForExistence(timeout: 5) { springboard.alerts.buttons["Allow"].tap(); actions += 1 }
+        XCTAssertEqual(weighIn.value as? String, "1")
+        let time = app.datePickers["reminders.weighIn.time"]
+        XCTAssertTrue(time.waitForExistence(timeout: 5), app.debugDescription)
+        time.tap(); actions += 1
+        let minutes = app.pickerWheels.element(boundBy: 1)
+        XCTAssertTrue(minutes.waitForExistence(timeout: 5), app.debugDescription)
+        minutes.adjust(toPickerWheelValue: "30"); actions += 1
+        capture(app, "reminders-picker")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap(); actions += 1
+        XCTAssertLessThanOrEqual(actions, 6, "Five, plus Allow the first time")
+
+        let line = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Weigh-in · every day at 7:30")).firstMatch
+        reveal(line, in: app)
+        XCTAssertTrue(line.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(app.switches["reminders.device"].value as? String, "1", "Turning one on delivers it here")
+        capture(app, "reminders-weigh-in-scheduled")
+        var saved: [String: Any] = [:]
+        for _ in 0..<20 {
+            let current = try await request("GET", "/api/preferences", token: person.token)
+            saved = try XCTUnwrap(current["values"] as? [String: Any])
+            if (saved["reminderTimes"] as? [String: Any])?["weighIn"] as? String == "07:30" { break }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTAssertEqual((saved["reminders"] as? [String: Any])?["weighIn"] as? Bool, true)
+        XCTAssertEqual((saved["reminderTimes"] as? [String: Any])?["weighIn"] as? String, "07:30", "Saved as before, for other clients")
+
+        // Profile says what's on; its details row opens a sheet of the same name.
+        tap(app.navigationBars.buttons["Profile"], in: app)
+        let row = app.buttons["profile.reminders"]
+        XCTAssertTrue((row.value as? String ?? "").hasPrefix("Weigh-in · every day at 7:30"), row.debugDescription)
+        tap(app.buttons["profile.details"], in: app)
+        XCTAssertTrue(app.navigationBars["Your details"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["profile.details"].label, "Your details")
+        // Its workout days turn on from their names too.
+        tap(app.buttons["Training preferences"], in: app)
+        let monday = app.switches["preferences.day.monday"]
+        reveal(monday, in: app)
+        let before = monday.value as? String
+        app.staticTexts["Monday"].tap()
+        XCTAssertNotEqual(monday.value as? String, before)
+        capture(app, "reminders-details-sheet")
     }
 
     func testLogUsualBreakfastFromTheMealReminder() async throws {
@@ -92,13 +155,11 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         waitForHistory(app)
         XCTAssertFalse(todayEntries(app).firstMatch.exists, "Nothing logged today yet")
         capture(app, "notify-before-today")
-        // Profile's reminders now include a weigh-in, with its own time.
-        tap(app.buttons["Profile"], in: app)
-        tap(app.buttons["profile.preferences"], in: app)
-        tap(app.buttons["Reminder preferences"], in: app)
-        reveal(app.textFields["preferences.reminderTimes.weighIn"], in: app)
-        XCTAssertTrue(app.switches["preferences.reminders.weighIn"].exists, app.debugDescription)
-        capture(app, "notify-preferences-weigh-in")
+        // Reminders shows the account's meal reminder, with a weigh-in beside it.
+        openReminders(app)
+        XCTAssertEqual(app.switches["reminders.meals"].value as? String, "1", app.debugDescription)
+        XCTAssertEqual(app.switches["reminders.weighIn"].value as? String, "0")
+        capture(app, "notify-reminders")
         deliverReminders(app, capturing: "notify-preferences-delivery")
 
         // Two taps from the banner: hold it, then Log usual breakfast.
@@ -118,7 +179,7 @@ final class NotificationActionsUITests: ExerlyUITestCase {
                                  "Logged a usual breakfast food: \(confirmation.label)")
 
         app.activate()
-        closePreferences(app)
+        closeReminders(app)
         let entry = todayEntries(app).firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(entry.label.hasPrefix(food), entry.label)
@@ -153,7 +214,7 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         capture(springboard, "notify-weight-logged")
 
         app.activate()
-        closePreferences(app)
+        closeReminders(app)
         // A new weigh-in starts from the last reading: the one typed in the notification.
         tap(app.buttons["today.weighIn"], in: app)
         let value = app.buttons["weighIn.value"]

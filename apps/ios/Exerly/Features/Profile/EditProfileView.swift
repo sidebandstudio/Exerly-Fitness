@@ -15,15 +15,12 @@ struct EditProfileView: View {
 
 private struct PreferencesEditor: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
-    @ObservedObject private var notifications = NotificationService.shared
     @StateObject private var store: PreferencesStore
     @FocusState private var focusedField: String?
     @State private var showKeepConfirmation = false
     @State private var showReplaceConfirmation = false
     @State private var foodExpanded = false
     @State private var trainingExpanded = false
-    @State private var remindersExpanded = false
     @State private var editTask: Task<Void, Never>?
     @State private var feetText = ""
     @State private var inchesText = ""
@@ -66,9 +63,7 @@ private struct PreferencesEditor: View {
                     foodSection.disabled(store.isLocked)
                     trainingSection.disabled(store.isLocked)
                     sleepSection.disabled(store.isLocked)
-                    remindersSection.disabled(store.isLocked)
                 }
-                deliverySection
             }
             .exListStyle()
             .onChange(of: store.error) { _, error in
@@ -79,7 +74,7 @@ private struct PreferencesEditor: View {
             }
         }
         .tint(.exPrimaryText)
-        .navigationTitle("Preferences")
+        .navigationTitle("Your details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // One action: Done saves any edits, then closes once the account has them.
@@ -89,7 +84,7 @@ private struct PreferencesEditor: View {
                     perform { await saveAndClose() }
                 }
                 .fontWeight(.semibold)
-                .accessibilityHint(store.hasEdits || store.draft?.pending != nil ? "Saves your changes and closes" : "Closes preferences")
+                .accessibilityHint(store.hasEdits || store.draft?.pending != nil ? "Saves your changes and closes" : "Closes your details")
                 .accessibilityIdentifier("preferences.save")
                 .disabled(store.isSaving || store.isLoading)
             }
@@ -231,6 +226,7 @@ private struct PreferencesEditor: View {
                         if selected { days.insert(day) } else { days.remove(day) }
                         store.edit("workoutDays", value: PreferenceFields.days.filter { days.contains($0) }.joined(separator: "\n"))
                     }))
+                    .toggleStyle(ExRowToggleStyle())
                     .accessibilityIdentifier("preferences.day.\(day)")
                     .tint(.exPrimaryText)
                 }
@@ -242,53 +238,6 @@ private struct PreferencesEditor: View {
             field("sleepGoalHours", keyboard: .decimalPad)
         }
     }
-    private var remindersSection: some View {
-        Section {
-            DisclosureGroup("Reminder preferences", isExpanded: $remindersExpanded) {
-                ForEach(["meals", "workouts", "sleep", "weighIn"], id: \.self) { kind in
-                    Toggle(PreferenceFields.label("reminders.\(kind)"), isOn: enabled("reminders.\(kind)"))
-                        .accessibilityIdentifier("preferences.reminders.\(kind)")
-                        .tint(.exPrimaryText)
-                }
-                field("reminderTimes.meals", multiline: true)
-                field("reminderTimes.workout", keyboard: .numbersAndPunctuation)
-                field("reminderTimes.sleep", keyboard: .numbersAndPunctuation)
-                field("reminderTimes.weighIn", keyboard: .numbersAndPunctuation)
-                Text("Use 24-hour times, one meal time per line. These are your shared preferences. Notification delivery is enabled separately on each device.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-        }
-    }
-    private var deliverySection: some View {
-        Section("Delivery on this iPhone") {
-            Text(notifications.isDeviceEnabled ? "Delivery enabled on this iPhone" : "Delivery off on this iPhone")
-            if notifications.isDeviceEnabled && notifications.authorization == .denied {
-                Text("Notifications are denied in iOS Settings. Your reminder choices are saved.")
-                    .font(.subheadline)
-            } else if notifications.isDeviceEnabled {
-                Text("\(notifications.scheduledCount) \(notifications.scheduledCount == 1 ? "reminder" : "reminders") scheduled")
-                    .accessibilityIdentifier("preferences.scheduled-reminders")
-            }
-            ForEach(notifications.missing, id: \.self) { Text($0).font(.subheadline) }
-            if let error = notifications.error { Text(error).foregroundStyle(Color.exError) }
-            if notifications.isDeviceEnabled && notifications.authorization == .notDetermined {
-                Button("Allow notifications") { Task { await notifications.setDeviceEnabled(true) } }
-            }
-            Button("Open notification settings") {
-                if let url = URL(string: UIApplication.openNotificationSettingsURLString) { openURL(url) }
-            }
-            Button(notifications.isDeviceEnabled ? "Turn off delivery on this iPhone" : "Enable reminders on this iPhone") {
-                Task { await notifications.setDeviceEnabled(!notifications.isDeviceEnabled) }
-            }.disabled(notifications.isUpdating || (!notifications.isDeviceEnabled &&
-                (store.hasEdits || store.draft?.pending != nil || store.draft == nil || !store.isReadable)))
-            Button("Refresh reminder delivery") {
-                Task { await notifications.refresh(accountID: store.accountID) }
-            }.disabled(notifications.isUpdating)
-            Text("Save preference edits first. Reminder times use your saved time zone. Changes made on another device apply here when Exerly next connects.")
-                .font(.subheadline).foregroundStyle(.secondary)
-        }
-    }
-
     /// Height in feet and inches. The draft keeps total inches, as the store
     /// expects; an untouched height is never rewritten.
     private var imperialHeight: some View {

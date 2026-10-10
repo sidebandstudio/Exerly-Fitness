@@ -296,6 +296,25 @@ struct ExChoiceChips<Value: Hashable>: View {
     }
 }
 
+/// A switch whose whole row toggles it, its label included, as in Settings.
+/// VoiceOver and tests still see one switch.
+struct ExRowToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: ExSpacing.item) {
+                configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+                Toggle(isOn: configuration.$isOn) { configuration.label }
+                    .toggleStyle(.switch).labelsHidden().allowsHitTesting(false)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }.toggleStyle(.switch)
+        }
+    }
+}
+
 /// Lays its children out left to right, starting a new line when the next
 /// one doesn't fit, like words in a paragraph.
 struct ExFlowLayout: Layout {

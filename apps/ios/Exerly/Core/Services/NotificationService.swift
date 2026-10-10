@@ -140,7 +140,9 @@ final class NotificationService: ObservableObject {
     @Published private(set) var accountID: String?
     @Published private(set) var isDeviceEnabled = false
     @Published private(set) var authorization: UNAuthorizationStatus = .notDetermined
-    @Published private(set) var scheduledCount = 0
+    /// The reminders iOS holds for this account now, as planned.
+    @Published private(set) var scheduled: [ReminderSpec] = []
+    var scheduledCount: Int { scheduled.count }
     @Published private(set) var missing: [String] = []
     @Published private(set) var error: String?
     @Published private(set) var isUpdating = false
@@ -170,7 +172,7 @@ final class NotificationService: ObservableObject {
         ownerGeneration = UUID()
         self.accountID = accountID
         snapshot = nil
-        scheduledCount = 0
+        scheduled = []
         missing = []
         error = nil
         isDeviceEnabled = accountID.map { defaults.bool(forKey: key($0, suffix: "enabled")) } ?? false
@@ -285,8 +287,8 @@ final class NotificationService: ObservableObject {
                 self.error = "Some reminders could not be scheduled. Your preferences are saved. Try again."
             }
         }
-        let pending = await scheduler.pendingIDs()
+        let pending = Set(await scheduler.pendingIDs())
         guard generation == scheduleGeneration else { return }
-        scheduledCount = pending.filter { desiredIDs.contains($0) }.count
+        scheduled = desired.filter { pending.contains($0.id) }
     }
 }

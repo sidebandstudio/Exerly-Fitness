@@ -10,6 +10,7 @@ struct ProfileView: View {
     @EnvironmentObject private var authVM: AuthViewModel
     @EnvironmentObject private var account: AppAccountWorkspace
     @EnvironmentObject private var dailySync: SyncEngine
+    @ObservedObject private var notifications = NotificationService.shared
     @AppStorage("exerlyAppearance") private var appearance = "dark"
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showEditProfile = false
@@ -130,9 +131,14 @@ struct ProfileView: View {
                         .accessibilityLabel("Appearance")
                         .accessibilityIdentifier("profile.appearance")
                 }
+                NavigationLink { RemindersView() } label: {
+                    ProfileRow(title: "Reminders", icon: "bell.badge", subtitle: remindersSummary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("profile.reminders")
                 Button { showEditProfile = true } label: {
-                    ProfileRow(title: "Details & reminders", icon: "person.text.rectangle",
-                               subtitle: "Name, body, training, food and reminders")
+                    ProfileRow(title: "Your details", icon: "person.text.rectangle",
+                               subtitle: "Name, body, food, training and sleep")
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("profile.details")
@@ -221,6 +227,13 @@ struct ProfileView: View {
     private var foodsSummary: String {
         guard let foods = workspace?.nutrition.foods, !foods.isEmpty else { return "Save foods and recipes you eat often" }
         return foods.count == 1 ? "1 saved food" : "\(foods.count) saved foods"
+    }
+
+    /// The first reminder iOS holds, in words, and how many more.
+    private var remindersSummary: String {
+        let lines = ReminderWords.lines(notifications.scheduled)
+        guard let first = lines.first else { return "Meals, workouts, sleep and weigh-ins" }
+        return lines.count == 1 ? first : "\(first) and \(lines.count - 1) more"
     }
 
     private func syncStatus(_ workspace: TrainingWorkspace) -> String {

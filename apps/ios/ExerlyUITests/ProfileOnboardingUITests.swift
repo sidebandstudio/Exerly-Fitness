@@ -149,7 +149,8 @@ final class ProfileOnboardingUITests: ExerlyUITestCase {
         let weight = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR label == %@", "Trend weight", "Weight")).firstMatch
         XCTAssertTrue(weight.waitForExistence(timeout: 10))
         XCTAssertTrue((weight.value as? String ?? "").contains("kilograms"), weight.value as? String ?? "")
-        for identifier in ["profile.targets", "profile.foods", "profile.agents", "profile.sync", "profile.account", "profile.logout"] {
+        for identifier in ["profile.targets", "profile.foods", "profile.agents", "profile.reminders",
+                           "profile.details", "profile.sync", "profile.account", "profile.logout"] {
             reveal(app.buttons[identifier], in: app)
             XCTAssertTrue(app.buttons[identifier].exists, identifier)
         }

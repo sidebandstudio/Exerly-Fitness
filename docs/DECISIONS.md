@@ -819,3 +819,40 @@ Other indexed foods, saved foods and recipes never logged or logged long ago,
 run `OpenFoodIntent`, which opens the portion sheet over Today (at the last
 portion, else the first serving): 2 taps after typing. A portion just logged
 is safe to repeat without looking; a first serving is a guess worth seeing.
+
+## 2026-10-10: Reminders get their own screen
+
+Code-blind run 5 took 17 actions to set a 7:30 AM weigh-in reminder: free-text
+24-hour times in the Preferences sheet, an "Enable reminders on this iPhone"
+button that stayed grey until the sheet was reopened, and a result that only
+said "1 reminder scheduled".
+
+- **Where.** Profile has a Reminders row beside Units and Appearance. Its
+  screen has a switch for each kind in the order of a day (weigh-in, meals,
+  workouts, sleep). The whole row turns a switch on, its title included; the
+  same style now serves the workout-day switches in the details sheet.
+- **Times.** A switch that's on shows its time in a native time picker, in the
+  person's locale (12-hour in the US). Meals have one picker per time, a remove
+  button each and "Add a meal time", up to the API's ten; workouts show the day
+  chips their reminder needs. Times are still saved as "HH:mm" in
+  `reminderTimes`, so the API and other clients are unchanged.
+- **Defaults.** A reminder turned on without a time starts at 7:00 for a
+  weigh-in, 17:30 for workouts and 22:00 for sleep. Meals start at the person's
+  usual breakfast, lunch and dinner (`NutritionStore.usualTime`, to the nearest
+  5 minutes), which is 8:00, 12:30 and 18:30 before there's a habit.
+- **No separate enable step.** Each change saves to the account as it's made,
+  one save at a time; a change made during a save goes in the next one, and a
+  conflict keeps this person's edits for the fields they touched. Turning a
+  reminder on also turns on delivery on this iPhone, asking iOS for permission
+  the first time. "Remind me on this iPhone" stays as a switch, so one device
+  can be kept quiet.
+- **What's scheduled, in words.** The screen lists what iOS holds
+  (`NotificationService.scheduled`): "Weigh-in · every day at 7:30 AM",
+  "Workout · Mon and Thu at 5:30 PM". Profile's row shows the first line.
+- **Names match.** Reminders left the sheet that "Details & reminders" opened
+  under the title "Preferences". Both the row and the sheet are now "Your
+  details".
+
+A 7:30 AM weigh-in from Profile is 5 actions: Reminders, Weigh-in, the time,
+one turn of the minutes wheel, and closing the picker, plus Allow the first
+time.

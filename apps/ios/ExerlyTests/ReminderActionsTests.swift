@@ -96,6 +96,36 @@ final class ReminderActionsTests: XCTestCase {
         XCTAssertTrue(missing.reminders.isEmpty)
     }
 
+    /// Reminders' screen lists what iOS holds in words, by time of day, in the
+    /// person's locale; workout days share one line.
+    func testScheduledRemindersReadAsPlainWords() throws {
+        let values: [String: Exerly.JSONValue] = [
+            "timezone": .string(zone.identifier), "unitSystem": .string("imperial"),
+            "workoutDays": .array(["friday", "monday", "wednesday"].map(Exerly.JSONValue.string)),
+            "reminders": .object(["meals": .bool(true), "workouts": .bool(true), "sleep": .bool(true), "weighIn": .bool(true)]),
+            "reminderTimes": .object(["meals": .array(["12:30"].map(Exerly.JSONValue.string)), "workout": .string("18:00"),
+                                      "sleep": .string("22:15"), "weighIn": .string("07:30")]),
+        ]
+        let plan = try ReminderPlan.make(snapshot(values), namespace: "test")
+        let us = Locale(identifier: "en_US"), space = "\u{202F}"
+        XCTAssertEqual(ReminderWords.lines(plan.reminders, locale: us), [
+            "Weigh-in · every day at 7:30\(space)AM", "Lunch · every day at 12:30\(space)PM",
+            "Workout · Mon, Wed, and Fri at 6:00\(space)PM", "Sleep · every day at 10:15\(space)PM",
+        ])
+        XCTAssertEqual(ReminderWords.lines(plan.reminders, locale: Locale(identifier: "en_GB")).last, "Sleep · every day at 22:15")
+        XCTAssertEqual(ReminderWords.lines([]), [])
+    }
+
+    /// Pickers show a saved "HH:mm" as a time of day and save it back unchanged.
+    func testReminderTimesRoundTripThroughThePicker() throws {
+        for text in ["00:00", "07:30", "12:05", "23:59"] {
+            XCTAssertEqual(ReminderClock.text(try XCTUnwrap(ReminderClock.date(text))), text)
+        }
+        XCTAssertNil(ReminderClock.date("7:30"))
+        XCTAssertNil(ReminderClock.date("24:00"))
+        XCTAssertEqual(ReminderClock.display(hour: 19, minute: 5, locale: Locale(identifier: "en_US")), "7:05\u{202F}PM")
+    }
+
     func testEachButtonAsksForItsAction() throws {
         let categories = Dictionary(uniqueKeysWithValues: ReminderActions.categories.map { ($0.identifier, $0) })
         XCTAssertEqual(categories["exerly.meal.Breakfast"]?.actions.map(\.title), ["Log usual breakfast", "Repeat yesterday's breakfast", "Search"])
