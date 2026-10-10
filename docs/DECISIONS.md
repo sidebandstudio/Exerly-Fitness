@@ -931,3 +931,10 @@ straight back to Profile's first screen. iOS pops Profile's stack and scrolls it
 to the top itself, so a test now covers that instead of new code. Unlike
 Today's, Profile's large title stays small after that scroll. Two attempts at an
 extra animated scroll after iOS's own didn't bring it back, so it's left.
+
+## 2026-10-10: A hard edge under Progress's sections
+
+Text scrolling under Progress's Body, Nutrition, Training and Photos picker
+showed through it blurred. The tabs' scroll views now use the hard top edge
+effect, which backs the bar with the page's colour, as their bottom edges
+already did.

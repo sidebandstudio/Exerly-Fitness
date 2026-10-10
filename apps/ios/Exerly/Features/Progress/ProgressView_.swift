@@ -36,6 +36,8 @@ struct ProgressView_: View {
         // A bar, not a row above the content: each tab scrolls under it, inset
         // to start below it, instead of being cut off at its edge.
         tabContent
+            // A hard edge, so text scrolling under the picker doesn't show through blurred.
+            .scrollEdgeEffectStyle(.hard, for: .top)
             .safeAreaBar(edge: .top) { tabPicker }
             .background(Color.exBackground)
             .navigationTitle("Progress")
