@@ -165,6 +165,10 @@ private struct RemindersEditor: View {
     private var timeZone: TimeZone { TimeZone(identifier: value("timezone")) ?? .current }
     private var mealTimes: [String] { value(ReminderKind.meals.timeKey).components(separatedBy: "\n").filter { !$0.isEmpty } }
     private var workoutDays: Set<String> { Set(value("workoutDays").components(separatedBy: "\n").filter { !$0.isEmpty }) }
+    /// This account's food log, for when it eats; never another account's.
+    private var nutrition: NutritionStore? {
+        account.training.flatMap { $0.accountID == store.accountID ? $0.nutrition : nil }
+    }
 
     /// Saves changes as they're made: one save at a time, and what changed
     /// during it goes in the next.
@@ -212,7 +216,7 @@ private struct RemindersEditor: View {
     /// Breakfast, lunch and dinner when the person usually eats them, to the
     /// nearest 5 minutes, or at typical times before there's a habit.
     private var usualMealTimes: [String] {
-        guard let store = account.training?.nutrition else {
+        guard let nutrition else {
             return ["Breakfast", "Lunch", "Dinner"].map {
                 let time = NutritionStore.typicalTime(of: $0)
                 return ReminderClock.text(hour: time.hour, minute: time.minute)
@@ -222,7 +226,7 @@ private struct RemindersEditor: View {
         calendar.timeZone = timeZone
         let today = LocalDate(Date(), in: timeZone)
         return ["Breakfast", "Lunch", "Dinner"].map { meal in
-            let parts = calendar.dateComponents([.hour, .minute], from: store.usualTime(of: meal, on: today, timeZone: timeZone))
+            let parts = calendar.dateComponents([.hour, .minute], from: nutrition.usualTime(of: meal, on: today, timeZone: timeZone))
             let minutes = min(23 * 60 + 55, Int((Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / 5).rounded()) * 5)
             return ReminderClock.text(hour: minutes / 60, minute: minutes % 60)
         }
@@ -310,7 +314,7 @@ private struct RemindersEditor: View {
         calendar.timeZone = timeZone
         components.calendar = calendar
         components.timeZone = timeZone
-        return ReminderPlan.meal(at: components, store: account.training?.nutrition)
+        return ReminderPlan.meal(at: components, store: nutrition)
     }
 
     /// Three hours after the latest time, or a snack mid-afternoon to start.
