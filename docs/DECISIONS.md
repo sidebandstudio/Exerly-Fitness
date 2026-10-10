@@ -876,3 +876,12 @@ confirmation, which names the day in words ("from Dinner on Sun, Oct 11",
 "today", "yesterday") instead of "2026-10-10". Today's rows get no swipe action:
 Today is a scroll view, not a list, and its meal list is being reworked for
 multi-select.
+
+## 2026-10-10: Reminder times turn in 5-minute steps
+
+With the minute wheel in 1-minute steps, setting 7:30 from 7:00 took two or
+three drags in the re-drive (7:10, then 7:22). Reminders don't need the minute,
+so their pickers are the same system compact time picker with a 5-minute
+interval, which SwiftUI's DatePicker can't set; :30 is six steps away. A time
+saved off the step (07:03 from another client) keeps 1-minute steps, so the
+picker never shows a different time from the one scheduled.

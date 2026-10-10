@@ -255,28 +255,32 @@ private struct RemindersEditor: View {
     }
 
     private func timeRow(_ title: String, key: String, identifier: String) -> some View {
-        DatePicker(title, selection: Binding(
-            get: { ReminderClock.date(value(key)) ?? .now },
-            set: { set([key: ReminderClock.text($0)]) }
-        ), displayedComponents: .hourAndMinute)
+        LabeledContent(title) {
+            ReminderTimePicker(time: Binding(
+                get: { ReminderClock.date(value(key)) ?? .now },
+                set: { set([key: ReminderClock.text($0)]) }
+            ))
+            .accessibilityIdentifier(identifier)
+        }
         .font(.exBody)
-        .accessibilityIdentifier(identifier)
     }
 
     @ViewBuilder private var mealRows: some View {
         let times = mealTimes
         ForEach(Array(times.enumerated()), id: \.offset) { index, time in
             HStack(spacing: ExSpacing.small) {
-                DatePicker(mealName(time), selection: Binding(
-                    get: { ReminderClock.date(time) ?? .now },
-                    set: { date in
-                        var next = times
-                        next[index] = ReminderClock.text(date)
-                        set([ReminderKind.meals.timeKey: next.joined(separator: "\n")])
-                    }
-                ), displayedComponents: .hourAndMinute)
+                LabeledContent(mealName(time)) {
+                    ReminderTimePicker(time: Binding(
+                        get: { ReminderClock.date(time) ?? .now },
+                        set: { date in
+                            var next = times
+                            next[index] = ReminderClock.text(date)
+                            set([ReminderKind.meals.timeKey: next.joined(separator: "\n")])
+                        }
+                    ))
+                    .accessibilityIdentifier("reminders.meals.time.\(index)")
+                }
                 .font(.exBody)
-                .accessibilityIdentifier("reminders.meals.time.\(index)")
                 Button("Remove \(mealName(time)) reminder", systemImage: "minus.circle.fill") {
                     var next = times
                     next.remove(at: index)
@@ -394,5 +398,42 @@ private struct RemindersEditor: View {
         } footer: {
             Text("Your choices are saved to your account. Each iPhone reminds you only while this is on.")
         }
+    }
+}
+
+/// The system's compact time picker in 5-minute steps, which SwiftUI's
+/// DatePicker can't set: a reminder doesn't need the minute, and :30 is six
+/// steps of the wheel rather than thirty. A time saved off the step, such as
+/// 07:03 from another client, keeps 1-minute steps so it shows as it is.
+struct ReminderTimePicker: UIViewRepresentable {
+    @Binding var time: Date
+
+    func makeUIView(context: Context) -> UIDatePicker {
+        let picker = UIDatePicker()
+        picker.datePickerMode = .time
+        picker.preferredDatePickerStyle = .compact
+        picker.tintColor = UIColor(Color.exPrimaryText)
+        picker.setContentHuggingPriority(.required, for: .horizontal)
+        picker.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return picker
+    }
+
+    func updateUIView(_ picker: UIDatePicker, context: Context) {
+        context.coordinator.time = $time
+        picker.minuteInterval = Calendar.current.component(.minute, from: time) % 5 == 0 ? 5 : 1
+        if picker.date != time { picker.setDate(time, animated: false) }
+    }
+
+    /// Its own size, as the system lays it out, rather than the row's height.
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIDatePicker, context: Context) -> CGSize? {
+        uiView.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(time: $time) }
+
+    final class Coordinator: NSObject {
+        var time: Binding<Date>
+        init(time: Binding<Date>) { self.time = time }
+        @objc func changed(_ picker: UIDatePicker) { time.wrappedValue = picker.date }
     }
 }
