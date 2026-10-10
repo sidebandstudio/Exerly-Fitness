@@ -55,8 +55,21 @@ final class NutritionPlateDraft: ObservableObject {
     private func followMeal() {
         guard loggedAt == suggestedTime else { return }
         let meal = meal.trimmingCharacters(in: .whitespacesAndNewlines)
-        loggedAt = meal == initialMeal ? initialTime : store.usualTime(of: meal, on: date, timeZone: timeZone)
+        loggedAt = meal != initialMeal ? store.usualTime(of: meal, on: date, timeZone: timeZone)
+            : date == previewDate ? initialTime : NutritionFormat.sameTime(initialTime, on: date, timeZone: timeZone)
         suggestedTime = loggedAt
+    }
+
+    /// When it was eaten, on its diary day, as the portion sheet sets it.
+    var eatenAt: Date {
+        get { NutritionFormat.sameTime(loggedAt, on: date, timeZone: timeZone) }
+        set {
+            let follows = loggedAt == suggestedTime
+                && NutritionFormat.clock(newValue, timeZone: timeZone) == NutritionFormat.clock(eatenAt, timeZone: timeZone)
+            date = LocalDate(newValue, in: timeZone)
+            loggedAt = newValue.roundedToMilliseconds
+            if follows { suggestedTime = loggedAt }
+        }
     }
 
     /// Adds a food at the amount chosen for it, or else at the amount the

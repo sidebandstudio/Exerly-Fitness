@@ -176,17 +176,13 @@ struct NutritionEntryEditor: View {
 
     private var details: some View {
         ExCard {
+            // One day and time: the day it was eaten is the diary day its totals count on.
             if typeSize.isAccessibilitySize {
-                Text("Diary date").font(.exLabel).foregroundStyle(Color.exTextSecondary)
-                DatePicker("Diary date", selection: diaryDate, displayedComponents: .date)
-                    .labelsHidden().accessibilityIdentifier("nutrition.entryDate")
-                Text("Eaten at").font(.exLabel).foregroundStyle(Color.exTextSecondary)
-                DatePicker("Eaten at", selection: $draft.loggedAt, displayedComponents: [.date, .hourAndMinute])
+                Text("Eaten").font(.exLabel).foregroundStyle(Color.exTextSecondary)
+                DatePicker("Eaten", selection: $draft.eatenAt, displayedComponents: [.date, .hourAndMinute])
                     .labelsHidden().accessibilityIdentifier("nutrition.eatenAt")
             } else {
-                DatePicker("Diary date", selection: diaryDate, displayedComponents: .date)
-                    .font(.exLabel).accessibilityIdentifier("nutrition.entryDate")
-                DatePicker("Eaten at", selection: $draft.loggedAt, displayedComponents: [.date, .hourAndMinute])
+                DatePicker("Eaten", selection: $draft.eatenAt, displayedComponents: [.date, .hourAndMinute])
                     .font(.exLabel).accessibilityIdentifier("nutrition.eatenAt")
             }
             Divider().overlay(Color.exBorder.opacity(0.3))
@@ -209,7 +205,7 @@ struct NutritionEntryEditor: View {
                         Text("This entry keeps the food name and nutrition saved when you logged it.")
                             .foregroundStyle(Color.exTextSecondary)
                     }
-                    Text("Dates and times use \(timeZone.identifier). The diary date decides which day's totals include this food.")
+                    Text("Dates and times use \(timeZone.identifier). The day it was eaten decides which day's totals include it.")
                         .foregroundStyle(Color.exTextSecondary)
                 }.font(.exCaption).frame(maxWidth: .infinity, alignment: .leading)
             }.font(.exLabel)
@@ -250,8 +246,9 @@ struct NutritionEntryEditor: View {
                 dismiss()
             }
         } label: {
-            Text(editing == nil ? "Log to \(draft.meal)" : "Save changes")
+            Text(editing == nil ? "Log to \(draft.meal)\(otherDay.map { " · \($0.short)" } ?? "")" : "Save changes")
         }
+        .accessibilityLabel(editing == nil ? "Log to \(draft.meal)\(otherDay.map { " on \($0.spoken)" } ?? "")" : "Save changes")
         .buttonStyle(ExActionStyle())
         .accessibilityIdentifier("nutrition.saveEntry")
         .padding(.horizontal, ExSpacing.page).padding(.top, ExSpacing.small).padding(.bottom, ExSpacing.small)
@@ -263,9 +260,16 @@ struct NutritionEntryEditor: View {
         return defaults.contains(draft.meal) ? defaults : defaults + [draft.meal]
     }
 
-    private var diaryDate: Binding<Date> {
-        Binding(get: { NutritionFormat.pickerDate(draft.date, timeZone: timeZone) },
-                set: { draft.date = LocalDate($0, in: timeZone) })
+    /// The diary day when it isn't today: "Sun" within a week, else "Oct 3".
+    private var otherDay: (short: String, spoken: String)? {
+        let today = LocalDate(Date(), in: timeZone)
+        guard draft.date != today else { return nil }
+        var short = abs(today.days(until: draft.date)) < 7 ? Date.FormatStyle().weekday(.abbreviated)
+            : Date.FormatStyle().month(.abbreviated).day()
+        var spoken = Date.FormatStyle().weekday(.wide).month(.wide).day()
+        short.timeZone = BodyDates.utc
+        spoken.timeZone = BodyDates.utc
+        return (BodyDates.anchor(draft.date).formatted(short), BodyDates.anchor(draft.date).formatted(spoken))
     }
 
     private func hideKeyboard() {

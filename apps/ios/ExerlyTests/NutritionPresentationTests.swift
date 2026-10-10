@@ -566,6 +566,38 @@ final class NutritionPresentationTests: XCTestCase {
         XCTAssertEqual(draft.loggedAt, chosen)
     }
 
+    /// The portion sheet sets the day and time together: moving the day
+    /// keeps the time of day, and a time no one set still follows the meal.
+    func testMovingTheDayKeepsTheTimeItWasEaten() throws {
+        let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let saturday = try XCTUnwrap(LocalDate("2026-10-10")), sunday = try XCTUnwrap(LocalDate("2026-10-11"))
+        let food = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        let morning = Date(timeIntervalSince1970: 1_791_637_260) // 9:01 AM in New York, Saturday
+        let draft = NutritionEntryDraft(store: store, food: food, date: saturday, meal: "Breakfast", now: morning, timeZone: zone)
+        XCTAssertEqual(draft.eatenAt, morning)
+        draft.eatenAt = morning.addingTimeInterval(86_400)
+        XCTAssertEqual(draft.date, sunday)
+        XCTAssertEqual(draft.loggedAt, morning.addingTimeInterval(86_400), "Sunday at 9:01, not still Saturday")
+        draft.meal = "Dinner"
+        XCTAssertEqual(draft.loggedAt, store.usualTime(of: "Dinner", on: sunday, timeZone: zone), "Still follows the meal")
+        draft.meal = "Breakfast"
+        XCTAssertEqual(draft.loggedAt, morning.addingTimeInterval(86_400), "Back to its time, on the new day")
+        // A time the person sets stays when the meal changes.
+        let chosen = morning.addingTimeInterval(86_400 - 1_800)
+        draft.eatenAt = chosen
+        draft.meal = "Lunch"
+        XCTAssertEqual(draft.loggedAt, chosen)
+        let saved = try XCTUnwrap(draft.save())
+        XCTAssertEqual([saved.date, LocalDate(saved.loggedAt, in: zone)], [sunday, sunday])
+
+        // A late snack an import counted for the day before shows on that day and keeps its time when untouched.
+        let late = try store.log(food, grams: 40, on: saturday, meal: "Snacks", at: morning.addingTimeInterval(16 * 3_600))
+        let reopened = NutritionEntryDraft(store: store, food: food, date: saturday, meal: "Snacks", editing: late, timeZone: zone)
+        XCTAssertEqual(LocalDate(reopened.eatenAt, in: zone), saturday)
+        XCTAssertFalse(reopened.hasChanges)
+    }
+
     func testEntryMetadataEditUsesItsSnapshotAndKeepsExactPortion() throws {
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
         let date = try XCTUnwrap(LocalDate("2026-10-06"))

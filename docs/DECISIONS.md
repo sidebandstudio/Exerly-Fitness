@@ -856,3 +856,14 @@ said "1 reminder scheduled".
 A 7:30 AM weigh-in from Profile is 5 actions: Reminders, Weigh-in, the time,
 one turn of the minutes wheel, and closing the picker, plus Allow the first
 time.
+
+## 2026-10-10: One day and time for an entry
+
+The portion sheet had a diary date and a separate "Eaten at"; moving the diary
+date to Sunday left the meal eaten on Saturday at 7:30 AM. The portion sheet and
+Log a meal now have one "Eaten" day-and-time control. The day chosen is the
+diary day, and moving it keeps the time of day; a time no one set still follows
+the meal on the new day. An entry saved with its time on another day (a late
+snack an import counted for the day before) shows on its diary day and keeps its
+exact time unless someone changes it. Logging to another day names it on the
+button: "Log to Breakfast · Sun" within a week, else "Log to Breakfast · Oct 3".

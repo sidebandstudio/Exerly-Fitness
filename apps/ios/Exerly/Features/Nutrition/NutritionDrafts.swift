@@ -247,8 +247,23 @@ final class NutritionEntryDraft: ObservableObject {
     private func followMeal() {
         guard loggedAt == suggestedTime else { return }
         let meal = meal.trimmingCharacters(in: .whitespacesAndNewlines)
-        loggedAt = meal == initialMeal ? initialTime : store.usualTime(of: meal, on: date, timeZone: timeZone)
+        loggedAt = meal != initialMeal ? store.usualTime(of: meal, on: date, timeZone: timeZone)
+            : date == initialDate ? initialTime : NutritionFormat.sameTime(initialTime, on: date, timeZone: timeZone)
         suggestedTime = loggedAt
+    }
+
+    /// When it was eaten, on its diary day. The sheet sets both with one
+    /// control, so moving the day keeps the time of day.
+    var eatenAt: Date {
+        get { NutritionFormat.sameTime(loggedAt, on: date, timeZone: timeZone) }
+        set {
+            // A time set for the person still follows the meal when only the day moved.
+            let follows = loggedAt == suggestedTime
+                && NutritionFormat.clock(newValue, timeZone: timeZone) == NutritionFormat.clock(eatenAt, timeZone: timeZone)
+            date = LocalDate(newValue, in: timeZone)
+            loggedAt = newValue.roundedToMilliseconds
+            if follows { suggestedTime = loggedAt }
+        }
     }
 
     var hasChanges: Bool {
