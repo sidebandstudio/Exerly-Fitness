@@ -232,6 +232,8 @@ private struct NutritionLibraryDetail: View {
                         if food.source == .custom || food.source == .imported {
                             Button("Edit food label", systemImage: "square.and.pencil") { destination = .edit(food) }
                                 .accessibilityIdentifier("nutrition.libraryEdit")
+                            Button("Duplicate food", systemImage: "plus.square.on.square") { destination = .duplicate(food.duplicated()) }
+                                .accessibilityIdentifier("nutrition.libraryDuplicate")
                         } else if food.source == .recipe {
                             Button("Edit recipe", systemImage: "square.and.pencil") { destination = .edit(food) }
                                 .accessibilityIdentifier("recipe.edit")
@@ -251,8 +253,9 @@ private struct NutritionLibraryDetail: View {
             case .edit(let food) where food.source == .recipe:
                 if let api = auth.accountAPI { RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit, editing: food) }
             case .edit(let food): NutritionFoodEditor(workspace: workspace, editing: food) { _ in }
-            case .duplicate(let copy):
+            case .duplicate(let copy) where copy.source == .recipe:
                 if let api = auth.accountAPI { RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit, start: copy) }
+            case .duplicate(let copy): NutritionFoodEditor(workspace: workspace, start: copy) { _ in }
             case .log(let food):
                 NutritionEntryEditor(workspace: workspace, food: food, date: LocalDate(Date(), in: timeZone),
                                      meal: workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone), timeZone: timeZone, unit: unit,

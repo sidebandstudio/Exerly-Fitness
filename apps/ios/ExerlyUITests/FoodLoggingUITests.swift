@@ -39,6 +39,37 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(pears.count, 2, "The undone entry is gone and the second one stays")
     }
 
+    /// A custom food's Duplicate opens an editable copy; saving it keeps both.
+    func testDuplicatingACustomFoodOpensAnEditableCopy() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "food-duplicate")
+        let bar = SeedFood(name: "Synthetic protein bar", per100g: ["energy": 380, "protein": 33, "carbohydrate": 40, "fat": 12])
+        let payload: [String: Any] = ["id": bar.id, "name": bar.name, "source": "custom", "per100g": bar.per100g,
+                                      "servings": [["name": "1 bar", "grams": 60.0]], "favorite": true, "createdAt": "2026-10-01T12:00:00.000Z"]
+        _ = try await request("PUT", "/v1/documents/saved_food/\(bar.id)", body: ["base_revision": 0, "payload": payload], token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openFoodLibrary(app)
+        tap(app.buttons["nutrition.libraryFood.\(bar.id)"], in: app)
+        tapCount = 0
+        tap(app.buttons["nutrition.libraryActions"], in: app)
+        tap(app.buttons["nutrition.libraryDuplicate"], in: app)
+        let name = app.textFields["nutrition.foodName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "Synthetic protein bar copy")
+        XCTAssertEqual(app.textFields["nutrition.nutrient.energy"].value as? String, "380", "The label comes along")
+        capture(app, "food-duplicate-editor")
+        replace(name, with: "Synthetic protein bar, chocolate", in: app)
+        tap(app.buttons["nutrition.saveFood"], in: app)
+        XCTAssertEqual(tapCount, 4, "Actions, Duplicate food, the name to rename it, Save")
+        XCTAssertTrue(app.navigationBars["Saved food"].waitForExistence(timeout: 5))
+        tap(app.navigationBars.buttons.element(boundBy: 0), in: app)
+        let foods = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.libraryFood."))
+        XCTAssertTrue(foods.element(boundBy: 1).waitForExistence(timeout: 5))
+        XCTAssertEqual(foods.count, 2, "The original and its copy")
+        XCTAssertTrue(foods.allElementsBoundByIndex.contains { $0.label.contains("Synthetic protein bar, chocolate") })
+    }
+
     /// Foods usually eaten at this hour are headed by the hour, or by "now"
     /// late at night, when an hour like 12 AM reads oddly.
     func testUsualFoodsAreHeadedByTheHourOrNowLateAtNight() async throws {

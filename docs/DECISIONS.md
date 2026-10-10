@@ -819,3 +819,10 @@ Other indexed foods, saved foods and recipes never logged or logged long ago,
 run `OpenFoodIntent`, which opens the portion sheet over Today (at the last
 portion, else the first serving): 2 taps after typing. A portion just logged
 is safe to repeat without looking; a first serving is a guess worth seeing.
+
+## 2026-10-10: Duplicate a custom food
+
+Food library's actions offer Duplicate food for custom and imported foods,
+opening the label editor on a copy ("… copy", not a favourite, no barcode),
+as Duplicate recipe does. Database foods aren't offered: their labels aren't
+the person's to edit.

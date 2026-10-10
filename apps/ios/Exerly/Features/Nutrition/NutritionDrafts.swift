@@ -75,10 +75,11 @@ final class NutritionFoodDraft: ObservableObject {
     private let initialNutrients: [Nutrient: NutritionNumberField]
     private let initialServings: [NutritionServingFields]
 
-    init(store: NutritionStore, editing: ExerlyCore.Food? = nil) {
+    /// `start` begins a new food from another's label, as a duplicate does.
+    init(store: NutritionStore, editing: ExerlyCore.Food? = nil, start: ExerlyCore.Food? = nil) {
         self.store = store
         original = editing
-        let food = editing ?? ExerlyCore.Food(name: "", per100g: NutrientAmounts())
+        let food = editing ?? start ?? ExerlyCore.Food(name: "", per100g: NutrientAmounts())
         template = food
         name = food.name
         brand = food.brand ?? ""
