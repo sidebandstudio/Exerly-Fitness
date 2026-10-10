@@ -885,3 +885,13 @@ so their pickers are the same system compact time picker with a 5-minute
 interval, which SwiftUI's DatePicker can't set; :30 is six steps away. A time
 saved off the step (07:03 from another client) keeps 1-minute steps, so the
 picker never shows a different time from the one scheduled.
+
+## 2026-10-10: Nutrient goals and Reminders under Your plan, with goal search
+
+Nutrient goals was two screens into Your plan, and sodium was several screens
+down its list. Profile now has a "Goals and reminders" group right under the
+plan card: Nutrient goals ("Daily values · 2 on Today") and Reminders, which
+moves up from Preferences so both are on screen without scrolling. The goals
+list has a search field: typing part of a name shows only the matches, so "sod"
+finds sodium without scrolling. Search was chosen over a jump index by group
+because people look for a nutrient by its name, not its group.

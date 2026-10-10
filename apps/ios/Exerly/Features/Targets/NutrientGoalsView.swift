@@ -10,6 +10,7 @@ struct NutrientGoalsView: View {
     var done: (() -> Void)?
     @State private var editing: Nutrient?
     @State private var error: String?
+    @State private var query = ""
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private static let groups: [Nutrient.Group] = [.carbohydrates, .fats, .vitamins, .minerals, .aminoAcids, .other]
@@ -27,15 +28,27 @@ struct NutrientGoalsView: View {
                     Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !pinned.isEmpty {
+                // Sodium sat several screens down; a name or part of one finds it.
+                ExSearchField(text: $query, label: "Search nutrients").accessibilityIdentifier("goals.search")
+                let search = query.trimmingCharacters(in: .whitespaces)
+                if !search.isEmpty {
+                    let matches = Nutrient.allCases.filter { Self.groups.contains($0.group) && IntakeFormat.name($0).localizedStandardContains(search) }
+                    if matches.isEmpty {
+                        Text("No nutrient is called “\(search)”.").font(.exBody).foregroundStyle(Color.exTextSecondary)
+                    } else {
+                        section("Matches", matches, plan: plan, today: today)
+                    }
+                } else if !pinned.isEmpty {
                     section("On Today", note: pinned.count >= NutritionPlan.maximumPins ? "Unpin one to pin another." : nil,
                             pinned, plan: plan, today: today)
                 }
-                let yours = Nutrient.allCases.filter { custom[$0] != nil && !pinned.contains($0) }
-                if !yours.isEmpty { section("Your goals", yours, plan: plan, today: today) }
-                ForEach(Self.groups, id: \.self) { group in
-                    let rest = Nutrient.allCases.filter { $0.group == group && custom[$0] == nil && !pinned.contains($0) }
-                    if !rest.isEmpty { section(IntakeFormat.group(group), rest, plan: plan, today: today) }
+                if search.isEmpty {
+                    let yours = Nutrient.allCases.filter { custom[$0] != nil && !pinned.contains($0) }
+                    if !yours.isEmpty { section("Your goals", yours, plan: plan, today: today) }
+                    ForEach(Self.groups, id: \.self) { group in
+                        let rest = Nutrient.allCases.filter { $0.group == group && custom[$0] == nil && !pinned.contains($0) }
+                        if !rest.isEmpty { section(IntakeFormat.group(group), rest, plan: plan, today: today) }
+                    }
                 }
             } else {
                 Text("Set up your targets first; nutrient goals and pins are part of your plan.")

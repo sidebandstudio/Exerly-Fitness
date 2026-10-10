@@ -44,6 +44,7 @@ struct ProfileView: View {
                 .accessibilityValue(ProfilePlanCard.spoken(workspace: workspace, timeZone: timeZone))
                 .accessibilityHint("Opens your calorie and macro targets")
                 .accessibilityIdentifier("profile.targets")
+                goalsAndReminders
                 food
                 connections
                 preferences
@@ -75,6 +76,26 @@ struct ProfileView: View {
     }
 
     // MARK: Groups
+
+    /// Under the plan, where both are in reach without scrolling.
+    private var goalsAndReminders: some View {
+        ProfileSection(title: "Goals and reminders") {
+            if let workspace {
+                NavigationLink {
+                    NutrientGoalsView(workspace: workspace, timeZone: timeZone)
+                } label: {
+                    ProfileRow(title: "Nutrient goals", icon: "chart.bar.doc.horizontal", subtitle: goalsSummary(workspace))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("profile.nutrientGoals")
+            }
+            NavigationLink { RemindersView() } label: {
+                ProfileRow(title: "Reminders", icon: "bell.badge", subtitle: remindersSummary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("profile.reminders")
+        }
+    }
 
     private var food: some View {
         ProfileSection(title: "Food") {
@@ -131,11 +152,6 @@ struct ProfileView: View {
                         .accessibilityLabel("Appearance")
                         .accessibilityIdentifier("profile.appearance")
                 }
-                NavigationLink { RemindersView() } label: {
-                    ProfileRow(title: "Reminders", icon: "bell.badge", subtitle: remindersSummary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("profile.reminders")
                 Button { showEditProfile = true } label: {
                     ProfileRow(title: "Your details", icon: "person.text.rectangle",
                                subtitle: "Name, body, food, training and sleep")
@@ -227,6 +243,14 @@ struct ProfileView: View {
     private var foodsSummary: String {
         guard let foods = workspace?.nutrition.foods, !foods.isEmpty else { return "Save foods and recipes you eat often" }
         return foods.count == 1 ? "1 saved food" : "\(foods.count) saved foods"
+    }
+
+    /// Whose goals they are, and how many show on Today.
+    private func goalsSummary(_ workspace: TrainingWorkspace) -> String {
+        let plan = workspace.nutrition.plan(on: LocalDate(Date(), in: timeZone))
+        let custom = plan?.nutrientGoals?.count ?? 0, pinned = plan?.pinnedNutrients?.count ?? 0
+        let goals = custom == 0 ? "Daily values" : custom == 1 ? "1 of your own" : "\(custom) of your own"
+        return pinned == 0 ? goals : "\(goals) · \(pinned) on Today"
     }
 
     /// The first reminder iOS holds, in words, and how many more.
