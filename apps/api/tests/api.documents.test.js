@@ -655,6 +655,25 @@ test('gym profiles sync as documents', async () => {
   assert.equal(flat.status, 400);
 });
 
+test('hidden suggestions sync as documents named by their food', async () => {
+  const { token } = await signUp(api);
+  const hidden = { id: 'usda:2709224', name: 'Banana, raw', hiddenAt: '2026-10-10T12:00:00.000Z' };
+  const saved = await api.put(
+    '/v1/documents/hidden_suggestion/usda:2709224',
+    { payload: hidden, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get('/v1/documents/hidden_suggestion/usda:2709224', { token });
+  assert.deepEqual(read.body.payload, hidden);
+  const unnamed = await api.put(
+    '/v1/documents/hidden_suggestion/usda:1',
+    { payload: { id: 'usda:1', hiddenAt: hidden.hiddenAt }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(unnamed.status, 400);
+});
+
 test('legacy food logs and saved foods stay in their own feeds', async () => {
   const { token } = await signUp(api);
   await api.post('/api/food', { name: 'Logged oats', calories: 300 }, { token });

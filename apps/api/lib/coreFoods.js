@@ -96,9 +96,12 @@ const tidy = (value) => Number(value.toPrecision(6));
 
 /**
  * An Open Food Facts product as an ExerlyCore Food, or null without a name or
- * a barcode. Amounts per 100 ml and servings in millilitres are converted with
- * a typical density for the product's category, recorded as `volume`.
- * Alcohol is left out, because Open Food Facts gives it as % by volume.
+ * a barcode. Amounts per 100 ml and servings or packages in millilitres are
+ * converted with a typical density for the product's category, recorded as
+ * `volume`. The package's size is a serving too: "1 can" for canned food,
+ * else "1 package", so a person can log "1 can of beans". A multipack
+ * ("6 x 330 ml") has no one package. Alcohol is left out, because Open Food
+ * Facts gives it as % by volume.
  */
 function fromOpenFoodFacts(product, { now = new Date() } = {}) {
   const name = String(product?.product_name || product?.product_name_en || '').trim();
@@ -110,7 +113,14 @@ function fromOpenFoodFacts(product, { now = new Date() } = {}) {
   // recovered and the approximation shown.
   const perVolume = product.nutrition_data_per === '100ml';
   const servingUnit = product.serving_quantity_unit ?? 'g';
-  const volume = perVolume || servingUnit === 'ml' ? density(product) : null;
+  const packageUnit = product.product_quantity_unit ?? 'g';
+  const packageSize = /\d\s*[x×*]\s*\d/i.test(String(product.quantity ?? ''))
+    ? null
+    : amount(product.product_quantity);
+  const volume =
+    perVolume || servingUnit === 'ml' || (packageSize && packageUnit === 'ml')
+      ? density(product)
+      : null;
   const toGrams = perVolume ? 1 / volume.density : 1;
   const per100g = {};
   for (const [key, [nutrient, factor]] of Object.entries(OFF_NUTRIENTS)) {
@@ -129,6 +139,13 @@ function fromOpenFoodFacts(product, { now = new Date() } = {}) {
       name: label || `${serving} ${servingUnit}`,
       grams: tidy(servingUnit === 'ml' ? serving * volume.density : serving),
     });
+  }
+  if (packageSize > 0 && ['g', 'ml'].includes(packageUnit)) {
+    const grams = tidy(packageUnit === 'ml' ? packageSize * volume.density : packageSize);
+    const canned = (product.categories_tags ?? []).some((tag) => /canned|tinned/.test(tag));
+    // A single-serve package is already its serving.
+    if (!servings.some((s) => s.grams === grams))
+      servings.push({ name: canned ? '1 can' : '1 package', grams });
   }
   const brand = String(product.brands ?? '')
     .split(',')[0]

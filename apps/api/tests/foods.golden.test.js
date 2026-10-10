@@ -77,6 +77,64 @@ const products = [
     serving_quantity_unit: 'ml',
     nutriments: { 'energy-kcal_100g': 828, fat_100g: 92, 'saturated-fat_100g': 13.8 },
   },
+  {
+    code: '0041000000016',
+    product_name: 'Synthetic red kidney beans',
+    brands: 'Example Pantry',
+    categories_tags: ['en:canned-foods', 'en:canned-legumes', 'en:kidney-beans'],
+    quantity: '15 oz (425 g)',
+    product_quantity: 425,
+    product_quantity_unit: 'g',
+    serving_size: '1/2 cup (130 g)',
+    serving_quantity: 130,
+    serving_quantity_unit: 'g',
+    nutriments: {
+      'energy-kcal_100g': 85,
+      proteins_100g: 5.4,
+      carbohydrates_100g: 15.4,
+      fat_100g: 0.4,
+      fiber_100g: 5.4,
+      sodium_100g: 0.25,
+    },
+  },
+  {
+    code: '0041000000023',
+    product_name: 'Synthetic diced tomatoes',
+    brands: 'Example Pantry',
+    categories_tags: ['en:canned-foods', 'en:canned-vegetables', 'en:canned-tomatoes'],
+    quantity: '14.5 oz (411 g)',
+    product_quantity: 411,
+    product_quantity_unit: 'g',
+    serving_size: '1/2 cup (121 g)',
+    serving_quantity: 121,
+    serving_quantity_unit: 'g',
+    nutriments: {
+      'energy-kcal_100g': 21,
+      proteins_100g: 0.8,
+      carbohydrates_100g: 4,
+      fat_100g: 0,
+      sodium_100g: 0.15,
+    },
+  },
+  {
+    code: '0049000000443',
+    product_name: 'Synthetic cola multipack',
+    categories_tags: ['en:beverages', 'en:sodas'],
+    quantity: '6 x 330 ml',
+    product_quantity: 1980,
+    product_quantity_unit: 'ml',
+    nutrition_data_per: '100ml',
+    nutriments: { 'energy-kcal_100g': 42, carbohydrates_100g: 10.6, sugars_100g: 10.6 },
+  },
+  {
+    code: '0049000000450',
+    product_name: 'Synthetic apple juice',
+    categories_tags: ['en:beverages', 'en:fruit-juices'],
+    quantity: '1 l',
+    product_quantity: 1000,
+    product_quantity_unit: 'ml',
+    nutriments: { 'energy-kcal_100g': 44, carbohydrates_100g: 10.6, sugars_100g: 10 },
+  },
 ];
 
 test('Open Food Facts products map to the Foods in the golden file', () => {
@@ -136,4 +194,25 @@ test('a label per 100 ml becomes per 100 g through the density of its category',
   assert.deepEqual(oil.volume, { density: 0.92, assumed: true, note: 'Typical for oils' });
   assert.deepEqual(oil.per100g, { energy: 900, fat: 100, saturatedFat: 15 });
   assert.deepEqual(oil.servings, [{ name: '1 tbsp (15 ml)', grams: 13.8 }]);
+});
+
+test('a package size is a serving: a can for canned food, never a multipack', () => {
+  const [beans, tomatoes, cola, juice] = products
+    .slice(6)
+    .map((product) => fromOpenFoodFacts(product, { now }));
+  assert.deepEqual(beans.servings, [
+    { name: '1/2 cup (130 g)', grams: 130 },
+    { name: '1 can', grams: 425 },
+  ]);
+  assert.deepEqual(tomatoes.servings.at(-1), { name: '1 can', grams: 411 });
+  assert.deepEqual(cola.servings, [], 'Six cans are not one package');
+  // A carton sold by volume, labelled per 100 g: its litre needs a density.
+  assert.deepEqual(juice.servings, [{ name: '1 package', grams: 1040 }]);
+  assert.equal(juice.volume.note, 'Typical for juices');
+  // A single serve already is its package.
+  const bar = fromOpenFoodFacts(
+    { ...products[0], product_quantity: 40, product_quantity_unit: 'g' },
+    { now }
+  );
+  assert.deepEqual(bar.servings, [{ name: '1 bar (40 g)', grams: 40 }]);
 });

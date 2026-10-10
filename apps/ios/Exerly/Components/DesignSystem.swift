@@ -367,11 +367,15 @@ struct ExQuantityControl: View {
     var identifier = ""
     var integer = false
     var focusOnAppear = false
+    @State private var focusRequest = 0
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: ExSpacing.item) {
+            // The caption is part of the field: a tap on it starts typing.
             Text(title).font(.exLabel).foregroundStyle(Color.exTextSecondary)
+                .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).contentShape(Rectangle())
+                .onTapGesture { focusRequest += 1 }
             if typeSize.isAccessibilitySize {
                 quantityField
                 HStack {
@@ -412,8 +416,11 @@ struct ExQuantityControl: View {
     }
 
     private var quantityField: some View {
+        // The − and + (under the number at the largest sizes) and the presets
+        // stay in view above the keypad with the number.
         ExNumericTextField(title: title, text: $text, placeholder: "0", integer: integer, centered: true, identifier: identifier,
-                           focusOnAppear: focusOnAppear)
+                           focusOnAppear: focusOnAppear, revealBelow: typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72,
+                           focusRequest: focusRequest)
             .frame(minHeight: 52)
     }
 

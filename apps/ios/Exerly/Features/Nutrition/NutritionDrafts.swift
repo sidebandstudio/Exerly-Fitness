@@ -75,10 +75,11 @@ final class NutritionFoodDraft: ObservableObject {
     private let initialNutrients: [Nutrient: NutritionNumberField]
     private let initialServings: [NutritionServingFields]
 
-    init(store: NutritionStore, editing: ExerlyCore.Food? = nil) {
+    /// `start` begins a new food from another's label, as a duplicate does.
+    init(store: NutritionStore, editing: ExerlyCore.Food? = nil, start: ExerlyCore.Food? = nil) {
         self.store = store
         original = editing
-        let food = editing ?? ExerlyCore.Food(name: "", per100g: NutrientAmounts())
+        let food = editing ?? start ?? ExerlyCore.Food(name: "", per100g: NutrientAmounts())
         template = food
         name = food.name
         brand = food.brand ?? ""
@@ -601,6 +602,14 @@ final class NutritionCopyDraft: ObservableObject {
             self.error = "Could not copy these entries. No copies were saved. Try again."
             return nil
         }
+    }
+}
+
+extension FoodEntry {
+    /// An entry not yet logged, for a portion editor to open at `amount`.
+    init(starting amount: LoggedAmount, of food: ExerlyCore.Food, on date: LocalDate, meal: String) {
+        self.init(date: date, meal: meal, loggedAt: Date(), food: food.snapshot, grams: amount.grams, serving: amount.serving,
+                  quantity: amount.quantity)
     }
 }
 

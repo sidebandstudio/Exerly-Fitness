@@ -26,9 +26,11 @@ struct NutritionEntryEditor: View {
         var id: String { rawValue }
     }
 
+    /// `start` opens a new entry at that amount, such as one typed in search,
+    /// instead of the last amount logged.
     init(workspace: TrainingWorkspace, food: ExerlyCore.Food, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, editing: FoodEntry? = nil,
-         onSaved: @escaping (FoodEntry) -> Void) {
+         start: LoggedAmount? = nil, onSaved: @escaping (FoodEntry) -> Void) {
         self.workspace = workspace
         self.timeZone = timeZone
         self.unit = unit
@@ -37,7 +39,9 @@ struct NutritionEntryEditor: View {
         self.onSaved = onSaved
         _libraryActions = StateObject(wrappedValue: NutritionLibraryActions(store: workspace.nutrition))
         _draft = StateObject(wrappedValue: NutritionEntryDraft(store: workspace.nutrition, food: food,
-            date: date, meal: meal, editing: editing, repeating: workspace.nutrition.entries.last { $0.food.foodID == food.id && $0.amountChanged != true },
+            date: date, meal: meal, editing: editing,
+            repeating: start.map { FoodEntry(starting: $0, of: food, on: date, meal: meal) }
+                ?? workspace.nutrition.entries.last { $0.food.foodID == food.id && $0.amountChanged != true },
             preferredUnit: unit, timeZone: timeZone))
     }
 

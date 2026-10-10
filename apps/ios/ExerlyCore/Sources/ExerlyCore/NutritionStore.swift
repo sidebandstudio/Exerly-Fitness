@@ -22,15 +22,18 @@ public final class NutritionStore {
     public private(set) var weights: [WeightEntry] = []
     /// Plan versions, the earliest in force first.
     public private(set) var plans: [NutritionPlan] = []
+    /// Foods the person asked not to be suggested, the latest first.
+    public private(set) var hiddenSuggestions: [HiddenSuggestion] = []
 
     static let foodKind = "saved_food"
     static let entryKind = "food_entry"
     static let dayKind = "nutrition_day"
     static let weightKind = "weight_entry"
     nonisolated static let planKind = "nutrition_plan"
+    static let hiddenKind = "hidden_suggestion"
 
     @ObservationIgnored let persistence: TrainingPersistence & DocumentPersistence
-    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored let now: () -> Date
 
     public init(persistence: TrainingPersistence & DocumentPersistence, now: @escaping () -> Date = Date.init) throws {
         self.persistence = persistence
@@ -46,7 +49,11 @@ public final class NutritionStore {
             .sorted { $0.at < $1.at }
         plans = try persistence.loadDocuments(kind: Self.planKind).map { try decoder.decode(NutritionPlan.self, from: $0) }
             .sorted(by: Self.planOrder)
+        hiddenSuggestions = try persistence.loadDocuments(kind: Self.hiddenKind)
+            .map { try decoder.decode(HiddenSuggestion.self, from: $0) }.sorted(by: Self.hiddenOrder)
     }
+
+    static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
 
     static func planOrder(_ a: NutritionPlan, _ b: NutritionPlan) -> Bool {
         (a.startDate, a.createdAt, a.id.uuidString) < (b.startDate, b.createdAt, b.id.uuidString)
@@ -259,9 +266,10 @@ public final class NutritionStore {
     /// Foods usually logged within 90 minutes of `time`'s time of day over
     /// the `days` days before it, on the most days first, then the most
     /// recently. Each comes with the amount and meal last logged, so one tap
-    /// logs it. Foods already logged that day, and archived foods, are left
-    /// out. Only entries logged on the day they count for say when a food was
-    /// eaten. A saved food's current nutrients are used.
+    /// logs it. Foods already logged that day are left out, as are archived
+    /// foods and foods the person hid. Only entries
+    /// logged on the day they count for say when a food was eaten. A saved
+    /// food's current nutrients are used.
     public func suggestions(at time: Date, timeZone: TimeZone, days: Int = 28, limit: Int = 8) -> [FoodSuggestion] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
@@ -272,6 +280,7 @@ public final class NutritionStore {
         let today = LocalDate(time, in: timeZone), target = minute(time)
         let skipped = Set(entries(on: today).map(\.food.foodID))
             .union(foods.filter { $0.archivedAt != nil }.map(\.id))
+            .union(hiddenSuggestions.map(\.id))
             .union(entries.map(\.food.foodID).filter { $0.hasPrefix(Self.quickAddPrefix) })
         var dates: [String: Set<LocalDate>] = [:]
         var latest: [String: FoodEntry] = [:]
@@ -484,14 +493,14 @@ public final class NutritionStore {
 
     // MARK: Private
 
-    private func commit<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
+    func commit<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
         let publish = try prepareWrite(kind: kind, id: id, payload: ExerlyJSON.canonical(value))
         publish()
     }
 }
 
 extension NutritionStore: DocumentHost {
-    public var documentKinds: [String] { [Self.foodKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind] }
+    public var documentKinds: [String] { [Self.foodKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind, Self.hiddenKind] }
 
     public func documentIDs(kind: String) -> [String] {
         switch kind {
@@ -500,6 +509,7 @@ extension NutritionStore: DocumentHost {
         case Self.dayKind: days.values.map(\.id)
         case Self.weightKind: weights.map(\.id.uuidString)
         case Self.planKind: plans.map(\.id.uuidString)
+        case Self.hiddenKind: hiddenSuggestions.map(\.id)
         default: []
         }
     }
@@ -511,6 +521,7 @@ extension NutritionStore: DocumentHost {
         case Self.dayKind: return try LocalDate(id).flatMap { days[$0] }.map(ExerlyJSON.canonical)
         case Self.weightKind: return try weights.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.planKind: return try plans.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
+        case Self.hiddenKind: return try hiddenSuggestions.first { $0.id == id }.map(ExerlyJSON.canonical)
         default: return nil
         }
     }
@@ -523,6 +534,7 @@ extension NutritionStore: DocumentHost {
         case Self.dayKind: return try ExerlyJSON.canonical(decoder.decode(NutritionDay.self, from: payload))
         case Self.weightKind: return try ExerlyJSON.canonical(decoder.decode(WeightEntry.self, from: payload))
         case Self.planKind: return try ExerlyJSON.canonical(decoder.decode(NutritionPlan.self, from: payload))
+        case Self.hiddenKind: return try ExerlyJSON.canonical(decoder.decode(HiddenSuggestion.self, from: payload))
         default: throw DocumentError(message: "Unknown kind \(kind)")
         }
     }
@@ -546,13 +558,16 @@ extension NutritionStore: DocumentHost {
         case Self.planKind:
             let plan = try decoder.decode(NutritionPlan.self, from: payload)
             problems = (plan.id.uuidString == id ? [] : ["the ID doesn't match"]) + plan.validationErrors
+        case Self.hiddenKind:
+            let hidden = try decoder.decode(HiddenSuggestion.self, from: payload)
+            problems = (hidden.id == id ? [] : ["the ID doesn't match"]) + hidden.problems
         default:
             throw DocumentError(message: "Unknown kind \(kind)")
         }
         guard problems.isEmpty else { throw DocumentError(message: problems.joined(separator: "; ")) }
     }
 
-    /// Foods, entries, weigh-ins and plans merge as whole values. A day merges field by field.
+    /// Foods, entries, weigh-ins, plans and hidden suggestions merge as whole values. A day merges field by field.
     public func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
         let decoder = ExerlyJSON.decoder
         func whole<T: Codable & Equatable>(_ type: T.Type) throws -> Data {
@@ -564,6 +579,7 @@ extension NutritionStore: DocumentHost {
         case Self.entryKind: return try whole(FoodEntry.self)
         case Self.weightKind: return try whole(WeightEntry.self)
         case Self.planKind: return try whole(NutritionPlan.self)
+        case Self.hiddenKind: return try whole(HiddenSuggestion.self)
         case Self.dayKind:
             let original = try base.map { try decoder.decode(NutritionDay.self, from: $0) }
             var merged = try decoder.decode(NutritionDay.self, from: local)
@@ -591,6 +607,7 @@ extension NutritionStore: DocumentHost {
                 case Self.dayKind: if let date = LocalDate(id) { days[date] = nil }
                 case Self.weightKind: weights.removeAll { $0.id.uuidString == id }
                 case Self.planKind: plans.removeAll { $0.id.uuidString == id }
+                case Self.hiddenKind: hiddenSuggestions.removeAll { $0.id == id }
                 default: break
                 }
             }
@@ -613,6 +630,9 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind:
             let weight = try decoder.decode(WeightEntry.self, from: canonical)
             return { [self] in weights = (weights.filter { $0.id != weight.id } + [weight]).sorted { $0.at < $1.at } }
+        case Self.hiddenKind:
+            let hidden = try decoder.decode(HiddenSuggestion.self, from: canonical)
+            return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { $0.id != id } + [hidden]).sorted(by: Self.hiddenOrder) }
         default:
             let plan = try decoder.decode(NutritionPlan.self, from: canonical)
             return { [self] in plans = (plans.filter { $0.id != plan.id } + [plan]).sorted(by: Self.planOrder) }
