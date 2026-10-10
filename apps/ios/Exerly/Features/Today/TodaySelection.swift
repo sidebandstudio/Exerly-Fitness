@@ -21,9 +21,14 @@ struct TodaySelectionBar: View {
                 HStack(spacing: ExSpacing.small) { closeButton; status }
                 HStack(spacing: ExSpacing.small) { actions }
             }
+            // The largest text: Copy and Move one above the other, whole.
+            VStack(alignment: .leading, spacing: ExSpacing.small) {
+                HStack(spacing: ExSpacing.small) { closeButton; status }
+                actions
+            }
         }
         .padding(.leading, ExSpacing.tight).padding(.trailing, ExSpacing.small).padding(.vertical, 4)
-        .frame(minHeight: 56)
+        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .padding(.horizontal, ExSpacing.page).padding(.bottom, ExSpacing.small)
         .accessibilityElement(children: .contain)
@@ -105,10 +110,19 @@ struct TodayEntriesDestination: View {
                     ExSectionHeading("Day")
                     ExChoiceChips(values: days, selection: $date) { TodayEntriesDestination.dayName($0, today: today, timeZone: timeZone) }
                         .accessibilityIdentifier("today.destinationDay")
-                    DatePicker("Another day", selection: Binding(
-                        get: { NutritionFormat.pickerDate(date, timeZone: timeZone) },
-                        set: { date = LocalDate($0, in: timeZone) }), displayedComponents: .date)
-                        .font(.exBody).frame(minHeight: 44)
+                    // The label goes above the date when they don't fit side by side.
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            Text("Another day").accessibilityHidden(true)
+                            Spacer(minLength: ExSpacing.small)
+                            anotherDay
+                        }
+                        VStack(alignment: .leading, spacing: ExSpacing.tight) {
+                            Text("Another day").accessibilityHidden(true)
+                            anotherDay
+                        }
+                    }
+                    .font(.exBody).frame(minHeight: 44)
                 }
                 VStack(alignment: .leading, spacing: ExSpacing.small) {
                     ExSectionHeading("Meal")
@@ -137,6 +151,13 @@ struct TodayEntriesDestination: View {
     }
 
     private var title: String { "\(action == .copy ? "Copy" : "Move") \(count) \(count == 1 ? "food" : "foods")" }
+
+    private var anotherDay: some View {
+        DatePicker("Another day", selection: Binding(
+            get: { NutritionFormat.pickerDate(date, timeZone: timeZone) },
+            set: { date = LocalDate($0, in: timeZone) }), displayedComponents: .date)
+            .labelsHidden()
+    }
 
     /// Yesterday, today and tomorrow, and a day chosen from the calendar.
     private var days: [LocalDate] {
