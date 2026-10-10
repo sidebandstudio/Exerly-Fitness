@@ -904,3 +904,22 @@ tomatoes, which fall back to the portion step; nothing is invented. A typed
 container word ("jar", "bag") matches any package; "can" and "tin" only
 cans. The golden file gained synthetic canned beans and tomatoes, a
 multipack and a carton, which the simulator fixture serves.
+
+## 2026-10-10: Recipe ingredients always ask for their amount
+
+In code-blind run 5 a food logged before went into a recipe at its usual
+single amount without a prompt (oats 40 g, yogurt 200 g, blueberries 80 g);
+the tester fixed three of four afterwards, and overnight oats took 51
+actions. An ingredient's amount is rarely one serving of it, so every
+ingredient now opens its portion step, starting at the usual amount with the
+keypad's number selected: Add keeps it, typing replaces it. An amount typed
+with the food skips the step, and Log a meal and logging keep their one-tap
+adds. Overnight oats typed (80 g rolled oats, 200 g milk, 150 g Greek
+yogurt, 100 g blueberries, two jars, one logged) is 17 actions: 12 taps and
+5 typed.
+
+The same run found the keypad covering the amount and its − and + when a
+food's serving chips pushed them down, and that a tap on "Amount (g)" did
+nothing. The system scrolls only the text field above the keypad, so once
+the keypad is up the field scrolls its whole row, and the presets under it,
+into view, in every portion sheet. The caption now focuses the field.

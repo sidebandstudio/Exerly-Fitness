@@ -28,14 +28,18 @@ struct NutritionFoodPicker: View {
     let presentation: FoodPickerPresentation
     /// What picked foods go into: a meal or a recipe.
     let pickingInto: String
+    /// Every picked food asks for its amount, starting from the usual one,
+    /// unless it was typed with the food. Recipes ask: an ingredient's amount
+    /// is rarely what one serving of it was.
+    let confirmsAmounts: Bool
     @StateObject private var search: NutritionSearchModel
     @State private var meal: String
     @State private var query = ""
     @State private var scope = FoodListScope.recent
     @State private var shelf = FoodShelf()
     @State private var selectedFood: PortionRequest?
-    /// A picked food without a usual amount, whose amount is being asked,
-    /// and how that step ended: nil while it's open or once swiped away.
+    /// A picked food whose amount is being asked, and how that step ended:
+    /// nil while it's open or once swiped away.
     @State private var asking: PortionRequest?
     @State private var askedFood: ExerlyCore.Food?
     @State private var askOutcome: AskOutcome?
@@ -66,7 +70,8 @@ struct NutritionFoodPicker: View {
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, onLogged: @escaping () -> Void,
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
-         pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal") {
+         pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
+         confirmsAmounts: Bool = false) {
         self.workspace = workspace
         self.api = api
         self.date = date
@@ -78,6 +83,7 @@ struct NutritionFoodPicker: View {
         self.pickError = pickError
         self.presentation = presentation
         self.pickingInto = pickingInto
+        self.confirmsAmounts = confirmsAmounts
         // A sheet opened to search starts typing; one opened to scan doesn't.
         focusesSearch = presentation == .sheet && !startsWithBarcode
         _meal = State(initialValue: presentation == .tab ? workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone) : meal)
@@ -171,8 +177,9 @@ struct NutritionFoodPicker: View {
     @ViewBuilder private var header: some View {
         if picking {
             VStack(alignment: .leading, spacing: ExSpacing.small) {
-                Text(FoodSearch.amount(in: query).amount == nil ? "Foods you've had come in at your usual amount. Others ask for one."
-                     : "Foods come in at the amount you typed. Others ask for one.")
+                Text(FoodSearch.amount(in: query).amount != nil ? "Foods come in at the amount you typed. Others ask for one."
+                     : confirmsAmounts ? "Each asks for its amount, starting from your usual. Type one first, as in 80 g oats, to skip that."
+                     : "Foods you've had come in at your usual amount. Others ask for one.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 if let selectionError { Text(selectionError).font(.exCaption).foregroundStyle(Color.exError) }
             }
@@ -653,11 +660,15 @@ struct NutritionFoodPicker: View {
     }
 
     /// A food with an amount the person logs it at joins in one tap; any
-    /// other asks for its amount first.
+    /// other asks for its amount first, as every food does when amounts are
+    /// confirmed, starting from its usual one.
     private func select(_ food: ExerlyCore.Food) {
         guard onPick != nil else { selectedFood = PortionRequest(food: food); return }
-        if store.quickPortion(for: food, unit: unit)?.repeated == false {
+        let usual = store.quickPortion(for: food, unit: unit)
+        if usual?.repeated == false {
             ask(PortionRequest(food: food))
+        } else if confirmsAmounts {
+            ask(PortionRequest(food: food, start: usual.flatMap { FoodPickerItem(portion: $0, food: food).amount }))
         } else { pick(food, .usual) }
     }
 

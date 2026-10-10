@@ -15,6 +15,11 @@ struct ExNumericTextField: UIViewRepresentable {
     /// Opens the keypad with the number selected once the screen has settled,
     /// for a screen that asks for this number.
     var focusOnAppear = false
+    /// Points below the field that stay in view above the keypad, such as
+    /// its row's − and + and the presets under it.
+    var revealBelow: CGFloat = 0
+    /// Each change focuses the field, as a tap on its caption does.
+    var focusRequest = 0
     @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -48,6 +53,10 @@ struct ExNumericTextField: UIViewRepresentable {
 
     func updateUIView(_ field: UITextField, context: Context) {
         context.coordinator.parent = self
+        if focusRequest != context.coordinator.focusRequest {
+            context.coordinator.focusRequest = focusRequest
+            field.becomeFirstResponder()
+        }
         if field.text != text {
             field.text = text
             // A preset, a step or a new measure replaced the number being edited.
@@ -91,14 +100,31 @@ struct ExNumericTextField: UIViewRepresentable {
     final class Coordinator: NSObject, UITextFieldDelegate {
         var parent: ExNumericTextField
         var host: UIHostingController<AnyView>?
+        var focusRequest: Int
 
-        init(_ parent: ExNumericTextField) { self.parent = parent }
+        init(_ parent: ExNumericTextField) {
+            self.parent = parent
+            focusRequest = parent.focusRequest
+        }
 
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
 
         func textFieldDidBeginEditing(_ field: UITextField) {
             // After the tap that focused the field has placed its caret.
             DispatchQueue.main.async { Self.selectAll(field) }
+            // The system shows only the field itself above the keypad; once
+            // the keypad is up, the rest of its row comes into view too.
+            let below = parent.revealBelow
+            guard below > 0 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak field] in
+                guard let field, field.isFirstResponder else { return }
+                var view = field.superview
+                while let current = view, !(current is UIScrollView) { view = current.superview }
+                guard let scroll = view as? UIScrollView else { return }
+                var rect = field.convert(field.bounds, to: scroll)
+                rect.size.height += below
+                scroll.scrollRectToVisible(rect, animated: true)
+            }
         }
 
         static func selectAll(_ field: UITextField) {

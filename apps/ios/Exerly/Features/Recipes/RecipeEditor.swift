@@ -96,7 +96,7 @@ struct RecipeEditor: View {
                                     timeZone: timeZone, unit: draft.unit, actions: actions, onLogged: {},
                                     pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map(\.ingredient.food.foodID)),
                                     onPick: { draft.add($0, amount: $1) ? draft.rows.count : nil }, pickError: { draft.errors.first },
-                                    pickingInto: "recipe")
+                                    pickingInto: "recipe", confirmsAmounts: true)
             }
             .sheet(item: $editingRow) { row in
                 FoodPortionStep(store: workspace.nutrition, food: row.food ?? workspace.nutrition.food(row.ingredient.food.foodID)
@@ -141,7 +141,7 @@ struct RecipeEditor: View {
             }
         } footer: {
             if draft.rows.isEmpty {
-                Text("Search, scan or pick foods you've logged. Foods you've had come in at your usual amount; others ask for one.")
+                Text("Search, scan or pick foods you've logged. Each asks for its amount, or type it with the food, as in 80 g oats.")
             }
         }
     }
