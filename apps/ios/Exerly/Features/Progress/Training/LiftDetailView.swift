@@ -121,8 +121,10 @@ struct LiftDetailView: View {
 
     private func currentLine(_ report: TrainingInsights.LiftReport, today: LocalDate) -> String {
         guard let summary = report.summary else { return "" }
-        let basis = summary.trend == nil ? "Last session" : "Trend now"
-        return "\(basis) · best \(InsightFormat.estimate(summary.best.oneRepMax, unit)) "
+        // The headline is the trend's estimate; the best set's own e1RM is
+        // labelled as such, as the Stats tile is, so 142 and 141 don't read as a disagreement.
+        let basis = summary.trend == nil ? "Last session" : "Trend estimate"
+        return "\(basis) · best set e1RM \(InsightFormat.estimate(summary.best.oneRepMax, unit)) "
             + "\(InsightFormat.day(summary.best.date, today: today).lowercased().hasPrefix("to") ? "today" : "on " + InsightFormat.day(summary.best.date, today: today))"
             + (exercise?.metric.usesBodyweight == true ? " · includes bodyweight" : "")
     }
@@ -174,7 +176,7 @@ struct LiftDetailView: View {
             guard let value else { return }
             items.append((title, InsightFormat.estimate(value.kilograms, unit), InsightFormat.spokenEstimate(value.kilograms, unit)))
         }
-        mass("Est. 1RM", statistics.estimatedOneRepMax)
+        mass("Best e1RM", statistics.estimatedOneRepMax)
         mass("Est. 3RM", statistics.estimatedThreeRepMax)
         mass("Est. 10RM", statistics.estimatedTenRepMax)
         if let heaviest = statistics.heaviestLoad {

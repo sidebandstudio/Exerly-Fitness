@@ -33,7 +33,11 @@ final class TrainingInsightsUITests: ExerlyUITestCase {
         // Each session's best is its 5 reps at 2 RIR (7 to failure): 185, 195 and 205 lb a week
         // apart fit a straight trend ending at 205 × 36/30, 246 lb.
         XCTAssertTrue(estimate.label.contains("246 pounds"), estimate.label)
-        XCTAssertTrue(app.descendants(matching: .any)["liftDetail.stats"].exists)
+        // The trend's estimate and the best set's e1RM say which is which.
+        XCTAssertTrue(estimate.label.contains("Trend estimate · best set e1RM "), estimate.label)
+        let stats = app.descendants(matching: .any)["liftDetail.stats"]
+        XCTAssertTrue(stats.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Best e1RM, ")).firstMatch.exists)
     }
 
     /// An account with no workouts says what will appear, not empty charts.

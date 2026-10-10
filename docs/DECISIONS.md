@@ -904,3 +904,12 @@ In the library a card now says it was saved and offers "Log it now", which opens
 the portion sheet at one serving, then says what was logged. The list shows a
 recipe with servings by the serving ("297 kcal / serving"), as its page and
 portion sheet do; other foods stay per 100 g.
+
+## 2026-10-10: A lift's two estimates say which is which
+
+The bench page's headline said 142 lb while its line said "best 141 lb" and the
+Stats tile "Est. 1RM 141 lb". Both are right: the headline is the trend's value
+at the last session, steadier than one session, and 141 is the best set's own
+e1RM. They keep their maths and gain labels: "Trend estimate · best set e1RM
+141 lb on Thu, Oct 8", and the tile is "Best e1RM". Changing the headline to the
+best set would make Progress's list jump with every heavy or light day.
