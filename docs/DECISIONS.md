@@ -922,3 +922,12 @@ under its bar, every week for four weeks and fewer as the span grows, counted
 back from this week so the current one is always labelled. Train's Recent list
 starts with this week's total, "This week: 2 workouts · 31 sets", counted as
 Progress counts its weeks.
+
+## 2026-10-10: Re-tapping Profile already returns to its top
+
+Run 5 read step 20 as Profile ignoring a re-tap, but that step switched back
+from Today, which keeps a tab's place as iOS tabs do; the re-tap after it went
+straight back to Profile's first screen. iOS pops Profile's stack and scrolls it
+to the top itself, so a test now covers that instead of new code. Unlike
+Today's, Profile's large title stays small after that scroll. Two attempts at an
+extra animated scroll after iOS's own didn't bring it back, so it's left.

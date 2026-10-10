@@ -172,6 +172,31 @@ final class ProfileOnboardingUITests: ExerlyUITestCase {
         await fulfillment(of: [expectation(for: NSPredicate(format: "value CONTAINS %@", "kilograms"), evaluatedWith: weight)], timeout: 15)
     }
 
+    /// A tap on Profile while it shows goes back to its first screen, and a
+    /// second to its top. Run 5's stray screen came from switching back from
+    /// Today, which keeps a tab's place, as iOS tabs do.
+    func testRetappingProfileReturnsToItsTop() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "profile-retap", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        let profile = app.tabBars.buttons["Profile"]
+        tap(profile, in: app)
+        tap(app.buttons["profile.targets"], in: app)
+        XCTAssertTrue(app.scrollViews["targets.screen"].waitForExistence(timeout: 10))
+        profile.tap()
+        let edit = app.buttons["profile.preferences"]
+        let hittable = NSPredicate(format: "hittable == true")
+        await fulfillment(of: [expectation(for: hittable, evaluatedWith: edit)], timeout: 10)
+        XCTAssertFalse(app.scrollViews["targets.screen"].exists, "Back at Profile's first screen")
+        app.swipeUp()
+        app.swipeUp()
+        XCTAssertFalse(edit.isHittable)
+        profile.tap()
+        await fulfillment(of: [expectation(for: hittable, evaluatedWith: edit)], timeout: 10)
+        capture(app, "profile-retap-top")
+    }
+
     func testSignInAndSignUpLinkToEachOther() throws {
         let app = launch(resetSession: true)
         tap(app.buttons["I already have an account"], in: app)
