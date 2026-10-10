@@ -33,16 +33,23 @@ struct NutritionLibraryView: View {
     @State private var creating = false
     @State private var creatingRecipe = false
     @State private var showArchived = false
+    /// A recipe just saved here, offered to log now, and what was logged.
+    @State private var saved: ExerlyCore.Food?
+    @State private var logging: ExerlyCore.Food?
+    @State private var logged: FoodEntry?
+    @StateObject private var diaryActions: NutritionDiaryActions
     @EnvironmentObject private var auth: AuthViewModel
 
     init(workspace: TrainingWorkspace, timeZone: TimeZone, unit: MassUnit) {
         self.workspace = workspace
         self.timeZone = timeZone
         self.unit = unit
+        _diaryActions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
     }
 
     var body: some View {
         ExScreen {
+            if let recipe = saved.flatMap({ workspace.nutrition.food($0.id) }) { savedCard(recipe) }
             ExSearchField(text: $query, label: "Search saved foods")
                 .accessibilityIdentifier("nutrition.librarySearch")
             ExChoiceChips(values: [false, true], selection: $showArchived) { $0 ? "Archived" : "Saved" }
@@ -81,8 +88,33 @@ struct NutritionLibraryView: View {
         }
         .sheet(isPresented: $creating) { NutritionFoodEditor(workspace: workspace) { _ in } }
         .sheet(isPresented: $creatingRecipe) {
-            if let api = auth.accountAPI { RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit) }
+            if let api = auth.accountAPI {
+                RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit) { saved = $0; logged = nil }
+            }
         }
+        .sheet(item: $logging) { food in
+            NutritionEntryEditor(workspace: workspace, food: food, date: LocalDate(Date(), in: timeZone),
+                                 meal: workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone), timeZone: timeZone, unit: unit,
+                                 actions: diaryActions) { logged = $0 }
+        }
+    }
+
+    /// Saving a recipe here used to leave it in the list with no way to eat it now.
+    private func savedCard(_ recipe: ExerlyCore.Food) -> some View {
+        ExCard(accent: true) {
+            Label("Saved \(recipe.name)", systemImage: "checkmark.circle.fill").font(.exBodyMedium)
+                .foregroundStyle(Color.exTextPrimary)
+            if let logged {
+                Text("Logged \(NutritionFormat.portion(logged, unit: unit)) to \(logged.meal), \(NutritionFormat.day(logged.date, timeZone: timeZone)).")
+                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    .accessibilityIdentifier("nutrition.librarySavedLogged")
+            } else {
+                Button("Log it now", systemImage: "plus") { logging = recipe }
+                    .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.libraryLogSaved")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("nutrition.librarySaved")
     }
 
     private var visibleFoods: [ExerlyCore.Food] {
@@ -117,21 +149,24 @@ struct NutritionFoodRow: View {
                 Text(food.brand ?? NutritionFormat.source(food.source)).font(.exCaption).foregroundStyle(Color.exTextSecondary)
             }.fixedSize(horizontal: false, vertical: true)
             if typeSize.isAccessibilitySize {
-                Text("\(energy) kcal / 100 g").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                Text("\(energy) \(basis)").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(energy).font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
-                Text("kcal / 100 g").font(.exSmall).foregroundStyle(Color.exTextSecondary)
+                Text(basis).font(.exSmall).foregroundStyle(Color.exTextSecondary)
             }
             }
         }.frame(minHeight: 52).contentShape(Rectangle()).multilineTextAlignment(.leading)
     }
 
+    /// A recipe with servings by the serving it's logged by; other foods per 100 g.
     private var energy: String {
-        food.per100g[.energy].map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "—"
+        (food.perRecipeServing ?? food.per100g)[.energy].map { $0.formatted(.number.precision(.fractionLength(0))) } ?? "—"
     }
+
+    private var basis: String { food.perRecipeServing == nil ? "kcal / 100 g" : "kcal / serving" }
 }
 
 private struct NutritionLibraryDetail: View {

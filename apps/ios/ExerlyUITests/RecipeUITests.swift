@@ -328,6 +328,45 @@ final class RecipeUITests: ExerlyUITestCase {
         XCTAssertTrue(logged.label.hasSuffix("1 serving · 225 g, 297 calories"), "Logged before the edit, so unchanged: \(logged.label)")
     }
 
+    /// The food library lists a recipe by the serving it's logged by, and a
+    /// recipe saved there offers to log it now.
+    func testARecipeSavedInTheLibraryCanBeLoggedNow() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-library")
+        let kitchen = try await seedKitchen(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openFoodLibrary(app)
+        let porridge = app.buttons["nutrition.libraryFood.\(kitchen.recipeID)"]
+        XCTAssertTrue(porridge.waitForExistence(timeout: 10))
+        XCTAssertTrue(porridge.label.hasSuffix("297, kcal / serving"), "297 kcal a serving, not 132 per 100 g: \(porridge.label)")
+        XCTAssertTrue(app.buttons["nutrition.libraryFood.\(kitchen.oats.id)"].label.hasSuffix("380, kcal / 100 g"))
+        capture(app, "recipe-library-per-serving")
+
+        tap(app.buttons["nutrition.libraryCreate"], in: app)
+        tap(app.buttons["nutrition.libraryNewRecipe"], in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["recipe.name"].typeText("Banana oat bowl")
+        tap(app.buttons["recipe.addIngredients"], in: app)
+        if !app.buttons["nutrition.plateAdd.\(kitchen.oats.id)"].waitForExistence(timeout: 3) { showMyFoods(app) }
+        for food in [kitchen.oats, kitchen.milk, kitchen.banana] { tap(app.buttons["nutrition.plateAdd.\(food.id)"], in: app) }
+        tap(app.buttons["nutrition.reviewPlate"], in: app)
+        tap(app.buttons["recipe.save"], in: app)
+
+        let logNow = app.buttons["nutrition.libraryLogSaved"]
+        XCTAssertTrue(logNow.waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "recipe-library-saved")
+        tap(logNow, in: app)
+        XCTAssertEqual(energy(app), "563 kilocalories", "One serving: the whole bowl")
+        tap(app.buttons["nutrition.saveEntry"], in: app)
+        let logged = app.descendants(matching: .any)["nutrition.librarySavedLogged"]
+        XCTAssertTrue(logged.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(logged.label.hasPrefix("Logged 1 serving"), logged.label)
+        capture(app, "recipe-library-logged")
+        tap(app.tabBars.buttons["Today"], in: app)
+        XCTAssertTrue(entries("Banana oat bowl", in: app).firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testARecipeLogsAsAShareOfThePotOrAsItsIngredients() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "recipe-share")

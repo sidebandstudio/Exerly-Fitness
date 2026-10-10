@@ -895,3 +895,12 @@ moves up from Preferences so both are on screen without scrolling. The goals
 list has a search field: typing part of a name shows only the matches, so "sod"
 finds sodium without scrolling. Search was chosen over a jump index by group
 because people look for a nutrient by its name, not its group.
+
+## 2026-10-10: A recipe saved in the library can be logged now
+
+A recipe saved from the food library used to leave the person in the list with
+no way to eat it now; from food search it already goes straight to its portion.
+In the library a card now says it was saved and offers "Log it now", which opens
+the portion sheet at one serving, then says what was logged. The list shows a
+recipe with servings by the serving ("297 kcal / serving"), as its page and
+portion sheet do; other foods stay per 100 g.
