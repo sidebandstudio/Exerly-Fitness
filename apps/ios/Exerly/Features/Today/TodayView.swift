@@ -64,6 +64,8 @@ struct TodayView: View {
     @State private var suggestionsLogged: [String: FoodEntry] = [:]
     /// This week's check-in when it waits for a decision, refreshed with "Log again".
     @State private var checkIn: TargetsCheckInCard.State?
+    /// Foods chosen to copy or move together; nil when not choosing.
+    @State private var selection: Set<UUID>?
     @State private var backgrounded = false
     @StateObject private var actions: NutritionDiaryActions
     @EnvironmentObject private var dailySync: SyncEngine
@@ -78,6 +80,8 @@ struct TodayView: View {
             case restoreDeleted
             /// Deletes the weigh-in just saved.
             case removeWeight(UUID)
+            /// Puts moved entries back on their day and meal.
+            case moveBack([FoodEntry])
             /// Suggests a hidden food again, where its chip was.
             case unhide(FoodSuggestion, Int)
         }
@@ -89,7 +93,7 @@ struct TodayView: View {
 
     enum Destination: Identifiable {
         case date, add(String), scan(String), quick(String), edit(FoodEntry), log(FoodSuggestion),
-             notes, copy(String?), recipe(String), nutrients, weighIn
+             notes, copy(String?), recipe(String), nutrients, weighIn, entries(TodayEntriesDestination.Action)
         var id: String {
             switch self {
             case .date: "date"
@@ -103,6 +107,7 @@ struct TodayView: View {
             case .recipe(let meal): "recipe-\(meal)"
             case .nutrients: "nutrients"
             case .weighIn: "weighIn"
+            case .entries(let action): "entries-\(action)"
             }
         }
     }
@@ -180,8 +185,16 @@ struct TodayView: View {
                     .accessibilityIdentifier("today.chooseDate")
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if let selection {
+                TodaySelectionBar(count: selection.count) { destination = .entries(.copy) } move: { destination = .entries(.move) } close: {
+                    withAnimation(.snappy) { self.selection = nil }
+                }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .overlay(alignment: .bottom) {
-            if let toast {
+            if let toast, selection == nil {
                 TodayToast(message: toast.message, failed: toast.failed, undo: toast.undo == nil ? nil : { undo(toast) },
                            undoIdentifier: undoIdentifier(toast.undo))
                     .padding(.bottom, ExSpacing.small)
@@ -215,7 +228,10 @@ struct TodayView: View {
             // Synced history can change the chips; not once one was used.
             if suggestionsLogged.isEmpty { refreshSuggestions() } else { refreshCheckIn() }
         }
-        .onChange(of: date) { _, _ in refreshSuggestions() }
+        .onChange(of: date) { _, _ in
+            selection = nil
+            refreshSuggestions()
+        }
         .onChange(of: reselected) {
             date = today
             withAnimation(.snappy) { scroll.scrollTo(edge: .top) }
@@ -439,6 +455,16 @@ struct TodayView: View {
                 UIAccessibility.post(notification: .announcement, argument: "Weigh-in removed")
                 Task { await workspace.synchronize() }
             } catch { show("Could not undo. The weigh-in is still saved.", failed: true) }
+        case .moveBack(let moved):
+            do {
+                // Each back to its own day and meal; one deleted since stays deleted.
+                let current = moved.filter { entry in store.entries.contains { $0.id == entry.id } }
+                for group in Dictionary(grouping: current, by: { "\($0.date) \($0.meal)" }).values {
+                    try store.move(group.map(\.id), to: group[0].date, meal: group[0].meal)
+                }
+                withAnimation(.snappy) { self.toast = nil }
+                Task { await workspace.synchronize() }
+            } catch { show("Could not undo. The foods stay where they were moved.", failed: true) }
         case .unhide(let suggestion, let index):
             do {
                 if store.isHiddenSuggestion(suggestion.food.foodID) { try store.restoreSuggestion(suggestion.food.foodID) }
@@ -569,7 +595,14 @@ struct TodayView: View {
             header {
                 Text("Meals").font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
                 if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
-                if entries.isEmpty, let day = store.repeatable(nil, for: date) {
+                if !entries.isEmpty {
+                    Button(selection == nil ? "Select" : "Done") {
+                        withAnimation(.snappy) { selection = selection == nil ? [] : nil }
+                    }
+                    .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
+                    .accessibilityHint(selection == nil ? "Choose foods to copy or move" : "")
+                    .accessibilityIdentifier("today.select")
+                } else if let day = store.repeatable(nil, for: date) {
                     Button { apply(day) } label: {
                         Label("Repeat \(dayName(day.source))", systemImage: "arrow.counterclockwise")
                             .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
@@ -586,19 +619,51 @@ struct TodayView: View {
                               recipes: logged.isEmpty ? store.recipes(for: meal, through: date).prefix(2).compactMap {
                                   store.quickPortion(for: $0, unit: unit)
                               } : [],
-                              timeZone: timeZone, unit: unit) {
+                              timeZone: timeZone, unit: unit, selection: selection) {
                     actions.clearError()
                     destination = .add(meal)
                 } edit: { entry in
-                    actions.clearError()
-                    destination = .edit(entry)
+                    if selection != nil {
+                        selection?.formSymmetricDifference([entry.id])
+                    } else {
+                        actions.clearError()
+                        destination = .edit(entry)
+                    }
                 } repeatMeal: { repeated in
                     apply(repeated)
                 } logRecipe: { portion in
                     log(portion, to: meal)
-                } copy: { destination = .copy(meal) } saveAsRecipe: { destination = .recipe(meal) }
+                } copy: { destination = .copy(meal) } saveAsRecipe: { destination = .recipe(meal) } select: {
+                    withAnimation(.snappy) { selection = Set(logged.map(\.id)) }
+                }
             }
         }
+    }
+
+    private var mealNames: [String] {
+        NutritionStore.defaultMeals + Set(store.entries(on: date).map(\.meal)).subtracting(NutritionStore.defaultMeals).sorted()
+    }
+
+    /// Copies or moves the chosen foods, with Undo. A copy keeps each food's
+    /// portion and source, as copying a meal does; a move keeps the entries.
+    private func perform(_ action: TodayEntriesDestination.Action, _ chosen: [FoodEntry], to target: LocalDate, meal: String?) {
+        let what = "\(chosen.count) \(chosen.count == 1 ? "food" : "foods")"
+        var place = TodayEntriesDestination.dayName(target, today: today, timeZone: timeZone)
+        if ["Today", "Tomorrow", "Yesterday"].contains(place) { place = place.lowercased() }
+        if let meal { place = target == date ? meal : "\(meal), \(place)" }
+        do {
+            switch action {
+            case .copy:
+                let copies = try store.copy(chosen.map(\.id), to: target, meal: meal)
+                show("Copied \(what) to \(place)", undo: .remove(copies.map(\.id)))
+            case .move:
+                try store.move(chosen.map(\.id), to: target, meal: meal)
+                show("Moved \(what) to \(place)", undo: .moveBack(chosen))
+            }
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(.snappy) { selection = nil }
+            Task { await workspace.synchronize() }
+        } catch { show("Could not \(action == .copy ? "copy" : "move") those foods. Nothing changed.", failed: true) }
     }
 
     private func log(_ recipe: QuickPortion, to meal: String) {
@@ -767,6 +832,10 @@ struct TodayView: View {
             WeighInSheet(workspace: workspace, unit: unit, timeZone: timeZone) { entry in
                 show("Weighed in at \(BodyFormat.reading(entry.weight, unit))", undo: .removeWeight(entry.id))
             }
+        case .entries(let action):
+            let chosen = store.entries(on: date).filter { selection?.contains($0.id) == true }
+            TodayEntriesDestination(action: action, count: chosen.count, source: date, today: today, meals: mealNames,
+                                    timeZone: timeZone) { perform(action, chosen, to: $0, meal: $1) }
         }
     }
 }
@@ -782,12 +851,15 @@ struct TodayMealCard: View {
     let recipes: [QuickPortion]
     let timeZone: TimeZone
     let unit: MassUnit
+    /// The foods chosen on Today while choosing; nil otherwise. A tap on a food then chooses it.
+    var selection: Set<UUID>?
     let add: () -> Void
     let edit: (FoodEntry) -> Void
     let repeatMeal: (MealRepeat) -> Void
     let logRecipe: (QuickPortion) -> Void
     let copy: () -> Void
     let saveAsRecipe: () -> Void
+    let select: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -798,6 +870,8 @@ struct TodayMealCard: View {
                 if !entries.isEmpty {
                     Text("\(TodayNutritionCard.number(energy)) kcal").font(.exLabel).monospacedDigit()
                         .foregroundStyle(Color.exTextSecondary)
+                }
+                if !entries.isEmpty && selection == nil {
                     Menu { mealActions } label: {
                         Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.exTextSecondary)
                             .frame(width: 32, height: 32).frame(width: 44, height: 44).contentShape(Circle())
@@ -805,24 +879,28 @@ struct TodayMealCard: View {
                     .accessibilityLabel("\(meal) options")
                     .accessibilityIdentifier("today.mealMenu.\(meal.lowercased())")
                 }
-                Button(action: add) {
-                    Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.exPrimaryText)
-                        .frame(width: 32, height: 32).background(Color.exPrimary.opacity(0.14), in: Circle())
-                        .frame(width: 44, height: 44).contentShape(Circle())
+                if selection == nil {
+                    Button(action: add) {
+                        Image(systemName: "plus").font(.system(size: 15, weight: .bold)).foregroundStyle(Color.exPrimaryText)
+                            .frame(width: 32, height: 32).background(Color.exPrimary.opacity(0.14), in: Circle())
+                            .frame(width: 44, height: 44).contentShape(Circle())
+                    }
+                    .buttonStyle(TodayPressStyle())
+                    .accessibilityLabel("Add food to \(meal)")
+                    .accessibilityIdentifier("nutrition.add.\(meal.lowercased())")
                 }
-                .buttonStyle(TodayPressStyle())
-                .accessibilityLabel("Add food to \(meal)")
-                .accessibilityIdentifier("nutrition.add.\(meal.lowercased())")
             }
-            .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight)
+            .padding(.leading, ExSpacing.content).padding(.trailing, selection == nil ? ExSpacing.tight : ExSpacing.content)
             .frame(minHeight: 52)
             ForEach(entries) { entry in
                 Divider().overlay(Color.exBorder.opacity(0.35)).padding(.leading, ExSpacing.content)
                 Button { edit(entry) } label: { row(entry) }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(selection?.contains(entry.id) == true ? .isSelected : [])
+                    .accessibilityHint(selection == nil ? "Opens the entry to change or delete it" : "Chooses it to copy or move")
                     .accessibilityIdentifier("nutrition.entry.\(entry.id.uuidString)")
             }
-            if let repeatable {
+            if let repeatable, selection == nil {
                 Button { repeatMeal(repeatable) } label: {
                     HStack(spacing: ExSpacing.small) {
                         Image(systemName: "arrow.counterclockwise").font(.footnote.weight(.semibold)).accessibilityHidden(true)
@@ -840,7 +918,7 @@ struct TodayMealCard: View {
                 .accessibilityLabel("Repeat \(meal) from \(sourceName(repeatable.source)), \(repeatable.entries.count) foods, \(TodayNutritionCard.number(repeatable.energy)) calories")
                 .accessibilityIdentifier("today.repeat.\(meal.lowercased())")
             }
-            ForEach(recipes) { recipe in
+            ForEach(selection == nil ? recipes : []) { recipe in
                 let portion = FoodFormat.portion(recipe, unit: unit)
                 let kcal = TodayNutritionCard.number(recipe.nutrients.energy)
                 Button { logRecipe(recipe) } label: {
@@ -863,12 +941,15 @@ struct TodayMealCard: View {
         }
         .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5) }
-        .contextMenu { mealActions }
+        .contextMenu { if selection == nil { mealActions } }
     }
 
     /// In the meal's "…" menu, and on a long press.
     @ViewBuilder private var mealActions: some View {
         if !entries.isEmpty { Button("Copy \(meal)", systemImage: "doc.on.doc", action: copy) }
+        if !entries.isEmpty {
+            Button("Select foods", systemImage: "checklist", action: select).accessibilityIdentifier("today.selectMeal")
+        }
         if entries.contains(where: { $0.food.unweighed != true }) {
             Button("Save as recipe", systemImage: "frying.pan", action: saveAsRecipe).accessibilityIdentifier("today.saveRecipe")
         }
@@ -879,6 +960,12 @@ struct TodayMealCard: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(alignment: .center, spacing: ExSpacing.item))
         return layout {
+            if let selection {
+                let chosen = selection.contains(entry.id)
+                Image(systemName: chosen ? "checkmark.circle.fill" : "circle").font(.title3)
+                    .foregroundStyle(chosen ? Color.exActionFill : Color.exTextMuted)
+                    .contentTransition(.symbolEffect(.replace)).accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.food.name).font(.exBody).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                 Text(NutritionFormat.portion(entry, unit: unit)).font(.exCaption).foregroundStyle(Color.exTextSecondary)
@@ -895,7 +982,6 @@ struct TodayMealCard: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.food.name), \(NutritionFormat.portion(entry, unit: unit)), \(TodayNutritionCard.number(entry.nutrients.energy)) calories\(entry.food.edited == true ? ", edited nutrition" : "")")
-        .accessibilityHint("Opens the entry to change or delete it")
     }
 
     private func sourceName(_ day: LocalDate) -> String {

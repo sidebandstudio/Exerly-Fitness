@@ -140,6 +140,74 @@ final class TodayUITests: ExerlyUITestCase {
         XCTAssertFalse(app.staticTexts["Log again"].exists)
     }
 
+    /// Several foods chosen at once copy to tomorrow with their portions, and
+    /// Undo takes the copies back; a move puts them back where they were.
+    func testCopyingThreeFoodsToTomorrowCanBeUndone() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "today-select", units: "imperial")
+        let foods = [SeedFood(name: "Synthetic oats", per100g: ["energy": 380, "protein": 13, "carbohydrate": 67, "fat": 7]),
+                     SeedFood(name: "Synthetic milk", per100g: ["energy": 61, "protein": 3.2, "carbohydrate": 4.8, "fat": 3.3]),
+                     SeedFood(name: "Synthetic banana", per100g: ["energy": 89, "protein": 1.1, "carbohydrate": 22.8, "fat": 0.3]),
+                     SeedFood(name: "Synthetic coffee", per100g: ["energy": 2, "protein": 0.1, "carbohydrate": 0, "fat": 0])]
+        for (food, grams) in zip(foods, [80.0, 250, 120, 300]) {
+            try await seedEntry(food, grams: grams, daysAgo: 0, meal: "Breakfast", minutes: 5, token: person.token)
+        }
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        func entries(_ name: String) -> XCUIElementQuery {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.entry.", name))
+        }
+        let chosen = foods.prefix(3).map { entries($0.name).firstMatch }
+        reveal(chosen[0], in: app)
+        XCTAssertTrue(chosen[0].waitForExistence(timeout: 20))
+        let labels = chosen.map(\.label)
+        tapCount = 0
+        tap(app.buttons["today.select"], in: app)
+        for entry in chosen { tap(entry, in: app) }
+        XCTAssertEqual(app.staticTexts["today.selectedCount"].label, "3 selected")
+        XCTAssertTrue(chosen.allSatisfy(\.isSelected))
+        capture(app, "today-select")
+        tap(app.buttons["today.copySelected"], in: app)
+        XCTAssertTrue(app.navigationBars["Copy 3 foods"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Tomorrow"].isSelected, "A copy goes to the next day unless changed")
+        capture(app, "today-select-destination")
+        tap(app.buttons["today.confirmDestination"], in: app)
+        XCTAssertEqual(tapCount, 6, "Select, three foods, Copy, Copy")
+        XCTAssertTrue(app.staticTexts["Copied 3 foods to tomorrow"].waitForExistence(timeout: 5))
+        let undo = app.buttons["today.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 2) && undo.isHittable)
+        undo.tap()
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 3))
+        shiftDay(1, in: app)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.entry.")).firstMatch
+            .waitForExistence(timeout: 3), "Undo took the copies back")
+
+        // Again, kept: tomorrow has the same three portions.
+        showToday(in: app)
+        tap(app.buttons["today.select"], in: app)
+        for food in foods.prefix(3) { tap(entries(food.name).firstMatch, in: app) }
+        tap(app.buttons["today.copySelected"], in: app)
+        tap(app.buttons["today.confirmDestination"], in: app)
+        XCTAssertTrue(app.staticTexts["Copied 3 foods to tomorrow"].waitForExistence(timeout: 5))
+        shiftDay(1, in: app)
+        let copies = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.entry."))
+        XCTAssertTrue(copies.element(boundBy: 2).waitForExistence(timeout: 5))
+        XCTAssertEqual(Set(copies.allElementsBoundByIndex.map(\.label)), Set(labels), "The same portions; copies share one time, so any order")
+
+        // A move to Lunch the same day, undone, leaves Breakfast as it was.
+        showToday(in: app)
+        tap(app.buttons["today.select"], in: app)
+        tap(entries("Synthetic coffee").firstMatch, in: app)
+        tap(app.buttons["today.moveSelected"], in: app)
+        XCTAssertFalse(app.buttons["today.confirmDestination"].isEnabled, "Nothing to move until a day or meal changes")
+        tap(app.buttons["Lunch"], in: app)
+        tap(app.buttons["today.confirmDestination"], in: app)
+        XCTAssertTrue(app.staticTexts["Moved 1 food to Lunch"].waitForExistence(timeout: 5))
+        app.buttons["today.undo"].tap()
+        XCTAssertTrue(app.buttons["today.undo"].waitForNonExistence(timeout: 3))
+        XCTAssertEqual(entries("Synthetic").count, 4)
+    }
+
     /// A Log again chip can be dismissed with a long press, undone at once,
     /// and let back later from the food library.
     func testASuggestionCanBeDismissedAndLetBack() async throws {

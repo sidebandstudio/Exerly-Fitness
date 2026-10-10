@@ -841,3 +841,18 @@ Preferences are a fixed profile schema the server validates, so they would
 need an API change too. A document kind is one validation in the API and
 syncs like everything else. The API must deploy before a
 build that syncs one, or that sync fails until it does.
+
+## 2026-10-10: Choosing several foods on Today
+
+Meals has Select, and each meal's menu has Select foods, which chooses the
+whole meal. While choosing, a tap on a food toggles it instead of opening
+it, + and the meal menus hide, and a bar offers Copy and Move. Its sheet
+picks a day (yesterday, today, tomorrow or any date) and a meal or "Same
+meals". A copy starts on the next day, a move on the same day, and Move
+stays off until the day or meal changes. Copies are new entries with each
+food's snapshot and portion, as copying a meal makes; a move keeps the
+entries. Both toast with Undo: removing the copies, or moving each entry
+back to its own day and meal. MacroFactor selects with a plain tap on its
+timeline and can paste to several dates at once. In Exerly a tap still
+opens an entry, so choosing costs one tap more, and pasting to several
+dates isn't done.
