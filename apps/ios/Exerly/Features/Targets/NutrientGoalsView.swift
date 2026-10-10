@@ -34,7 +34,7 @@ struct NutrientGoalsView: View {
                 if !search.isEmpty {
                     let matches = Nutrient.allCases.filter { Self.groups.contains($0.group) && IntakeFormat.name($0).localizedStandardContains(search) }
                     if matches.isEmpty {
-                        Text("No nutrient is called “\(search)”.").font(.exBody).foregroundStyle(Color.exTextSecondary)
+                        Text("No nutrient matches “\(search)”.").font(.exBody).foregroundStyle(Color.exTextSecondary)
                     } else {
                         section("Matches", matches, plan: plan, today: today)
                     }
