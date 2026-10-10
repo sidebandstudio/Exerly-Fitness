@@ -227,7 +227,8 @@ struct NutritionFoodPicker: View {
                 emptyMessage("Your foods come back here", "Search, scan or quick add your first food. Next time it's one tap away, with the amount you had.")
             } else {
                 if !shelf.suggested.isEmpty {
-                    group(shelf.hasRecipes ? "Usual for \(meal.lowercased())" : suggestedTitle, shelf.suggested, id: "suggested")
+                    group(shelf.hasRecipes ? "Usual for \(meal.lowercased())" : suggestedTitle, shelf.suggested, id: "suggested",
+                          hideable: true)
                 }
                 if !shelf.recent.isEmpty { group("Recent", shelf.recent, id: "recent") }
             }
@@ -351,17 +352,27 @@ struct NutritionFoodPicker: View {
         }
     }
 
-    private func group(_ title: String, _ items: [FoodPickerItem], id: String) -> some View {
+    /// Foods under a heading. Suggested ones (`hideable`) can be hidden from
+    /// suggestions with a long press.
+    private func group(_ title: String, _ items: [FoodPickerItem], id: String, hideable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: ExSpacing.small) {
             ExEyebrow(title).accessibilityAddTraits(.isHeader)
-            ExCard { rows(items) }.accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.group.\(id)")
+            ExCard { rows(items, hideable: hideable) }.accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.group.\(id)")
         }
     }
 
-    @ViewBuilder private func rows(_ items: [FoodPickerItem]) -> some View {
+    @ViewBuilder private func rows(_ items: [FoodPickerItem], hideable: Bool = false) -> some View {
         VStack(spacing: 0) {
             ForEach(items) { item in
-                row(item)
+                if hideable {
+                    row(item)
+                        .background(Color.exSurface1)
+                        .contextMenu {
+                            Button("Don't suggest this", systemImage: "eye.slash") { hide(item) }
+                                .accessibilityIdentifier("nutrition.hideSuggestion")
+                        }
+                        .accessibilityAction(named: "Don't suggest this") { hide(item) }
+                } else { row(item) }
                 if item.id != items.last?.id { Divider().overlay(Color.exBorder.opacity(0.35)) }
             }
         }.padding(.vertical, -6)
@@ -543,8 +554,36 @@ struct NutritionFoodPicker: View {
         }
     }
 
+    /// "Don't suggest this": the row goes, and Undo brings it back.
+    private func hide(_ item: FoodPickerItem) {
+        guard let index = shelf.suggested.firstIndex(where: { $0.id == item.id }) else { return }
+        logError = nil
+        do {
+            try store.hideSuggestion(item.portion.food)
+            let title = "Won't suggest \(item.portion.food.name)"
+            withAnimation(.snappy) {
+                shelf.suggested.remove(at: index)
+                confirmation = LoggedConfirmation(entries: [], title: title, detail: "Food library can suggest it again",
+                                                  hidden: (item, index))
+            }
+            UIAccessibility.post(notification: .announcement, argument: title)
+            Task { await workspace.synchronize() }
+        } catch { logError = "Couldn't hide \(item.portion.food.name). Try again." }
+    }
+
     private func undo(_ logged: LoggedConfirmation) {
         logError = nil
+        if let hidden = logged.hidden {
+            if store.isHiddenSuggestion(hidden.item.id) { try? store.restoreSuggestion(hidden.item.id) }
+            withAnimation(.snappy) {
+                confirmation = nil
+                if !shelf.suggested.contains(where: { $0.id == hidden.item.id }) {
+                    shelf.suggested.insert(hidden.item, at: min(hidden.index, shelf.suggested.count))
+                }
+            }
+            Task { await workspace.synchronize() }
+            return
+        }
         remove(logged.entries)
         withAnimation(.snappy) {
             confirmation = nil
@@ -650,6 +689,8 @@ private struct LoggedConfirmation: Identifiable {
     let entries: [FoodEntry]
     let title: String
     let detail: String
+    /// A suggestion just hidden, and where it was, for Undo.
+    var hidden: (item: FoodPickerItem, index: Int)?
 }
 
 /// As a sheet the search field stays under the title, which stays while

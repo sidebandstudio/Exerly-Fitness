@@ -140,6 +140,51 @@ final class TodayUITests: ExerlyUITestCase {
         XCTAssertFalse(app.staticTexts["Log again"].exists)
     }
 
+    /// A Log again chip can be dismissed with a long press, undone at once,
+    /// and let back later from the food library.
+    func testASuggestionCanBeDismissedAndLetBack() async throws {
+        let app = try await signedInWithWeek(prefix: "today-hide")
+        let chips = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log."))
+        XCTAssertTrue(chips.firstMatch.waitForExistence(timeout: 20))
+        let count = chips.count
+        let id = chips.firstMatch.identifier
+        let name = String(chips.firstMatch.label.dropFirst("Log ".count).prefix { $0 != "," })
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND NOT (identifier BEGINSWITH %@)", "\(name),", "today.suggestion"))
+            .firstMatch
+        chip.press(forDuration: 1.0)
+        let hide = app.buttons["Don't suggest this"]
+        XCTAssertTrue(hide.waitForExistence(timeout: 5))
+        capture(app, "today-suggestion-menu")
+        hide.tap()
+        XCTAssertTrue(app.buttons[id].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(chips.count, count - 1)
+        XCTAssertTrue(app.staticTexts["Won't suggest \(name)"].waitForExistence(timeout: 3))
+        app.buttons["today.undo"].tap()
+        XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "Undo puts the chip back")
+
+        chip.press(forDuration: 1.0)
+        tap(app.buttons["Don't suggest this"], in: app)
+        XCTAssertTrue(app.buttons[id].waitForNonExistence(timeout: 5))
+        tap(app.buttons["nutrition.addFood"], in: app)
+        let usual = app.descendants(matching: .any)["nutrition.group.suggested"]
+        if usual.waitForExistence(timeout: 5) {
+            XCTAssertFalse(usual.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "\(name),")).firstMatch.exists,
+                           "Search's usual foods leave it out too")
+        }
+        tap(app.buttons["nutrition.closePicker"], in: app)
+        openFoodLibrary(app)
+        let hidden = app.descendants(matching: .any)["nutrition.hiddenSuggestions"]
+        reveal(hidden, in: app)
+        XCTAssertTrue(hidden.waitForExistence(timeout: 5))
+        capture(app, "today-suggestion-library")
+        let again = app.buttons["Suggest \(name) again"]
+        tap(again, in: app)
+        XCTAssertTrue(hidden.waitForNonExistence(timeout: 5))
+        tap(app.buttons["Today"], in: app)
+        app.swipeDown()
+        XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 10), "Suggested again")
+    }
+
     func testTheWeekStripReachesFutureDaysForPlanning() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "today-future", units: "imperial")

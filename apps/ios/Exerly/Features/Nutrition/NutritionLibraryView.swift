@@ -66,6 +66,7 @@ struct NutritionLibraryView: View {
                     }
                 }
             }
+            if !showArchived && query.isEmpty && !workspace.nutrition.hiddenSuggestions.isEmpty { hiddenSuggestions }
             Label("Available offline", systemImage: "checkmark.icloud").font(.exCaption).foregroundStyle(Color.exTextSecondary)
         }
         .navigationTitle("Food library").navigationBarTitleDisplayMode(.inline)
@@ -83,6 +84,41 @@ struct NutritionLibraryView: View {
         .sheet(isPresented: $creatingRecipe) {
             if let api = auth.accountAPI { RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit) }
         }
+    }
+
+    /// Foods hidden with "Don't suggest this", each one tap from being suggested again.
+    private var hiddenSuggestions: some View {
+        let hidden = workspace.nutrition.hiddenSuggestions
+        return VStack(alignment: .leading, spacing: ExSpacing.item) {
+            ExSectionHeading("Not suggested", detail: "\(hidden.count)")
+            Text("Kept out of Log again and usual foods. Search still finds them.")
+                .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+            ExCard {
+                ForEach(hidden) { food in
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: ExSpacing.item) {
+                            Text(food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                            Spacer(minLength: ExSpacing.small)
+                            suggestAgain(food)
+                        }
+                        VStack(alignment: .leading, spacing: ExSpacing.tight) {
+                            Text(food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                            suggestAgain(food)
+                        }
+                    }.frame(minHeight: 52)
+                    if food.id != hidden.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
+                }
+            }.accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.hiddenSuggestions")
+        }
+    }
+
+    private func suggestAgain(_ food: HiddenSuggestion) -> some View {
+        Button("Suggest again") {
+            if (try? workspace.nutrition.restoreSuggestion(food.id)) != nil { Task { await workspace.synchronize() } }
+        }
+        .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
+        .accessibilityLabel("Suggest \(food.name) again")
+        .accessibilityIdentifier("nutrition.suggestAgain.\(food.id)")
     }
 
     private var visibleFoods: [ExerlyCore.Food] {

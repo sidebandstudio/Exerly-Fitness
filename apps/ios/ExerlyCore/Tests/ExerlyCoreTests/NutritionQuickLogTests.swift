@@ -123,6 +123,43 @@ import Testing
         #expect(nutrition.entries(on: monday) == [entry])
     }
 
+    @Test func aHiddenFoodIsNoLongerSuggestedUntilItIsLetBack() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let nutrition = try store(persistence)
+        let next = LocalDate("2026-10-06")!
+        for days in 0...2 {
+            try nutrition.log(Foods.oats, grams: 40, on: monday.adding(days: -days), meal: "Breakfast", at: Fixture.instant(days: -Double(days)))
+            try nutrition.log(Foods.milk, grams: 200, on: monday.adding(days: -days), meal: "Breakfast",
+                              at: Fixture.instant(days: -Double(days), minutes: 5))
+        }
+        let porridge = Food.recipe(name: "Synthetic porridge", ingredients: [
+            RecipeIngredient(food: Foods.oats.snapshot, grams: 40), RecipeIngredient(food: Foods.milk.snapshot, grams: 200)
+        ], servingCount: 1)
+        try nutrition.saveFood(porridge)
+        let tomorrow = Fixture.instant(days: 1)
+        #expect(nutrition.suggestions(at: tomorrow, timeZone: Fixture.utc).map(\.food.name) == ["Milk", "Rolled oats"])
+        #expect(nutrition.recipes(for: "Breakfast", through: next).map(\.id) == [porridge.id])
+
+        try nutrition.hideSuggestion(Foods.milk.snapshot)
+        try nutrition.hideSuggestion(porridge.snapshot)
+        #expect(nutrition.suggestions(at: tomorrow, timeZone: Fixture.utc).map(\.food.name) == ["Rolled oats"])
+        #expect(nutrition.recipes(for: "Breakfast", through: next).isEmpty)
+        #expect(nutrition.recentPortions().map(\.food.name).contains("Milk"), "Recent still has it: it was eaten")
+        #expect(nutrition.hiddenSuggestions.map(\.name).sorted() == ["Milk", "Synthetic porridge"])
+
+        // Kept on the device, and synced like any document.
+        let reopened = try store(persistence)
+        #expect(reopened.isHiddenSuggestion(Foods.milk.id) && reopened.documentKinds.contains("hidden_suggestion"))
+        let payload = try #require(try reopened.payload(kind: "hidden_suggestion", id: Foods.milk.id))
+        try reopened.validate(kind: "hidden_suggestion", id: Foods.milk.id, payload: payload)
+        #expect(throws: DocumentError.self) { try reopened.validate(kind: "hidden_suggestion", id: "another", payload: payload) }
+
+        try reopened.restoreSuggestion(Foods.milk.id)
+        #expect(reopened.suggestions(at: tomorrow, timeZone: Fixture.utc).map(\.food.name) == ["Milk", "Rolled oats"])
+        #expect(throws: NutritionStore.StoreError.notFound) { try reopened.restoreSuggestion(Foods.milk.id) }
+        #expect(try store(persistence).hiddenSuggestions.map(\.id) == [porridge.id])
+    }
+
     @Test func aSuggestionBecomesTheSamePortion() {
         let suggestion = FoodSuggestion(food: Foods.milk.snapshot, meal: "Breakfast", grams: 244,
                                         serving: Foods.milk.servings[0], quantity: 1, days: 3)

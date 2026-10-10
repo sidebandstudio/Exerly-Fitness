@@ -667,6 +667,7 @@ components:
           - metric_entry
           - experiment
           - gym_profile
+          - hidden_suggestion
           - proposal
           - audit_event
       description: |

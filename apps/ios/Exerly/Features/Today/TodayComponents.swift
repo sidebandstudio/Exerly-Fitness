@@ -297,6 +297,8 @@ struct TodaySuggestionChip: View {
     var logged = false
     let open: () -> Void
     let log: () -> Void
+    /// "Don't suggest this", from a long press or VoiceOver's actions.
+    let hide: () -> Void
 
     var body: some View {
         HStack(spacing: ExSpacing.small) {
@@ -312,6 +314,7 @@ struct TodaySuggestionChip: View {
             .accessibilityLabel("\(suggestion.food.name), \(portion), \(energy) calories")
             .accessibilityHint("Opens the portion before logging")
             .accessibilityAction(named: logged ? "Undo" : "Log \(portion)", log)
+            .accessibilityAction(named: "Don't suggest this", hide)
             Button(action: log) {
                 Image(systemName: logged ? "checkmark" : "plus").font(.system(size: 15, weight: .bold))
                     .contentTransition(.symbolEffect(.replace))
@@ -328,6 +331,10 @@ struct TodaySuggestionChip: View {
         .frame(maxHeight: .infinity)
         .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5) }
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contextMenu {
+            Button("Don't suggest this", systemImage: "eye.slash", action: hide).accessibilityIdentifier("today.suggestion.hide")
+        }
     }
 
     private var energy: String {

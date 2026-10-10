@@ -826,3 +826,18 @@ Food library's actions offer Duplicate food for custom and imported foods,
 opening the label editor on a copy ("… copy", not a favourite, no barcode),
 as Duplicate recipe does. Database foods aren't offered: their labels aren't
 the person's to edit.
+
+## 2026-10-10: Hidden suggestions sync as their own documents
+
+"Don't suggest this" (a long press on a Log again chip or a usual food in
+search, or the VoiceOver action) keeps a food out of `suggestions(at:)` and
+its recipes out of `recipes(for:)`; search and Recent still find it. Undo is
+in the toast, and Food library lists hidden foods with Suggest again. Each
+is a `hidden_suggestion` document whose ID is the food's, so two devices
+hiding different foods never conflict. Pins live in the plan, but there a
+dismissal would need a plan (accounts without targets couldn't hide
+anything) and would add a plan version to Targets' history each time.
+Preferences are a fixed profile schema the server validates, so they would
+need an API change too. A document kind is one validation in the API and
+syncs like everything else. The API must deploy before a
+build that syncs one, or that sync fails until it does.

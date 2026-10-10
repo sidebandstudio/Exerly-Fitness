@@ -75,6 +75,11 @@ const KINDS = {
     !Array.isArray(p.loads)
       ? []
       : ['a gym needs a name, equipment, plates and loads by equipment'],
+  // "Don't suggest this": one per food, its ID the food's.
+  hidden_suggestion: (p) =>
+    typeof p.name === 'string' && p.name.trim() && typeof p.hiddenAt === 'string'
+      ? []
+      : ['a hidden suggestion needs the food name and when it was hidden'],
   proposal: proposalProblems,
   audit_event: auditEventProblems,
 };

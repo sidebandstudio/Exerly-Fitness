@@ -78,6 +78,8 @@ struct TodayView: View {
             case restoreDeleted
             /// Deletes the weigh-in just saved.
             case removeWeight(UUID)
+            /// Suggests a hidden food again, where its chip was.
+            case unhide(FoodSuggestion, Int)
         }
         let id = UUID()
         let message: String
@@ -307,7 +309,7 @@ struct TodayView: View {
                                 destination = .log(suggestion)
                             } log: {
                                 if let logged { unlog(logged) } else { log(suggestion) }
-                            }
+                            } hide: { hide(suggestion) }
                             // Two chips and a clear part of the next, so the row reads as one that scrolls.
                             .containerRelativeFrame(.horizontal, count: typeSize.isAccessibilitySize ? 5 : 7,
                                                     span: typeSize.isAccessibilitySize ? 4 : 3, spacing: ExSpacing.small)
@@ -348,6 +350,17 @@ struct TodayView: View {
             UIAccessibility.post(notification: .announcement, argument: "Removed \(entry.food.name)")
             Task { await workspace.synchronize() }
         } catch { show("Could not remove \(entry.food.name). It is still logged.", failed: true) }
+    }
+
+    /// "Don't suggest this": the chip goes, and Undo brings it back.
+    private func hide(_ suggestion: FoodSuggestion) {
+        do {
+            let index = suggested?.firstIndex { $0.food.foodID == suggestion.food.foodID } ?? 0
+            try store.hideSuggestion(suggestion.food)
+            withAnimation(.snappy) { suggested?.removeAll { $0.food.foodID == suggestion.food.foodID } }
+            show("Won't suggest \(suggestion.food.name)", undo: .unhide(suggestion, index))
+            Task { await workspace.synchronize() }
+        } catch { show("Could not hide \(suggestion.food.name). Try again.", failed: true) }
     }
 
     private func refreshSuggestions() {
@@ -426,6 +439,17 @@ struct TodayView: View {
                 UIAccessibility.post(notification: .announcement, argument: "Weigh-in removed")
                 Task { await workspace.synchronize() }
             } catch { show("Could not undo. The weigh-in is still saved.", failed: true) }
+        case .unhide(let suggestion, let index):
+            do {
+                if store.isHiddenSuggestion(suggestion.food.foodID) { try store.restoreSuggestion(suggestion.food.foodID) }
+                withAnimation(.snappy) {
+                    self.toast = nil
+                    if suggested?.contains(where: { $0.food.foodID == suggestion.food.foodID }) == false {
+                        suggested?.insert(suggestion, at: min(index, suggested?.count ?? 0))
+                    }
+                }
+                Task { await workspace.synchronize() }
+            } catch { show("Could not undo. Find it in Food library to suggest it again.", failed: true) }
         case nil: break
         }
     }
