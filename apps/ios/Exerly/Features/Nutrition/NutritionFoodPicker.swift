@@ -28,15 +28,19 @@ struct NutritionFoodPicker: View {
     let presentation: FoodPickerPresentation
     /// What picked foods go into: a meal or a recipe.
     let pickingInto: String
+    /// Every picked food asks for its amount, starting from the usual one,
+    /// unless it was typed with the food. Recipes ask: an ingredient's amount
+    /// is rarely what one serving of it was.
+    let confirmsAmounts: Bool
     @StateObject private var search: NutritionSearchModel
     @State private var meal: String
     @State private var query = ""
     @State private var scope = FoodListScope.recent
     @State private var shelf = FoodShelf()
-    @State private var selectedFood: ExerlyCore.Food?
-    /// A picked food without a usual amount, whose amount is being asked,
-    /// and how that step ended: nil while it's open or once swiped away.
-    @State private var asking: ExerlyCore.Food?
+    @State private var selectedFood: PortionRequest?
+    /// A picked food whose amount is being asked, and how that step ended:
+    /// nil while it's open or once swiped away.
+    @State private var asking: PortionRequest?
     @State private var askedFood: ExerlyCore.Food?
     @State private var askOutcome: AskOutcome?
     @State private var createdFood: ExerlyCore.Food?
@@ -66,7 +70,8 @@ struct NutritionFoodPicker: View {
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, onLogged: @escaping () -> Void,
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
-         pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal") {
+         pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
+         confirmsAmounts: Bool = false) {
         self.workspace = workspace
         self.api = api
         self.date = date
@@ -78,6 +83,7 @@ struct NutritionFoodPicker: View {
         self.pickError = pickError
         self.presentation = presentation
         self.pickingInto = pickingInto
+        self.confirmsAmounts = confirmsAmounts
         // A sheet opened to search starts typing; one opened to scan doesn't.
         focusesSearch = presentation == .sheet && !startsWithBarcode
         _meal = State(initialValue: presentation == .tab ? workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone) : meal)
@@ -103,10 +109,10 @@ struct NutritionFoodPicker: View {
                 }
             }
             .navigationTitle(picking ? "Choose foods" : "Add food").navigationBarTitleDisplayMode(.inline)
-            .modifier(FoodSearchField(text: $query, presentation: presentation))
+            .modifier(FoodSearchField(text: $query, presentation: presentation, unit: unit))
             .searchFocused($searchFocused)
-            .onSubmit(of: .search) { Task { await search.search(query) } }
-            .onChange(of: query) { _, text in search.type(text) }
+            .onSubmit(of: .search) { Task { await search.search(searchText) } }
+            .onChange(of: query) { _, text in search.type(FoodSearch.amount(in: text).food) }
             .toolbar { toolbar }
             .sensoryFeedback(.success, trigger: loggedCount)
             .navigationDestination(isPresented: $showingBarcode) {
@@ -135,16 +141,18 @@ struct NutritionFoodPicker: View {
                     sheetLogged = [$0]
                 }
             }
-            .sheet(item: $selectedFood, onDismiss: finishSheet) { food in
-                NutritionEntryEditor(workspace: workspace, food: food, date: date, meal: meal,
-                                     timeZone: timeZone, unit: unit, actions: actions) { sheetLogged = (sheetLogged ?? []) + [$0] }
+            .sheet(item: $selectedFood, onDismiss: finishSheet) { request in
+                NutritionEntryEditor(workspace: workspace, food: request.food, date: date, meal: meal,
+                                     timeZone: timeZone, unit: unit, actions: actions, start: request.start) {
+                    sheetLogged = (sheetLogged ?? []) + [$0]
+                }
             }
-            .sheet(item: $asking, onDismiss: finishAsking) { food in
-                FoodPortionStep(store: store, food: food, unit: unit, title: "Add to \(pickingInto)", confirm: "Add", asking: true,
-                                identifier: "nutrition.pickPortion", onCancel: { askOutcome = .cancelled },
+            .sheet(item: $asking, onDismiss: finishAsking) { request in
+                FoodPortionStep(store: store, food: request.food, start: request.start, unit: unit, title: "Add to \(pickingInto)",
+                                confirm: "Add", asking: true, identifier: "nutrition.pickPortion", onCancel: { askOutcome = .cancelled },
                                 onConfirm: { amount, snapshot in
                                     askOutcome = .added
-                                    pick(food, .chosen(amount, snapshot))
+                                    pick(request.food, .chosen(amount, snapshot))
                                 })
             }
         }
@@ -162,12 +170,16 @@ struct NutritionFoodPicker: View {
 
     private var picking: Bool { onPick != nil }
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// The query without an amount typed with it ("200 g chicken" searches "chicken").
+    private var searchText: String { FoodSearch.amount(in: query).food }
     private var store: NutritionStore { workspace.nutrition }
 
     @ViewBuilder private var header: some View {
         if picking {
             VStack(alignment: .leading, spacing: ExSpacing.small) {
-                Text("Foods you've had come in at your usual amount. Others ask for one.")
+                Text(FoodSearch.amount(in: query).amount != nil ? "Foods come in at the amount you typed. Others ask for one."
+                     : confirmsAmounts ? "Each asks for its amount, starting from your usual. Type one first, as in 80 g oats, to skip that."
+                     : "Foods you've had come in at your usual amount. Others ask for one.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 if let selectionError { Text(selectionError).font(.exCaption).foregroundStyle(Color.exError) }
             }
@@ -227,7 +239,8 @@ struct NutritionFoodPicker: View {
                 emptyMessage("Your foods come back here", "Search, scan or quick add your first food. Next time it's one tap away, with the amount you had.")
             } else {
                 if !shelf.suggested.isEmpty {
-                    group(shelf.hasRecipes ? "Usual for \(meal.lowercased())" : suggestedTitle, shelf.suggested, id: "suggested")
+                    group(shelf.hasRecipes ? "Usual for \(meal.lowercased())" : suggestedTitle, shelf.suggested, id: "suggested",
+                          hideable: true)
                 }
                 if !shelf.recent.isEmpty { group("Recent", shelf.recent, id: "recent") }
             }
@@ -256,7 +269,7 @@ struct NutritionFoodPicker: View {
     }
 
     @ViewBuilder private var searching: some View {
-        let local = localMatches
+        let local = atTypedAmount(localMatches)
         if !local.isEmpty { group("Your foods", local, id: "local") }
         databaseSection(excluding: Set(local.map(\.id)))
         VStack(alignment: .leading, spacing: ExSpacing.small) {
@@ -322,7 +335,9 @@ struct NutritionFoodPicker: View {
 
     @ViewBuilder private func databaseSection(excluding local: Set<String>) -> some View {
         let foods = (search.result?.foods ?? []).filter { !local.contains($0.id) }
-        let items = foods.compactMap { food in store.quickPortion(for: food, unit: unit).map { FoodPickerItem(portion: $0, food: food) } }
+        let items = atTypedAmount(foods.compactMap { food in
+            store.quickPortion(for: food, unit: unit).map { FoodPickerItem(portion: $0, food: food) }
+        })
         VStack(alignment: .leading, spacing: ExSpacing.small) {
             HStack(spacing: ExSpacing.small) {
                 ExEyebrow("Food database")
@@ -332,7 +347,7 @@ struct NutritionFoodPicker: View {
             if let error = search.error {
                 ExCard {
                     Text(error).font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                    Button("Try again") { Task { await search.search(query) } }.font(.exLabel).frame(minHeight: 44)
+                    Button("Try again") { Task { await search.search(searchText) } }.font(.exLabel).frame(minHeight: 44)
                         .accessibilityIdentifier("nutrition.retrySearch")
                 }
             } else if !items.isEmpty {
@@ -342,44 +357,60 @@ struct NutritionFoodPicker: View {
                 }
                 Link("Open Food Facts · Open Database License", destination: URL(string: "https://world.openfoodfacts.org/data")!)
                     .font(.exSmall)
-            } else if search.shownQuery == trimmedQuery, !search.isLoading {
-                Text("No database foods matched “\(trimmedQuery)”. Try another name, or scan the package.")
+            } else if search.shownQuery == searchText, !search.isLoading {
+                Text("No database foods matched “\(searchText)”. Try another name, or scan the package.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-            } else if trimmedQuery.count < NutritionSearchModel.typeAheadMinimum, !search.isLoading {
+            } else if searchText.count < NutritionSearchModel.typeAheadMinimum, !search.isLoading {
                 Text("Keep typing to search the food database.").font(.exCaption).foregroundStyle(Color.exTextSecondary)
             }
         }
     }
 
-    private func group(_ title: String, _ items: [FoodPickerItem], id: String) -> some View {
+    /// Foods under a heading. Suggested ones (`hideable`) can be hidden from
+    /// suggestions with a long press.
+    private func group(_ title: String, _ items: [FoodPickerItem], id: String, hideable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: ExSpacing.small) {
             ExEyebrow(title).accessibilityAddTraits(.isHeader)
-            ExCard { rows(items) }.accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.group.\(id)")
+            ExCard { rows(items, hideable: hideable) }.accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.group.\(id)")
         }
     }
 
-    @ViewBuilder private func rows(_ items: [FoodPickerItem]) -> some View {
+    @ViewBuilder private func rows(_ items: [FoodPickerItem], hideable: Bool = false) -> some View {
         VStack(spacing: 0) {
             ForEach(items) { item in
-                row(item)
+                if hideable {
+                    row(item)
+                        .background(Color.exSurface1)
+                        .contextMenu {
+                            Button("Don't suggest this", systemImage: "eye.slash") { hide(item) }
+                                .accessibilityIdentifier("nutrition.hideSuggestion")
+                        }
+                        .accessibilityAction(named: "Don't suggest this") { hide(item) }
+                } else { row(item) }
                 if item.id != items.last?.id { Divider().overlay(Color.exBorder.opacity(0.35)) }
             }
         }.padding(.vertical, -6)
     }
 
     private func row(_ item: FoodPickerItem) -> some View {
-        let portion = FoodFormat.portion(item.portion, unit: unit)
+        // A typed amount the food has no unit for asks for one instead.
+        let choosing = item.typed != nil && item.typed != .exact
+        let portion = choosing ? "Choose amount" : FoodFormat.portion(item.portion, unit: unit)
         let detail = [portion, FoodFormat.origin(of: item.portion.food)].compactMap { $0 }.joined(separator: " · ")
         let logged = !picking && justLogged[item.id] != nil
         let name = item.portion.food.name
-        return FoodQuickRow(name: name, detail: detail, amounts: item.portion.nutrients,
+        return FoodQuickRow(name: name, detail: detail, amounts: choosing ? nil : item.portion.nutrients,
                             openHint: picking ? "Adds it to the \(pickingInto)" : "Opens the portion to adjust it",
                             openIdentifier: "nutrition.\(picking ? "platePick" : "food").\(item.id)",
-                            open: { hideKeyboard(); if picking { select(item.food) } else { selectedFood = item.food } },
+                            open: { hideKeyboard(); if picking { select(item) } else { selectedFood = PortionRequest(item) } },
                             add: FoodAddButton(done: picking ? addedIDs.contains(item.id) : logged,
-                                               label: picking ? "Add \(name) to the \(pickingInto)" : logged ? "Logged \(name). Undo" : "Log \(portion) of \(name) to \(meal)",
+                                               label: choosing ? "Choose an amount of \(name)" : picking ? "Add \(portion) of \(name) to the \(pickingInto)"
+                                                   : logged ? "Logged \(name). Undo" : "Log \(portion) of \(name) to \(meal)",
                                                identifier: "nutrition.\(picking ? "plateAdd" : "quickLog").\(item.id)") {
-                                if picking { select(item.food) } else if logged { unlog(item) } else { quickLog(item) }
+                                if picking { select(item) } else if logged { unlog(item) } else if choosing {
+                                    hideKeyboard()
+                                    selectedFood = PortionRequest(item)
+                                } else { quickLog(item) }
                             })
     }
 
@@ -449,7 +480,7 @@ struct NutritionFoodPicker: View {
         }
         // Results are dropped while the screen is away; bring back the ones
         // for a search still typed (from the cache when they were fetched).
-        if !trimmedQuery.isEmpty { search.type(query) }
+        if !searchText.isEmpty { search.type(searchText) }
     }
 
     private func item(_ portion: QuickPortion) -> FoodPickerItem {
@@ -467,8 +498,27 @@ struct NutritionFoodPicker: View {
     private var localMatches: [FoodPickerItem] {
         var seen = Set<String>()
         let foods = (store.recentPortions(limit: 200).map(item) + savedItems { _ in true }).filter { seen.insert($0.id).inserted }
-        return FoodSearch.matching(foods, query: trimmedQuery) { "\($0.portion.food.name) \($0.portion.food.brand ?? "")" }
+        return FoodSearch.matching(foods, query: searchText) { "\($0.portion.food.name) \($0.portion.food.brand ?? "")" }
             .prefix(12).map { $0 }
+    }
+
+    /// Each food at the amount typed with the search ("500 g ground beef"),
+    /// those it fits exactly first. See `Food.portion(_:)`.
+    private func atTypedAmount(_ items: [FoodPickerItem]) -> [FoodPickerItem] {
+        guard let amount = FoodSearch.amount(in: query).amount else { return items }
+        let typed = items.map { item in
+            var item = item
+            switch item.food.portion(amount) {
+            case let (logged, true)?:
+                item.portion = QuickPortion(food: item.portion.food, grams: logged.grams, serving: logged.serving,
+                                            quantity: logged.quantity, repeated: false)
+                item.typed = .exact
+            case let (logged, false)?: item.typed = .check(logged)
+            case nil: item.typed = .choose
+            }
+            return item
+        }
+        return typed.filter { $0.typed == .exact } + typed.filter { $0.typed != .exact }
     }
 
     // MARK: Actions
@@ -479,6 +529,7 @@ struct NutritionFoodPicker: View {
             let entry = try store.log(item.portion, on: date, meal: meal)
             confirm([entry])
             onLogged()
+            if item.typed != nil { readyForNext() }
             Task { await workspace.synchronize() }
         } catch {
             logError = "Couldn't log \(item.portion.food.name). Nothing was saved. Open it to check the portion."
@@ -543,8 +594,36 @@ struct NutritionFoodPicker: View {
         }
     }
 
+    /// "Don't suggest this": the row goes, and Undo brings it back.
+    private func hide(_ item: FoodPickerItem) {
+        guard let index = shelf.suggested.firstIndex(where: { $0.id == item.id }) else { return }
+        logError = nil
+        do {
+            try store.hideSuggestion(item.portion.food)
+            let title = "Won't suggest \(item.portion.food.name)"
+            withAnimation(.snappy) {
+                shelf.suggested.remove(at: index)
+                confirmation = LoggedConfirmation(entries: [], title: title, detail: "Food library can suggest it again",
+                                                  hidden: (item, index))
+            }
+            UIAccessibility.post(notification: .announcement, argument: title)
+            Task { await workspace.synchronize() }
+        } catch { logError = "Couldn't hide \(item.portion.food.name). Try again." }
+    }
+
     private func undo(_ logged: LoggedConfirmation) {
         logError = nil
+        if let hidden = logged.hidden {
+            if store.isHiddenSuggestion(hidden.item.id) { try? store.restoreSuggestion(hidden.item.id) }
+            withAnimation(.snappy) {
+                confirmation = nil
+                if !shelf.suggested.contains(where: { $0.id == hidden.item.id }) {
+                    shelf.suggested.insert(hidden.item, at: min(hidden.index, shelf.suggested.count))
+                }
+            }
+            Task { await workspace.synchronize() }
+            return
+        }
         remove(logged.entries)
         withAnimation(.snappy) {
             confirmation = nil
@@ -581,15 +660,41 @@ struct NutritionFoodPicker: View {
     }
 
     /// A food with an amount the person logs it at joins in one tap; any
-    /// other asks for its amount first.
+    /// other asks for its amount first, as every food does when amounts are
+    /// confirmed, starting from its usual one.
     private func select(_ food: ExerlyCore.Food) {
-        guard onPick != nil else { selectedFood = food; return }
-        if store.quickPortion(for: food, unit: unit)?.repeated == false {
-            hideKeyboard()
-            askOutcome = nil
-            askedFood = food
-            asking = food
+        guard onPick != nil else { selectedFood = PortionRequest(food: food); return }
+        let usual = store.quickPortion(for: food, unit: unit)
+        if usual?.repeated == false {
+            ask(PortionRequest(food: food))
+        } else if confirmsAmounts {
+            ask(PortionRequest(food: food, start: usual.flatMap { FoodPickerItem(portion: $0, food: food).amount }))
         } else { pick(food, .usual) }
+    }
+
+    /// A food at the amount typed with it joins in one tap; one the amount
+    /// doesn't fit asks for its amount, starting from a count to check.
+    private func select(_ item: FoodPickerItem) {
+        switch item.typed {
+        case nil: select(item.food)
+        case .exact?:
+            guard let amount = item.amount else { return }
+            if pick(item.food, .chosen(amount, item.portion.food)) { readyForNext() }
+        case .check?, .choose?: ask(PortionRequest(item))
+        }
+    }
+
+    private func ask(_ request: PortionRequest) {
+        hideKeyboard()
+        askOutcome = nil
+        askedFood = request.food
+        asking = request
+    }
+
+    /// After a food at a typed amount, the search clears for the next one.
+    private func readyForNext() {
+        query = ""
+        searchFocused = true
     }
 
     /// The portion step closed. Swiped away, the food still joins at its
@@ -604,14 +709,17 @@ struct NutritionFoodPicker: View {
         }
     }
 
-    private func pick(_ food: ExerlyCore.Food, _ amount: FoodPickAmount) {
-        guard let onPick else { return }
+    @discardableResult private func pick(_ food: ExerlyCore.Food, _ amount: FoodPickAmount) -> Bool {
+        guard let onPick else { return false }
         if let count = onPick(food, amount) {
             pickedCount = count
             addedIDs.insert(food.id)
             selectionError = nil
             UISelectionFeedbackGenerator().selectionChanged()
-        } else { selectionError = pickError() ?? "This food could not be added. Review its saved label and try again." }
+            return true
+        }
+        selectionError = pickError() ?? "This food could not be added. Review its saved label and try again."
+        return false
     }
 
     private func hideKeyboard() {
@@ -631,10 +739,48 @@ enum FoodListScope: String, CaseIterable, Hashable {
 }
 
 struct FoodPickerItem: Identifiable {
-    let portion: QuickPortion
+    var portion: QuickPortion
     /// The food the portion sheet opens with.
     let food: ExerlyCore.Food
+    /// How an amount typed with the search fits this food, when one was.
+    var typed: TypedFit?
     var id: String { portion.id }
+
+    /// The portion as an amount to log or add.
+    var amount: LoggedAmount? {
+        try? NutritionStore.preview(food, grams: portion.serving == nil ? portion.grams : nil, serving: portion.serving,
+                                    quantity: portion.quantity)
+    }
+
+    enum TypedFit: Equatable {
+        /// `portion` is the typed amount.
+        case exact
+        /// A count to check in the portion step, such as "2 × 1 cup".
+        case check(LoggedAmount)
+        /// Nothing it can be measured in; the portion step starts at its default.
+        case choose
+    }
+}
+
+/// A food whose portion step opens, at `start` when given.
+private struct PortionRequest: Identifiable {
+    let food: ExerlyCore.Food
+    var start: LoggedAmount?
+    var id: String { food.id }
+
+    init(food: ExerlyCore.Food, start: LoggedAmount? = nil) {
+        self.food = food
+        self.start = start
+    }
+
+    /// At the typed amount, or the count to check.
+    init(_ item: FoodPickerItem) {
+        switch item.typed {
+        case .check(let amount)?: self.init(food: item.food, start: amount)
+        case .exact?: self.init(food: item.food, start: item.amount)
+        default: self.init(food: item.food)
+        }
+    }
 }
 
 private enum AskOutcome { case added, cancelled }
@@ -650,6 +796,8 @@ private struct LoggedConfirmation: Identifiable {
     let entries: [FoodEntry]
     let title: String
     let detail: String
+    /// A suggestion just hidden, and where it was, for Undo.
+    var hidden: (item: FoodPickerItem, index: Int)?
 }
 
 /// As a sheet the search field stays under the title, which stays while
@@ -658,14 +806,18 @@ private struct LoggedConfirmation: Identifiable {
 private struct FoodSearchField: ViewModifier {
     @Binding var text: String
     let presentation: FoodPickerPresentation
+    let unit: MassUnit
+
+    /// It says once that an amount can lead the food.
+    private var prompt: String { "Search foods, or type \(unit == .pounds ? "8 oz" : "200 g") chicken" }
 
     func body(content: Content) -> some View {
         switch presentation {
         case .sheet:
-            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search foods")
+            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always), prompt: prompt)
                 .searchPresentationToolbarBehavior(.avoidHidingContent)
         case .tab:
-            content.searchable(text: $text, prompt: "Search foods")
+            content.searchable(text: $text, prompt: prompt)
         }
     }
 }

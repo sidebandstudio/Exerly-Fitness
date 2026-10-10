@@ -117,6 +117,44 @@ extension NutritionStore {
     }
 }
 
+/// A food the person asked not to be suggested ("Don't suggest this"). It
+/// stays out of usual foods and Log again, and its recipes stay out of a
+/// meal's suggestions, until they let it back. Search and Recent still find
+/// it. One synced document per food, its ID the food's.
+public struct HiddenSuggestion: Sendable, Codable, Hashable, Identifiable {
+    /// The food's ID.
+    public var id: String
+    public var name: String
+    public var hiddenAt: Date
+
+    public init(id: String, name: String, hiddenAt: Date) {
+        self.id = id
+        self.name = name
+        self.hiddenAt = hiddenAt
+    }
+
+    var problems: [String] {
+        id.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ["a hidden suggestion needs a food and its name"] : []
+    }
+}
+
+extension NutritionStore {
+    /// Stops suggesting a food, from now on and on every device.
+    public func hideSuggestion(_ food: FoodSnapshot) throws {
+        let hidden = HiddenSuggestion(id: food.foodID, name: food.name, hiddenAt: now())
+        guard hidden.problems.isEmpty else { throw StoreError.invalid(hidden.problems) }
+        try commit(Self.hiddenKind, hidden.id, hidden)
+    }
+
+    /// Suggests a hidden food again.
+    public func restoreSuggestion(_ foodID: String) throws {
+        guard hiddenSuggestions.contains(where: { $0.id == foodID }) else { throw StoreError.notFound }
+        try prepareWrite(kind: Self.hiddenKind, id: foodID, payload: nil)()
+    }
+
+    public func isHiddenSuggestion(_ foodID: String) -> Bool { hiddenSuggestions.contains { $0.id == foodID } }
+}
+
 extension NutrientAmounts {
     /// The share of energy from protein, carbohydrate, fat and alcohol, by
     /// Atwater factors. Empty when none is reported or they add up to zero.

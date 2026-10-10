@@ -126,7 +126,8 @@ struct FoodAddButton: View {
 struct FoodQuickRow: View {
     let name: String
     let detail: String
-    let amounts: NutrientAmounts
+    /// Nil when there's no amount yet, as for a typed amount a food can't take.
+    let amounts: NutrientAmounts?
     var openHint = ""
     var openIdentifier = ""
     let open: () -> Void
@@ -141,27 +142,32 @@ struct FoodQuickRow: View {
                         VStack(alignment: .leading, spacing: ExSpacing.tight) {
                             title
                             subtitle
-                            Text("\(FoodFormat.kcal(amounts[.energy])) kcal").font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
-                            FoodMacroLine(amounts: amounts)
+                            if let amounts {
+                                Text("\(FoodFormat.kcal(amounts[.energy])) kcal").font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
+                                FoodMacroLine(amounts: amounts)
+                            }
                         }
                     } else {
                         HStack(alignment: .center, spacing: ExSpacing.item) {
                             VStack(alignment: .leading, spacing: 3) {
                                 title
                                 subtitle
-                                FoodMacroLine(amounts: amounts, font: .exSmall)
+                                if let amounts { FoodMacroLine(amounts: amounts, font: .exSmall) }
                             }
                             Spacer(minLength: 0)
-                            VStack(alignment: .trailing, spacing: 0) {
-                                Text(FoodFormat.kcal(amounts[.energy])).font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
-                                Text("kcal").font(.exSmall).foregroundStyle(Color.exTextSecondary)
+                            if let amounts {
+                                VStack(alignment: .trailing, spacing: 0) {
+                                    Text(FoodFormat.kcal(amounts[.energy])).font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
+                                    Text("kcal").font(.exSmall).foregroundStyle(Color.exTextSecondary)
+                                }
                             }
                         }
                     }
                 }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(name), \(detail), \(FoodFormat.kcal(amounts[.energy])) kilocalories, \(FoodMacroLine.spoken(amounts))")
+                .accessibilityLabel(amounts.map { "\(name), \(detail), \(FoodFormat.kcal($0[.energy])) kilocalories, \(FoodMacroLine.spoken($0))" }
+                    ?? "\(name), \(detail)")
                 .accessibilityHint(openHint)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier(openIdentifier)

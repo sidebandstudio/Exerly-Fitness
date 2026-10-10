@@ -11,12 +11,14 @@ struct NutritionFoodEditor: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.dismiss) private var dismiss
 
-    init(workspace: TrainingWorkspace, editing: ExerlyCore.Food? = nil, scan: NutritionLabelScan? = nil, onSaved: @escaping (ExerlyCore.Food) -> Void) {
+    /// `start` opens a new food filled in from another, such as a duplicate.
+    init(workspace: TrainingWorkspace, editing: ExerlyCore.Food? = nil, start: ExerlyCore.Food? = nil, scan: NutritionLabelScan? = nil,
+         onSaved: @escaping (ExerlyCore.Food) -> Void) {
         self.workspace = workspace
         self.onSaved = onSaved
         self.scan = scan
         _draft = StateObject(wrappedValue: scan.map { NutritionFoodDraft(store: workspace.nutrition, label: $0.reading) }
-            ?? NutritionFoodDraft(store: workspace.nutrition, editing: editing))
+            ?? NutritionFoodDraft(store: workspace.nutrition, editing: editing, start: start))
     }
 
     var body: some View {
