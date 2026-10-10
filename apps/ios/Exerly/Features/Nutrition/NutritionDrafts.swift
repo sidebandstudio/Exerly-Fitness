@@ -590,6 +590,14 @@ final class NutritionCopyDraft: ObservableObject {
     }
 }
 
+extension FoodEntry {
+    /// An entry not yet logged, for a portion editor to open at `amount`.
+    init(starting amount: LoggedAmount, of food: ExerlyCore.Food, on date: LocalDate, meal: String) {
+        self.init(date: date, meal: meal, loggedAt: Date(), food: food.snapshot, grams: amount.grams, serving: amount.serving,
+                  quantity: amount.quantity)
+    }
+}
+
 extension ExerlyCore.FoodSnapshot {
     /// Reconstruct the label for a portion editor without dropping its volume basis.
     func foodForLogging(serving: Serving? = nil) -> ExerlyCore.Food {

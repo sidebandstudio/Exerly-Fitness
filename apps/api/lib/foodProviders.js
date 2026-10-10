@@ -11,7 +11,7 @@ const NUTRIENTS = [
   'saturated_fat',
 ];
 const OFF_FIELDS =
-  'code,product_name,product_name_en,brands,categories_tags,nutriments,nutrition_data_per,product_quantity_unit,serving_size,serving_quantity,serving_quantity_unit';
+  'code,product_name,product_name_en,brands,categories_tags,nutriments,nutrition_data_per,product_quantity,product_quantity_unit,quantity,serving_size,serving_quantity,serving_quantity_unit';
 
 function num(value) {
   if (value == null || value === '') return null;

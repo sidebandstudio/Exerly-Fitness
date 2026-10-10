@@ -856,3 +856,51 @@ back to its own day and meal. MacroFactor selects with a plain tap on its
 timeline and can paste to several dates at once. In Exerly a tap still
 opens an entry, so choosing costs one tap more, and pasting to several
 dates isn't done.
+
+## 2026-10-10: Amounts typed with the food in search
+
+Food search reads an amount before the food ("500 g ground beef", "2 eggs",
+"1 can kidney beans", "1 1/2 cups milk") or after it with a unit ("chicken
+200 g"), and searches for the rest. `FoodSearch.amount(in:)` and
+`Food.portion(_:)` in ExerlyCore hold the rules; the one picker behind the
+search tab, a meal's Add food, recipe ingredients and Log a meal uses them.
+
+- Weights always fit: g and kg as grams, oz and lb as ounces (16 a pound),
+  the portion sheet's own ounces.
+- A volume fits by a measure the food names ("1 cup" of milk, 244 g), else
+  by a density: the label's, or one implied by a named cup, fl oz, tbsp or
+  tsp. Without either, nothing is guessed.
+- A count needs a countable serving: one named after the food ("1 egg"), a
+  whole one ("1 whole" onion), or a first serving that isn't a measure. The
+  brief said "count × the food's default serving", but USDA's first serving
+  is often "1 cup" or "1 slice", so "1 onion" would have logged a 15 g
+  slice. A count of a measure, or a size the food doesn't name ("2 large
+  eggs" when it has only "1 egg"), opens the portion step with that count
+  filled in rather than logging it.
+- A bare number after the food stays part of its name ("Omega 3"), as do
+  7up, 2% milk and counts over 50 ("100 Grand").
+
+Rows show what one tap does ("500 g · 1,065 kcal"). Foods the amount fits
+come first; the rest say "Choose amount", show no numbers, and open their
+portion step. After a typed food is logged or added, the search clears with
+the keyboard up for the next. The placeholder says it once: "Search foods,
+or type 200 g chicken" (8 oz in U.S. units). MacroFactor's search, by its
+help centre, sets the amount on each food's own screen.
+
+The chili (500 g ground beef, 1 can kidney beans, 1 can diced tomatoes, 1
+onion, 4 servings) went from 34 actions to 16 in RecipeUITests (11 taps,
+5 typed), and 17 driving the realistic seed, which needed one scroll.
+
+## 2026-10-10: Package sizes as servings
+
+An Open Food Facts product with a `product_quantity` in g or ml gets it as a
+serving: "1 can" when a category tag says canned or tinned, else "1
+package". A multipack ("6 x 330 ml") gets none, because the size is all of
+them, and a package the size of its serving isn't repeated. A package in
+millilitres uses the category's typical density, recorded as the food's
+volume basis. USDA's household servings already include cans where FNDDS has
+them (canned tomato soup, 1 can 525 g) but not for kidney beans or diced
+tomatoes, which fall back to the portion step; nothing is invented. A typed
+container word ("jar", "bag") matches any package; "can" and "tin" only
+cans. The golden file gained synthetic canned beans and tomatoes, a
+multipack and a carton, which the simulator fixture serves.

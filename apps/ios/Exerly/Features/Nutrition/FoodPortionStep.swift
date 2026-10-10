@@ -21,8 +21,10 @@ struct FoodPortionStep: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// `food` brings its named servings; `editing` reopens an amount already chosen.
-    init(store: NutritionStore, food: ExerlyCore.Food, editing: FoodEntry? = nil, unit: MassUnit, title: String, confirm: String,
+    /// `food` brings its named servings; `editing` reopens an amount already
+    /// chosen, and `start` opens at one, such as a count typed in search.
+    init(store: NutritionStore, food: ExerlyCore.Food, editing: FoodEntry? = nil, start: LoggedAmount? = nil, unit: MassUnit,
+         title: String, confirm: String,
          asking: Bool = false, identifier: String, removeTitle: String? = nil, onRemove: @escaping () -> Void = {},
          onCancel: @escaping () -> Void = {}, onConfirm: @escaping (LoggedAmount, FoodSnapshot) -> Void) {
         self.title = title
@@ -36,9 +38,9 @@ struct FoodPortionStep: View {
         self.onConfirm = onConfirm
         name = editing?.food.name ?? food.name
         origin = FoodFormat.origin(of: editing?.food ?? food.snapshot)
-        _draft = StateObject(wrappedValue: NutritionEntryDraft(store: store, food: food,
-            date: editing?.date ?? LocalDate(Date(timeIntervalSince1970: 0), in: .gmt), meal: editing?.meal ?? "Recipe",
-            editing: editing, preferredUnit: unit))
+        let date = editing?.date ?? LocalDate(Date(timeIntervalSince1970: 0), in: .gmt)
+        _draft = StateObject(wrappedValue: NutritionEntryDraft(store: store, food: food, date: date, meal: editing?.meal ?? "Recipe",
+            editing: editing, repeating: start.map { FoodEntry(starting: $0, of: food, on: date, meal: "Recipe") }, preferredUnit: unit))
     }
 
     var body: some View {

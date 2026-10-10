@@ -368,6 +368,82 @@ final class RecipeUITests: ExerlyUITestCase {
         XCTAssertEqual(entries("Banana oat porridge", in: app).count, 1)
     }
 
+    /// The chili a code-blind tester took 34 actions to build: each
+    /// ingredient's amount typed with it, so one tap adds it. "1 can" is the
+    /// package size Open Food Facts gives; "1 onion" a whole one.
+    func testAChiliWithTypedAmountsTakesUnderTwentyActions() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-typed")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tapCount = 0
+        var typed = 0
+        func type(_ text: String) {
+            app.typeText(text)
+            typed += 1
+        }
+        tap(app.buttons["nutrition.addFood"], in: app)
+        openMoreWaysToLog("nutrition.newRecipe", in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        type("Synthetic chili")
+        tap(app.buttons["recipe.addIngredients"], in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Search is ready to type")
+        for (query, id) in [("500 g ground beef", "usda:2705853"), ("1 can kidney beans", "off:0041000000016"),
+                            ("1 can diced tomatoes", "off:0041000000023"), ("1 onion", "usda:2709795")] {
+            type(query)
+            let add = app.buttons["nutrition.plateAdd.\(id)"]
+            XCTAssertTrue(add.waitForExistence(timeout: 10), query)
+            if id == "off:0041000000016" { capture(app, "recipe-typed-can") }
+            tap(add, in: app)
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Cleared and ready for the next food")
+        }
+        XCTAssertEqual(app.buttons["nutrition.reviewPlate"].label, "Review recipe · 4 foods")
+        tap(app.buttons["nutrition.reviewPlate"], in: app)
+        for (id, amount) in [("usda:2705853", "500 g"), ("off:0041000000016", "1 can · 425 g"), ("off:0041000000023", "1 can · 411 g"),
+                             ("usda:2709795", "1 whole · 148 g")] {
+            let row = app.buttons["recipe.ingredient.\(id)"]
+            XCTAssertTrue(row.label.contains(amount), "\(amount): \(row.label)")
+        }
+        tap(app.buttons["4"], in: app)
+        XCTAssertEqual(energy(app), "392 kilocalories", "1,569 kcal in four servings")
+        capture(app, "recipe-typed-chili")
+        tap(app.buttons["recipe.save"], in: app)
+        XCTAssertTrue(app.buttons["nutrition.saveEntry"].waitForExistence(timeout: 10), "Saved, it opens to log")
+        XCTAssertEqual(tapCount, 11, "Search, More, Create a recipe, Add ingredients, four +, Review, 4 servings, Save")
+        XCTAssertEqual(tapCount + typed, 16, "Under 20 actions with the name and four foods typed (34 before)")
+    }
+
+    /// A unit the food has no measure for opens its portion step instead.
+    func testATypedAmountAFoodCannotTakeAsksForOne() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-typed-ask")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tap(app.buttons["nutrition.addFood"], in: app)
+        openMoreWaysToLog("nutrition.buildMeal", in: app)
+        tap(app.buttons["Choose foods"], in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.typeText("2 cans kidney beans")
+        let generic = app.buttons["nutrition.plateAdd.usda:2707379"]
+        XCTAssertTrue(generic.waitForExistence(timeout: 10))
+        XCTAssertEqual(generic.label, "Choose an amount of Kidney beans, NFS", "USDA gives no can size")
+        tap(generic, in: app)
+        XCTAssertTrue(app.buttons["nutrition.pickPortionConfirm"].waitForExistence(timeout: 5), "Its portion step, to choose")
+        tap(app.buttons["nutrition.pickPortionCancel"], in: app)
+        let canned = app.buttons["nutrition.plateAdd.off:0041000000016"]
+        XCTAssertTrue(canned.label.hasPrefix("Add 2 × 1 can · 850 g"), "The canned beans take two cans: \(canned.label)")
+    }
+
+    /// An option in food search's More menu. Revealing it first would scroll
+    /// the menu closed, so it's tapped where it appears, and counted.
+    private func openMoreWaysToLog(_ option: String, in app: XCUIApplication) {
+        tap(app.buttons["nutrition.moreFoodOptions"], in: app)
+        let item = app.buttons[option]
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        item.tap()
+        tapCount += 1
+    }
+
     /// Screens for review, in light and dark, at the default and largest text.
     func testRecipesCapture() async throws {
         guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else { throw XCTSkip("Opt-in visual review") }

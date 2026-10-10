@@ -39,6 +39,44 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(pears.count, 2, "The undone entry is gone and the second one stays")
     }
 
+    /// An amount typed with the food is what one tap logs: the row says so
+    /// before the tap, and the search clears for the next food.
+    func testAnAmountTypedInTheSearchTabLogsInTwoTaps() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "food-typed")
+        let yogurt = SeedFood(name: "Greek yogurt, plain", per100g: ["energy": 73, "protein": 10, "carbohydrate": 3.9, "fat": 1.9])
+        let payload: [String: Any] = ["id": yogurt.id, "name": yogurt.name, "source": "custom", "per100g": yogurt.per100g,
+                                      "servings": [["name": "1 cup", "grams": 227.0]], "favorite": false, "createdAt": "2026-10-01T12:00:00.000Z"]
+        _ = try await request("PUT", "/v1/documents/saved_food/\(yogurt.id)", body: ["base_revision": 0, "payload": payload], token: person.token)
+        try await seedEntry(yogurt, grams: 170, daysAgo: 1, meal: "Breakfast", token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tapCount = 0
+        tap(app.buttons["Log food"], in: app)
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 3) { tap(app.searchFields.firstMatch, in: app) }
+        let fromTab = tapCount
+        app.typeText("200 g greek yogurt")
+        let add = app.buttons["nutrition.quickLog.\(yogurt.id)"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        XCTAssertTrue(add.label.hasPrefix("Log 200 g of Greek yogurt, plain"), "Not its usual 170 g: \(add.label)")
+        let row = app.buttons["nutrition.food.\(yogurt.id)"]
+        XCTAssertTrue(row.label.contains("200 g") && row.label.contains("146 kilocalories"), row.label)
+        capture(app, "food-typed-amount")
+        tap(add, in: app)
+        let confirmation = app.descendants(matching: .any).matching(identifier: "nutrition.loggedConfirmation").firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirmation.label.contains("146 kcal"), confirmation.label)
+        XCTAssertEqual(tapCount - fromTab + 1, 2, "From the search tab: the tab (with the keyboard up) or the field, then +")
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String ?? "", "Search foods, or type 200 g chicken",
+                       "The search clears for the next food, and says an amount can lead it")
+
+        tap(app.buttons["Today"], in: app)
+        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.entry.", "Greek yogurt"))
+            .firstMatch
+        reveal(entry, in: app)
+        XCTAssertEqual(entry.label, "Greek yogurt, plain, 200 g, 146 calories")
+    }
+
     /// A custom food's Duplicate opens an editable copy; saving it keeps both.
     func testDuplicatingACustomFoodOpensAnEditableCopy() async throws {
         try await control([:])
