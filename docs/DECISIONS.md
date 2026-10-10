@@ -913,3 +913,12 @@ at the last session, steadier than one session, and 141 is the best set's own
 e1RM. They keep their maths and gain labels: "Trend estimate · best set e1RM
 141 lb on Thu, Oct 8", and the tile is "Best e1RM". Changing the headline to the
 best set would make Progress's list jump with every heavy or light day.
+
+## 2026-10-10: Weekly bars are labelled under themselves
+
+The weekly training chart labelled week boundaries, so dates sat between bars
+and the last label named the week after the chart. Each label now sits centred
+under its bar, every week for four weeks and fewer as the span grows, counted
+back from this week so the current one is always labelled. Train's Recent list
+starts with this week's total, "This week: 2 workouts · 31 sets", counted as
+Progress counts its weeks.

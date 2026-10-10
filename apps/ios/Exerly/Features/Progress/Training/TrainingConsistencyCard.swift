@@ -215,8 +215,14 @@ private struct WeeklyBarChart: View {
         }
         .chartXScale(domain: BodyDates.anchor(weeks.first!.start)...BodyDates.anchor(weeks.last!.start.adding(days: 7)))
         .chartXAxis {
-            AxisMarks(preset: .aligned, values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: InsightFormat.axisFormat(span), centered: false).font(.exSmall).foregroundStyle(Color.exTextMuted)
+            // A label under its bar, centred on its week, counting back from this week. The last
+            // week's end is a tick too, so the last bar has one to centre against.
+            let every = max(1, Int((Double(weeks.count) / 4).rounded(.up)))
+            let ticks = weeks.map { BodyDates.anchor($0.start) } + [BodyDates.anchor(weeks.last!.start.adding(days: 7))]
+            AxisMarks(values: ticks) { value in
+                if value.index < weeks.count, (weeks.count - 1 - value.index) % every == 0 {
+                    AxisValueLabel(format: InsightFormat.axisFormat(span), centered: true).font(.exSmall).foregroundStyle(Color.exTextMuted)
+                }
             }
         }
         .chartYAxis {

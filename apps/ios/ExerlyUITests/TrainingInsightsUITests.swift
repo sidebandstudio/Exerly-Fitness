@@ -40,6 +40,23 @@ final class TrainingInsightsUITests: ExerlyUITestCase {
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Best e1RM, ")).firstMatch.exists)
     }
 
+    /// Train's recent workouts say what this week adds up to, as Progress counts it.
+    func testTrainShowsThisWeeksTotal() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "insights-week", units: "imperial")
+        try await seedSession(name: "Synthetic push", daysAgo: 0, exercises: [
+            ("barbell-bench-press", [(5, 185, 2), (5, 185, 2), (5, 185, 1)]),
+        ], token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tap(app.buttons["Train"], in: app)
+        let week = app.staticTexts["training.thisWeek"]
+        reveal(week, in: app)
+        XCTAssertTrue(week.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertEqual(week.label, "This week: 1 workout · 3 sets")
+        capture(app, "training-this-week")
+    }
+
     /// An account with no workouts says what will appear, not empty charts.
     func testTrainingInsightsExplainAnEmptyHistory() async throws {
         try await control([:])
