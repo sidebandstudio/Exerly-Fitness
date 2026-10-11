@@ -296,7 +296,15 @@ class ExerlyUITestCase: XCTestCase {
         // XCTest can call a partly obscured SwiftUI field hittable while its
         // tap point falls in the keyboard toolbar. Reveal the whole field
         // before switching focus, as a person scrolling the editor would.
-        if field.exists, field.frame.maxY > keyboardTop(in: app) - 50 {
+        // iOS 26 puts typing predictions between that toolbar and the keys,
+        // so measure from the toolbar itself when there is one.
+        let keys = keyboardTop(in: app)
+        var covered = keys - 50
+        let toolbar = app.toolbars.firstMatch
+        if keys.isFinite, toolbar.exists, let bar = (try? toolbar.snapshot())?.frame, bar.maxY <= keys {
+            covered = min(covered, bar.minY)
+        }
+        if field.exists, field.frame.maxY > covered {
             dismissKeyboard(app)
         }
         tap(field, in: app)
