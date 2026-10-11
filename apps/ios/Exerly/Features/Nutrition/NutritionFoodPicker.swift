@@ -572,7 +572,12 @@ struct NutritionFoodPicker: View {
         let energy = entries.reduce(0) { $0 + $1.nutrients.energy }
         var detail = "\(FoodFormat.kcal(energy)) kcal · \(first.meal)"
         if first.date != LocalDate(.now, in: timeZone) { detail += ", \(NutritionFormat.day(first.date, timeZone: timeZone))" }
-        if let left = store.progress(on: first.date).energy.remaining { detail += " · \(FoodFormat.kcal(left)) left" }
+        // As the ring says it: what's left, or how far over.
+        let day = store.progress(on: first.date).energy
+        if day.target != nil {
+            let left = TodayNutritionCard.left(day)
+            detail += " · \(left.amount) \(left.words)"
+        }
         let title = entries.count == 1 ? "Logged \(first.food.name)" : "Logged \(entries.count) foods"
         if haptic { loggedCount += 1 }
         withAnimation(.snappy) {

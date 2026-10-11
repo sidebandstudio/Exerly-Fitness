@@ -59,6 +59,14 @@ extension View {
             footer()
         }
     }
+
+    /// A floating confirmation's surface: opaque, so the list under it never
+    /// reads through, lifted off it by a border and a shadow.
+    func exToastSurface<S: InsettableShape>(_ shape: S) -> some View {
+        background(Color.exSurface2, in: shape)
+            .overlay { shape.strokeBorder(Color.exBorder.opacity(0.6), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
+    }
 }
 
 /// Native scrolling and row behavior, with Exerly's shared surfaces.

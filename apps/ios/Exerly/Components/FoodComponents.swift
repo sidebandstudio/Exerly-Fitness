@@ -265,8 +265,8 @@ struct FoodPressStyle: ButtonStyle {
     }
 }
 
-/// The floating "Logged · Undo" confirmation. Liquid Glass, since it floats
-/// over the list rather than being part of it.
+/// The floating "Logged · Undo" confirmation, on an opaque surface: as
+/// glass, the rows under it read through (run 6).
 struct FoodLoggedToast: View {
     /// How far above the keyboard the search tab's floating search field
     /// reaches, plus a gap.
@@ -290,7 +290,7 @@ struct FoodLoggedToast: View {
                 .accessibilityIdentifier("nutrition.undoLog")
         }
         .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight).padding(.vertical, 6)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .exToastSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(.horizontal, ExSpacing.page)
     }
 }
