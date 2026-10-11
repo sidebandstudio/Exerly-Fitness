@@ -542,6 +542,160 @@ final class RecipeUITests: ExerlyUITestCase {
         tapCount += 1
     }
 
+    /// A food of their own the synthetic recipe page's last line means, by another name.
+    private func seedTempeh(token: String) async throws -> SeedFood {
+        let tempeh = SeedFood(name: "Smoky tempeh strips", per100g: ["energy": 190, "protein": 19, "carbohydrate": 9, "fat": 10])
+        let payload: [String: Any] = ["id": tempeh.id, "name": tempeh.name, "source": "custom", "per100g": tempeh.per100g,
+                                      "servings": [], "favorite": false, "createdAt": "2026-10-01T12:00:00.000Z"]
+        _ = try await request("PUT", "/v1/documents/saved_food/\(tempeh.id)", body: ["base_revision": 0, "payload": payload], token: token)
+        return tempeh
+    }
+
+    /// The fixture's synthetic page: four lines match generic foods at
+    /// their amounts; "3 oz Synthetic smoky tempeh" matches nothing.
+    private func importBeanBowl(_ app: XCUIApplication) {
+        tap(app.buttons["nutrition.libraryCreate"], in: app)
+        XCTAssertTrue(app.buttons["nutrition.libraryImportRecipe"].waitForExistence(timeout: 5))
+        capture(app, "import-00-menu")
+        tap(app.buttons["nutrition.libraryImportRecipe"], in: app)
+        XCTAssertTrue(app.textFields["recipeImport.link"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "The link is ready to paste or type")
+        app.typeText("\(fixtureURL)/__test/recipe-pages/black-bean-bowl")
+        capture(app, "import-01-link")
+        tap(app.buttons["recipeImport.import"], in: app)
+    }
+
+    func testARecipeFromALinkComesInMatchedWithOneLineToResolve() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-import")
+        let tempeh = try await seedTempeh(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openFoodLibrary(app)
+        tapCount = 0
+        importBeanBowl(app)
+
+        let unmatched = app.descendants(matching: .any)["recipe.unmatched"]
+        XCTAssertTrue(unmatched.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(unmatched.label, "1 line not matched")
+        capture(app, "import-02-review")
+        XCTAssertEqual(app.descendants(matching: .any)["recipe.name"].value as? String, "Synthetic black bean bowl")
+        for (id, amount, line) in [("usda:2707359", "1 can (15 oz), 770", "1 (15 oz) can black beans, drained and rinsed"),
+                                   ("usda:2708402", "1 cup, cooked · 158 g", "1 cup cooked rice"),
+                                   ("usda:2710186", "2 × 1 tbsp", "2 tbsp olive oil"), ("usda:2709170", "1 fruit · 65 g", "1 lime, juiced")] {
+            let row = app.buttons["recipe.ingredient.\(id)"]
+            reveal(row, in: app)
+            XCTAssertTrue(row.exists, app.debugDescription)
+            XCTAssertTrue(row.label.contains(amount) && row.label.hasSuffix("from \(line)"), row.label)
+            XCTAssertFalse(row.label.contains("not checked"), "Read exactly from the line: \(row.label)")
+        }
+        let two = app.buttons["2"]
+        reveal(two, in: app)
+        XCTAssertTrue(two.isSelected, "Two servings, the page's yield")
+
+        // Nothing saves while a line is unresolved.
+        tap(app.buttons["recipe.save"], in: app)
+        let error = app.staticTexts["recipe.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertEqual(error.label, "Search for \u{201C}3 oz Synthetic smoky tempeh\u{201D} or skip it before saving.")
+        revealAbove(unmatched, in: app)
+        tap(app.buttons["recipe.unmatchedSearch.0"], in: app)
+        let add = app.buttons["nutrition.plateAdd.\(tempeh.id)"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "Search starts from the line, and finds their tempeh")
+        XCTAssertTrue(add.label.hasPrefix("Add 3 oz"), "At the line's amount: \(add.label)")
+        capture(app, "import-03-resolve")
+        tap(add, in: app)
+        tap(app.buttons["nutrition.reviewPlate"], in: app)
+        XCTAssertTrue(unmatched.waitForNonExistence(timeout: 5))
+        let tempehRow = app.buttons["recipe.ingredient.\(tempeh.id)"]
+        reveal(tempehRow, in: app)
+        XCTAssertTrue(tempehRow.label.hasPrefix("Smoky tempeh strips, 3 oz"), tempehRow.label)
+        let source = app.buttons["recipe.source"]
+        reveal(source, in: app)
+        XCTAssertEqual(source.label, "From 127.0.0.1")
+        capture(app, "import-04-resolved")
+        tap(app.buttons["recipe.save"], in: app)
+
+        let saved = app.descendants(matching: .any)["nutrition.librarySaved"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(tapCount, 8, "Create, Import recipe, Import, the refused Save, Search, + the tempeh, Review, Save")
+        let bowl = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.libraryFood.",
+                                                    "Synthetic black bean bowl")).firstMatch
+        reveal(bowl, in: app)
+        tap(bowl, in: app)
+        let yield = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Makes 2 servings")).firstMatch
+        XCTAssertTrue(yield.waitForExistence(timeout: 5), "Its yield, from the page")
+        XCTAssertTrue(app.buttons["recipe.source"].waitForExistence(timeout: 5), "Credited to its page")
+    }
+
+    /// One person saves a recipe to Files from the share sheet; another, on
+    /// their own account, imports the file and gets a copy with the same
+    /// ingredients and nutrition, without the sender's account.
+    func testARecipeSharedToAFileImportsOnAnotherAccount() async throws {
+        try await control([:])
+        let sender = try await createAccount(prefix: "recipe-share-from")
+        let kitchen = try await seedKitchen(token: sender.token)
+        let recipient = try await createAccount(prefix: "recipe-share-to")
+        let app = launch(resetSession: true)
+        signIn(app, email: sender.email)
+        openFoodLibrary(app)
+        tap(app.buttons["nutrition.libraryFood.\(kitchen.recipeID)"], in: app)
+        tap(app.buttons["recipe.libraryShare"], in: app)
+        // The share sheet's actions are cells. At the largest text sizes it
+        // folds them under its own More.
+        let saveToFiles = app.cells["Save to Files"]
+        let moreActions = app.cells.matching(NSPredicate(format: "identifier == 'actionGroupCell' AND label == 'More'")).firstMatch
+        if !saveToFiles.waitForExistence(timeout: 5), moreActions.exists {
+            capture(app, "share-01-sheet")
+            moreActions.tap()
+        }
+        XCTAssertTrue(saveToFiles.waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "share-01-actions")
+        saveToFiles.tap()
+        let save = app.buttons["Save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10), app.debugDescription)
+        save.tap()
+        // Saved by an earlier run, the file is replaced.
+        if app.buttons["Replace"].waitForExistence(timeout: 3) { app.buttons["Replace"].tap() }
+        XCTAssertTrue(save.waitForNonExistence(timeout: 10))
+
+        app.terminate()
+        let other = launch(resetSession: true)
+        signIn(other, email: recipient.email)
+        openFoodLibrary(other)
+        XCTAssertFalse(other.buttons["nutrition.libraryFood.\(kitchen.recipeID)"].exists)
+        tap(other.buttons["nutrition.libraryCreate"], in: other)
+        tap(other.buttons["nutrition.libraryImportRecipe"], in: other)
+        tap(other.buttons["recipeImport.file"], in: other)
+        let file = other.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Banana oat porridge")).firstMatch
+        if !file.waitForExistence(timeout: 10) {
+            // The picker opens where it was last; the file is in On My iPhone.
+            if other.buttons["Browse"].exists { other.buttons["Browse"].tap() }
+            let device = other.cells["On My iPhone"].exists ? other.cells["On My iPhone"] : other.buttons["On My iPhone"]
+            if device.waitForExistence(timeout: 5) { device.tap() }
+        }
+        XCTAssertTrue(file.waitForExistence(timeout: 10), other.debugDescription)
+        file.tap()
+
+        let name = other.descendants(matching: .any)["recipe.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 10), other.debugDescription)
+        XCTAssertEqual(name.value as? String, "Banana oat porridge")
+        capture(other, "share-02-imported")
+        XCTAssertEqual(energy(other), "297 kilocalories", "The sender's nutrition: two servings of 593.8 kcal over 450 g")
+        for (food, grams) in [(kitchen.oats, "80 g"), (kitchen.milk, "300 g"), (kitchen.banana, "120 g")] {
+            let row = other.buttons["recipe.ingredient.\(food.id)"]
+            reveal(row, in: other)
+            XCTAssertTrue(row.label.hasPrefix("\(food.name), \(grams)"), row.label)
+        }
+        tap(other.buttons["recipe.save"], in: other)
+        let copy = other.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.libraryFood.",
+                                                      "Banana oat porridge")).firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 10))
+        XCTAssertNotEqual(copy.identifier, "nutrition.libraryFood.\(kitchen.recipeID)", "A copy of their own, not the sender's recipe")
+        // "297, kcal / serving", or at the largest text sizes "297 kcal / serving".
+        XCTAssertTrue(copy.label.replacingOccurrences(of: ",", with: "").hasSuffix("297 kcal / serving"), copy.label)
+    }
+
     /// Screens for review, in light and dark, at the default and largest text.
     func testRecipesCapture() async throws {
         guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else { throw XCTSkip("Opt-in visual review") }

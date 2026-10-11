@@ -37,7 +37,7 @@ public struct TypedAmount: Sendable, Hashable {
                                         "container", "tub", "pouch"]
     /// Sizes, which mean a count of the food when it names no such size.
     static let sizes: Set<String> = ["large", "medium", "small", "whole"]
-    static let servings = packages.union(sizes).union(["slice", "piece", "scoop", "serving", "clove", "stick"])
+    static let servings = packages.union(sizes).union(["slice", "piece", "scoop", "serving", "clove", "stick", "strip"])
 
     /// More than this many of something is more likely a name, as in "100 Grand".
     static let largestCount = 50.0
@@ -124,14 +124,16 @@ extension FoodSearch {
     }
 
     /// The number at the start of `token` and what follows it: "150g" is
-    /// (150, "g"), "1½" (1.5, ""), "1/2" (0.5, ""), "1,5" 1.5 and "1,500" 1500.
+    /// (150, "g"), "1½" (1.5, ""), "1/2" or "1⁄2" (0.5, ""), "1,5" 1.5 and "1,500" 1500.
     static func number(_ token: Substring) -> (Double, Substring)? {
-        let fractions: [Character: Double] = ["½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3, "⅔": 2.0 / 3, "⅛": 0.125]
-        let digits = token.prefix { $0.isASCII && ($0.isNumber || $0 == "." || $0 == "," || $0 == "/") }
+        let fractions: [Character: Double] = ["½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3, "⅔": 2.0 / 3, "⅛": 0.125, "⅜": 0.375,
+                                              "⅝": 0.625, "⅞": 0.875, "⅙": 1.0 / 6, "⅚": 5.0 / 6, "⅕": 0.2, "⅖": 0.4, "⅗": 0.6, "⅘": 0.8]
+        // "⁄" is the fraction slash recipe pages write between digits.
+        let digits = token.prefix { ($0.isASCII && ($0.isNumber || $0 == "." || $0 == "," || $0 == "/")) || $0 == "⁄" }
         var rest = token.dropFirst(digits.count)
         var value: Double?
-        if digits.contains("/") {
-            let parts = digits.split(separator: "/", omittingEmptySubsequences: false)
+        if digits.contains("/") || digits.contains("⁄") {
+            let parts = digits.split(omittingEmptySubsequences: false) { $0 == "/" || $0 == "⁄" }
             guard parts.count == 2, let top = Double(parts[0]), let bottom = Double(parts[1]), bottom > 0 else { return nil }
             value = top / bottom
         } else if !digits.isEmpty {
@@ -246,7 +248,7 @@ extension Food {
         return name == "1 \(measure)" || !exactly && (name.hasPrefix("1 \(measure),") || name.hasPrefix("1 \(measure) ("))
     }
 
-    private static func singular(_ word: String) -> String {
+    static func singular(_ word: String) -> String {
         if word.count > 3 && word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
         if word.count > 3 && word.hasSuffix("oes") { return String(word.dropLast(2)) }
         if word.count > 3 && word.hasSuffix("s") && !word.hasSuffix("ss") { return String(word.dropLast()) }
