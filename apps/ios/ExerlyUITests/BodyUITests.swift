@@ -113,6 +113,61 @@ final class BodyUITests: ExerlyUITestCase {
         XCTAssertNotNil(restored)
     }
 
+    /// Today, Profile and Progress show one trend weight and one change
+    /// called "this week", and Progress's rate over its span says it's an average.
+    func testTodayProfileAndProgressShowOneTrendWeightAndOneWeek() async throws {
+        let trendWords = "Trend weight [0-9.,]+ pounds", weekWords = "(down|up) [0-9.]+ pounds this week|steady this week"
+        let app = try await signedInWithRealisticHistory(prefix: "body-agree")
+        let card = app.descendants(matching: .any)["weightCard.trend"]
+        reveal(card, in: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 30), app.debugDescription)
+        reveal(card, in: app)
+        // Read Today once its words hold still, so a sync landing late can't split the screens.
+        var today = card.label
+        for _ in 0..<15 {
+            try await Task.sleep(for: .seconds(1))
+            let next = card.label
+            if next == today, today.contains("this week") { break }
+            today = next
+        }
+        let trend = try XCTUnwrap(phrase(trendWords, in: today), today)
+        let week = try XCTUnwrap(phrase(weekWords, in: today), today)
+        // The week as the screens write it: "−0.5 lb this week".
+        let shown = week.hasPrefix("steady") ? "Steady this week"
+            : "\(week.hasPrefix("down") ? "−" : "+")\(phrase("[0-9.]+", in: week) ?? "") lb this week"
+        func expectShown(on screen: String) {
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", shown)).firstMatch.exists,
+                          "\(screen) writes \(shown)")
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "lb a week")).firstMatch.exists,
+                           "\(screen) calls the seven-day change \"this week\", never \"a week\"")
+        }
+        expectShown(on: "Today")
+
+        tap(app.buttons["Profile"], in: app)
+        let stat = app.descendants(matching: .any)["profile.trendWeight"]
+        reveal(stat, in: app)
+        XCTAssertTrue(stat.waitForExistence(timeout: 10), app.debugDescription)
+        let profile = "\(stat.label) \(stat.value as? String ?? "")"
+        expectShown(on: "Profile")
+
+        tap(app.buttons["Progress"], in: app)
+        let readout = app.descendants(matching: .any)["body.trend"]
+        reveal(readout, in: app)
+        XCTAssertTrue(readout.waitForExistence(timeout: 20), app.debugDescription)
+        expectShown(on: "Progress")
+
+        for (screen, words) in [("Profile", profile), ("Progress", readout.label)] {
+            XCTAssertEqual(phrase(trendWords, in: words), trend, "\(screen) says Today's trend: \(words)")
+            XCTAssertEqual(phrase(weekWords, in: words), week, "\(screen) says Today's week: \(words)")
+        }
+        // The rate over the chart's span is an average, never "this week".
+        let average = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Average: ")).firstMatch
+        reveal(average, in: app)
+        XCTAssertTrue(average.exists, app.debugDescription)
+        XCTAssertTrue(average.label.hasSuffix(" a week") && !average.label.contains("this week"), average.label)
+        capture(app, "body-agree-average")
+    }
+
     func testBodyCapture() async throws {
         guard designCapture else { throw XCTSkip("Opt-in visual review") }
         try await control([:])
@@ -165,6 +220,11 @@ final class BodyUITests: ExerlyUITestCase {
 
     // MARK: Fixture data
 
+
+    /// The first match of `pattern` in `text`, lowercased, so "Down" and "down" compare equal.
+    private func phrase(_ pattern: String, in text: String) -> String? {
+        text.range(of: pattern, options: [.regularExpression, .caseInsensitive]).map { text[$0].lowercased() }
+    }
 
     /// The system offers to save the synthetic password a moment after sign-in.
     func settle(_ app: XCUIApplication) {

@@ -90,6 +90,8 @@ struct ProfileBodyStats: View {
         .padding(.vertical, ExSpacing.item)
         .padding(.horizontal, ExSpacing.small)
         .background(Color.exSurface2.opacity(0.7), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // A container of its own, so its identifier doesn't replace the trend stat's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("profile.bodyStats")
     }
 
@@ -108,6 +110,7 @@ struct ProfileBodyStats: View {
             if let summary {
                 stat("Trend weight", value: BodyFormat.weight(summary.trend, unit), detail: change(summary),
                      spoken: "\(BodyFormat.spokenWeight(summary.trend, unit))\(summary.weekChange.map { ", \(BodyCopy.spokenWeekChange($0, unit))" } ?? "")")
+                    .accessibilityIdentifier("profile.trendWeight")
             } else if let last = store.weights.last {
                 stat("Weight", value: BodyFormat.reading(last.weight, unit), spoken: BodyFormat.spokenReading(last.weight, unit))
             } else { setupWeight }
