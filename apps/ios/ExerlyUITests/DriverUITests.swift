@@ -127,7 +127,7 @@ final class DriverUITests: ExerlyUITestCase {
         let pattern = try! NSRegularExpression(pattern: #"^\s*(\w[\w ]*?), 0x[0-9a-f]+, \{\{(-?[\d.]+), (-?[\d.]+)\}, \{([\d.]+), ([\d.]+)\}\}(.*)$"#)
         let screen = app.frame
         var lines: [String] = []
-        for raw in app.debugDescription.split(separator: "\n").map(String.init) {
+        for raw in frontLayer(app.debugDescription.split(separator: "\n").map(String.init)) {
             let range = NSRange(raw.startIndex..., in: raw)
             guard let match = pattern.firstMatch(in: raw, range: range) else { continue }
             func group(_ index: Int) -> String { Range(match.range(at: index), in: raw).map { String(raw[$0]) } ?? "" }
@@ -143,6 +143,45 @@ final class DriverUITests: ExerlyUITestCase {
             lines.append(line)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The tree without what VoiceOver can't reach. The main window's children
+    /// are layers: the tabs, then each sheet, menu or popover over them, and
+    /// only the top one is read. Run 6's dumps listed every layer, the top
+    /// one last, so sheets looked unlabelled. Other windows, such as the
+    /// keyboard's, stay.
+    private func frontLayer(_ lines: [String]) -> [String] {
+        func depth(_ line: String) -> Int { line.prefix { $0 == " " }.count }
+        guard let window = lines.firstIndex(where: { $0.contains("Window (Main)") }) else { return lines }
+        let level = depth(lines[window])
+        let end = lines[(window + 1)...].firstIndex { depth($0) <= level } ?? lines.endIndex
+        let layers = (window + 1..<end).filter { depth(lines[$0]) == level + 2 }
+        guard layers.count > 1, let top = layers.last else { return lines }
+        return Array(lines[..<(window + 1)] + lines[top...])
+    }
+
+    /// Run 6 read the Log food sheet, menus and the workout summary as
+    /// unlabelled: they were all in the dump, after the screens under them.
+    func testTheDumpListsOnlyTheLayerOnTop() async throws {
+        let app = try await signedInWithWeek(prefix: "driver-dump")
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 20))
+        let today = describe(app)
+        XCTAssertTrue(today.contains("Button “Train”"), "No sheet: the screen and its tabs\n\(today)")
+
+        tap(app.buttons["nutrition.addFood"], in: app)
+        let food = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.food.")).firstMatch
+        XCTAssertTrue(food.waitForExistence(timeout: 10))
+        dismissKeyboard(app)
+        let picker = describe(app)
+        XCTAssertTrue(picker.contains("“Add food”"), picker)
+        XCTAssertFalse(picker.contains("Button “Train”"), "The tabs are under the sheet\n\(picker)")
+
+        tap(food, in: app)
+        XCTAssertTrue(app.buttons["nutrition.saveEntry"].waitForExistence(timeout: 10))
+        let sheet = describe(app)
+        XCTAssertTrue(sheet.contains("StaticText “Log food”"), sheet)
+        XCTAssertTrue(sheet.contains("Button “Log to "), sheet)
+        XCTAssertFalse(sheet.contains("“Add food”"), "Add food is under it\n\(sheet)")
     }
 
     /// A quoted field such as label: 'Today's workout', which ends at a

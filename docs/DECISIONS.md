@@ -1063,3 +1063,13 @@ seven-day change, worded by one function for Today, Profile, Progress and
 Siri, with "Steady this week" when it rounds to zero. Progress's rate over
 the chosen span is "Average, a week". A span now covers its full length, so
 1W's change is this week's instead of six days'.
+
+## 2026-10-11: The driver's screen text reads only the top layer
+
+Run 6 reported no screen-reader text for the Log food sheet, the "…" menu,
+New recipe, Choose foods, the Fiber goal and the workout summary. In
+`app.debugDescription` each is there and labelled, as a later child of the
+main window than the tabs, so the accessibility containers were not at fault.
+The driver listed every layer, the screen under a sheet first and the sheet
+last, so the sheet looked missing. VoiceOver reads only the top layer of a
+modal presentation, and the dump now does too.
