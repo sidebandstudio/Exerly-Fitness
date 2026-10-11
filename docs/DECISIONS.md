@@ -1131,3 +1131,11 @@ A hidden food now leaves Add food's Recent too. The 2026-10-10 entry kept it
 there, but hiding a recent food that then stays put looks like nothing
 happened. Search, Favorites and My foods still find it, and Food library lists
 it with Suggest again.
+
+## 2026-10-11: Today and Log food start fresh when entered from another tab
+
+Run 6 came back to Log food with its last search still typed and to Today
+scrolled past its week strip. Entered from another tab, Log food clears its
+search and picks the meal for now, and Today returns to its top, keeping the
+day it shows, as Profile already did. Re-tapping Today still also goes back to
+today.

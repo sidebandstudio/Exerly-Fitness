@@ -32,6 +32,9 @@ struct NutritionFoodPicker: View {
     /// unless it was typed with the food. Recipes ask: an ingredient's amount
     /// is rarely what one serving of it was.
     let confirmsAmounts: Bool
+    /// Returns to the search tab from another one: it starts again, with an
+    /// empty search and the meal for now. Run 6 came back to the last search.
+    let entered: Int
     @StateObject private var search: NutritionSearchModel
     @State private var meal: String
     @State private var query = ""
@@ -71,8 +74,9 @@ struct NutritionFoodPicker: View {
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
          pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
-         confirmsAmounts: Bool = false) {
+         confirmsAmounts: Bool = false, entered: Int = 0) {
         self.workspace = workspace
+        self.entered = entered
         self.api = api
         self.date = date
         self.timeZone = timeZone
@@ -113,6 +117,10 @@ struct NutritionFoodPicker: View {
             .searchFocused($searchFocused)
             .onSubmit(of: .search) { Task { await search.search(searchText) } }
             .onChange(of: query) { _, text in search.type(FoodSearch.amount(in: text).food) }
+            .onChange(of: entered) {
+                query = ""
+                meal = store.suggestedMeal(at: .now, timeZone: timeZone)
+            }
             .toolbar { toolbar }
             .sensoryFeedback(.success, trigger: loggedCount)
             .navigationDestination(isPresented: $showingBarcode) {

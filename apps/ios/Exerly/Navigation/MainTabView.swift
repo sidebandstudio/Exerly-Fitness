@@ -24,8 +24,11 @@ struct MainTabView: View {
     @EnvironmentObject private var account: AppAccountWorkspace
     @ObservedObject private var links = ExerlyLinkRouter.shared
     @State private var selectedTab: MainTab = .today
-    /// Counts returns to the Profile tab, which then starts from its top.
+    /// Counts returns to the Profile and Today tabs, which then start from
+    /// their top, and to Log food, which starts with an empty search.
     @State private var profileEntries = 0
+    @State private var todayEntries = 0
+    @State private var searchEntries = 0
     /// Counts taps on the Today tab while it shows, which take it back to today.
     @State private var todayReselections = 0
     /// Scan barcode or Weigh in, for Today to open.
@@ -40,7 +43,7 @@ struct MainTabView: View {
                 NavigationStack {
                     if let id = auth.currentUser?.id {
                         TodayHostView(accountID: id, unit: unit, timeZone: timeZone, link: $todayLink,
-                                      reselected: todayReselections) { selectedTab = .training }
+                                      reselected: todayReselections, entered: todayEntries) { selectedTab = .training }
                     }
                 }
             }
@@ -59,7 +62,7 @@ struct MainTabView: View {
             }
             Tab("Log food", systemImage: "magnifyingglass", value: .search, role: .search) {
                 if let id = auth.currentUser?.id {
-                    FoodSearchTab(accountID: id, unit: unit, timeZone: timeZone)
+                    FoodSearchTab(accountID: id, unit: unit, timeZone: timeZone, entered: searchEntries)
                 }
             }
         }
@@ -68,6 +71,8 @@ struct MainTabView: View {
         })
         .onChange(of: selectedTab) { old, new in
             if new == .profile, old != .profile { profileEntries += 1 }
+            if new == .today, old != .today { todayEntries += 1 }
+            if new == .search, old != .search { searchEntries += 1 }
         }
         .tint(Color.exPrimaryText)
         .environment(\.accountTimeZone, timeZone)
@@ -140,13 +145,14 @@ private struct FoodSearchTab: View {
     let accountID: String
     let unit: MassUnit
     let timeZone: TimeZone
+    let entered: Int
     @EnvironmentObject private var account: AppAccountWorkspace
     @EnvironmentObject private var auth: AuthViewModel
 
     var body: some View {
         if let workspace = account.training, workspace.accountID == accountID,
            let api = auth.accountAPI, api.accountID == accountID {
-            FoodSearchTabContent(workspace: workspace, api: api, unit: unit, timeZone: timeZone)
+            FoodSearchTabContent(workspace: workspace, api: api, unit: unit, timeZone: timeZone, entered: entered)
                 .id(workspace.identity)
         } else { ProgressView("Opening foods…") }
     }
@@ -157,19 +163,21 @@ private struct FoodSearchTabContent: View {
     let api: AccountAPI
     let unit: MassUnit
     let timeZone: TimeZone
+    let entered: Int
     @StateObject private var actions: NutritionDiaryActions
 
-    init(workspace: TrainingWorkspace, api: AccountAPI, unit: MassUnit, timeZone: TimeZone) {
+    init(workspace: TrainingWorkspace, api: AccountAPI, unit: MassUnit, timeZone: TimeZone, entered: Int) {
         self.workspace = workspace
         self.api = api
         self.unit = unit
         self.timeZone = timeZone
+        self.entered = entered
         _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
     }
 
     var body: some View {
         NutritionFoodPicker(workspace: workspace, api: api, date: LocalDate(Date(), in: timeZone),
                             meal: workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone),
-                            timeZone: timeZone, unit: unit, actions: actions, onLogged: {}, presentation: .tab)
+                            timeZone: timeZone, unit: unit, actions: actions, onLogged: {}, presentation: .tab, entered: entered)
     }
 }

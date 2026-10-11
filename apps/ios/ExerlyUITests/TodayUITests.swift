@@ -121,6 +121,32 @@ final class TodayUITests: ExerlyUITestCase {
         XCTAssertTrue(strip.waitForExistence(timeout: 5) && strip.isHittable, "Back at the top, with the week in view")
     }
 
+    /// Run 6 came back to Today scrolled past its week strip, and to Log food
+    /// with its last search still typed. Entered from another tab, Today
+    /// starts from its top, keeping its day, and Log food with an empty search.
+    func testTodayAndLogFoodStartFreshWhenEnteredFromAnotherTab() async throws {
+        let app = try await signedInWithWeek(prefix: "today-enter")
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+        let strip = app.descendants(matching: .any)["diary.selected-day"]
+        XCTAssertTrue(strip.waitForExistence(timeout: 5))
+        shiftDay(-1, in: app)
+        todayScreen(app).swipeUp()
+        todayScreen(app).swipeUp()
+        XCTAssertFalse(strip.isHittable, "Scrolled past the strip")
+
+        tap(app.tabBars.buttons["Log food"], in: app)
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        replace(field, with: "rice", in: app)
+        tap(app.tabBars.buttons["Today"], in: app)
+        await fulfillment(of: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: strip)], timeout: 5)
+        XCTAssertTrue(app.navigationBars["Yesterday"].exists, "The day it showed stays")
+
+        tap(app.tabBars.buttons["Log food"], in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        XCTAssertFalse((field.value as? String ?? "").contains("rice"), "An empty search: \(field.value ?? "")")
+    }
+
     /// Once the meal "Log again" fills has food, its usual foods aren't
     /// offered, so it isn't logged twice.
     func testAMealAlreadyLoggedIsNotOfferedAgain() async throws {
