@@ -96,6 +96,7 @@ function createApp({ logger = console } = {}) {
   app.use('/v1/nutrition', require('./routes/nutritionPlans'));
   app.use('/v1', require('./routes/portability'));
   app.use('/v1/foods', require('./routes/foods'));
+  app.use('/v1/recipes', require('./routes/recipes'));
   app.use('/v1', require('./routes/documents'));
 
   app.use(notFoundHandler);

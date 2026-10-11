@@ -3,6 +3,8 @@
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'isolated-ios-fixture-secret';
 process.env.ADMIN_EMAILS = '';
+// Lets recipe import read the synthetic pages below from this fixture's own address.
+process.env.EXERLY_TEST_FIXTURE = 'isolated-simulator';
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const store = require('../apps/api/data');
@@ -12,6 +14,33 @@ const { ApiError } = require('../apps/api/lib/errors');
 const { createApp } = require('../apps/api/app');
 const { reset: resetRateLimits } = require('../apps/api/lib/ratelimit');
 const { start: startCluster } = require('../apps/api/tests/helpers/cluster');
+const recipePages = require('../apps/api/lib/recipePages');
+// Synthetic recipe pages for import, since the simulator can't reach real sites.
+// One line names a food the generic table doesn't have, so it's left to resolve.
+const syntheticRecipePages = {
+  'black-bean-bowl': {
+    '@context': 'https://schema.org',
+    '@graph': [
+      { '@type': 'WebPage', name: 'Synthetic kitchen' },
+      {
+        '@type': 'Recipe',
+        name: 'Synthetic black bean bowl',
+        recipeYield: ['2', '2 bowls'],
+        recipeIngredient: [
+          '1 (15 oz) can black beans, drained and rinsed',
+          '1 cup cooked rice',
+          '2 tbsp olive oil',
+          '1 lime, juiced',
+          '3 oz Synthetic smoky tempeh',
+        ],
+        recipeInstructions: [
+          { '@type': 'HowToStep', text: 'Warm the beans in the oil with the lime juice.' },
+          { '@type': 'HowToStep', text: 'Crumble the tempeh over the rice and beans.' },
+        ],
+      },
+    ],
+  },
+};
 let cluster;
 const stopCluster = () => {
   if (!cluster) return;
@@ -127,6 +156,18 @@ providers.lookupBarcode = async (identity) => ({
     }
   });
   app.get('/__test/ready', (_req, res) => res.json({ isolated: true }));
+  // Read by the API's own fetcher, which sends no fixture header; "plain" has no recipe data.
+  app.get('/__test/recipe-pages/:slug', (req, res) => {
+    const recipe = syntheticRecipePages[req.params.slug];
+    if (!recipe && req.params.slug !== 'plain') return res.sendStatus(404);
+    res
+      .type('html')
+      .send(
+        `<!doctype html><html><head><title>Synthetic kitchen</title>${
+          recipe ? `<script type="application/ld+json">${JSON.stringify(recipe)}</script>` : ''
+        }</head><body><h1>Synthetic kitchen</h1></body></html>`
+      );
+  });
   app.post('/__test/legacy-session', async (req, res, next) => {
     if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
     try {
@@ -403,7 +444,9 @@ providers.lookupBarcode = async (identity) => ({
     next();
   });
   app.use(createApp());
-  const server = app.listen(Number(process.env.EXERLY_FIXTURE_PORT || 39001), '0.0.0.0', () => {
+  const port = Number(process.env.EXERLY_FIXTURE_PORT || 39001);
+  recipePages.allowFixtureOrigin(`http://127.0.0.1:${port}`);
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`Isolated simulator API listening on ${server.address().port}`);
   });
   const shutdown = () => {
