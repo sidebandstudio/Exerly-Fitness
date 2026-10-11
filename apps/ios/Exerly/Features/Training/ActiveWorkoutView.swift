@@ -433,7 +433,7 @@ struct ActiveWorkoutView: View {
     /// How many sets are done, and for a program day whether it counts as
     /// done (see `ProgramSchedule.completes`) or stays next.
     private func finishMessage(_ summary: WorkoutSummary) -> String {
-        let sets = "\(summary.completedSets) of \(summary.totalSets) sets are done"
+        let sets = "\(summary.completedSets) of \(summary.totalSets) sets \(summary.completedSets == 1 ? "is" : "are") done"
         let removed = "Sets you didn't complete are removed."
         guard let program, let live = store.activeSession else { return "\(sets). \(removed)" }
         let day = TrainingFormat.title(of: live).name
