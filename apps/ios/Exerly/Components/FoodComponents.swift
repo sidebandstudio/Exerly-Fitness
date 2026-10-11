@@ -275,17 +275,24 @@ struct FoodLoggedToast: View {
     let title: String
     let detail: String
     let undo: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        HStack(spacing: ExSpacing.item) {
-            Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(Color.exSuccess)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exTextPrimary).lineLimit(2)
-                Text(detail).font(.exCaption).foregroundStyle(Color.exTextSecondary).lineLimit(2)
-            }.accessibilityElement(children: .combine).accessibilityIdentifier("nutrition.loggedConfirmation")
-            Spacer(minLength: ExSpacing.small)
-            Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+        // At the largest sizes Undo goes under the message, so neither breaks mid-word.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: ExSpacing.item))
+        layout {
+            HStack(spacing: ExSpacing.item) {
+                Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(Color.exSuccess)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exTextPrimary)
+                    Text(detail).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                }.lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+                    .accessibilityElement(children: .combine).accessibilityIdentifier("nutrition.loggedConfirmation")
+            }
+            if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
+            Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).fixedSize()
                 .padding(.horizontal, ExSpacing.item).frame(minHeight: 44).contentShape(Rectangle())
                 .accessibilityIdentifier("nutrition.undoLog")
         }

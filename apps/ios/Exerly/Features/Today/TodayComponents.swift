@@ -358,23 +358,29 @@ struct TodayToast: View {
     var failed = false
     let undo: (() -> Void)?
     var undoIdentifier = "today.undo"
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        HStack(spacing: ExSpacing.item) {
-            Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(failed ? Color.exWarning : Color.exSuccess).accessibilityHidden(true)
-            Text(message).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(2)
-            Spacer(minLength: 0)
+        // At the largest sizes Undo goes under the message, as in Add food's toast.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: ExSpacing.item))
+        layout {
+            HStack(spacing: ExSpacing.item) {
+                Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(failed ? Color.exWarning : Color.exSuccess).accessibilityHidden(true)
+                Text(message).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+            }
+            if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
             if let undo {
-                // Padded as Add food's toast pads it, clear of the capsule's curve.
-                Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                // Padded as Add food's toast pads it, clear of the rounded edge.
+                Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).fixedSize()
                     .padding(.horizontal, ExSpacing.item).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     .accessibilityIdentifier(undoIdentifier)
             }
         }
-        .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight)
+        .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight).padding(.vertical, 4)
         .frame(minHeight: 52)
-        .exToastSurface(Capsule())
+        .exToastSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(.horizontal, ExSpacing.page)
         .accessibilityElement(children: .contain)
     }
