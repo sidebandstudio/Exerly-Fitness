@@ -80,18 +80,18 @@ struct BodyWeightSection: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Trend weight \(BodyFormat.spokenWeight(trend, unit)), give or take "
-            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). \(readoutDetail(picked, summary: summary, today: today))")
+            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). \(readoutDetail(picked, summary: summary, today: today, spoken: true))")
         .accessibilityIdentifier("body.trend")
     }
 
-    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, today: LocalDate) -> String {
+    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, today: LocalDate, spoken: Bool = false) -> String {
         let store = workspace.nutrition
         if let picked {
             let day = BodyFormat.day(picked.date, today: today)
             return picked.reading.map { "\(day) · scale \(BodyFormat.weight($0, unit))" } ?? "\(day) · no weigh-in"
         }
         var parts: [String] = []
-        if let week = summary.weekChange { parts.append("\(BodyFormat.change(week.kilograms, unit)) this week") }
+        if let week = summary.weekChange { parts.append(spoken ? BodyCopy.spokenWeekChange(week, unit) : BodyCopy.weekChange(week, unit)) }
         if let last = store.weights.last {
             parts.append("last scale \(BodyFormat.reading(last.weight, unit)) \(BodyFormat.day(last.date, today: today).lowercased())")
         }
@@ -158,8 +158,9 @@ struct BodyWeightSection: View {
             stat("Change", value: change.map { BodyFormat.change($0.kilograms, unit) } ?? "–",
                  detail: range.phrase(start: start, firstShown: points.first?.date),
                  spoken: change.map { BodyFormat.spokenChange($0.kilograms, unit) } ?? "Not enough weigh-ins")
-            stat("Weekly rate", value: change?.weeklyRate.map { BodyFormat.change($0, unit, digits: 2) } ?? "–",
-                 detail: change?.weeklyRate == nil ? "needs a week" : "per week",
+            // The range's average, kept apart from "this week", the summary's seven-day change.
+            stat("Average", value: change?.weeklyRate.map { BodyFormat.change($0, unit, digits: 2) } ?? "–",
+                 detail: change?.weeklyRate == nil ? "needs a week" : "a week",
                  spoken: change?.weeklyRate.map { "\(BodyFormat.spokenChange($0, unit, digits: 2)) a week" } ?? "Needs a week of weigh-ins")
             stat("Weigh-ins", value: "\(days)", detail: "of \(span) days", spoken: "\(days) days with a weigh-in, of \(span)")
         }

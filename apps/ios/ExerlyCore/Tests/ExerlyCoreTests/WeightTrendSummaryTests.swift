@@ -90,6 +90,60 @@ import Testing
         #expect(WeightTrend.change(estimates, from: start, through: start) == nil)
     }
 
+    /// Today, Profile and Progress read one summary: its trend is the chart's
+    /// last point, and "this week" is the trend's change over seven days,
+    /// which a seven-day range's change and average repeat.
+    @Test func theHeadlineThisWeekAndASevenDayRangeAreOneFigure() throws {
+        let estimates = EnergyBalance.estimate(days(28, weighIn: { $0 % 4 != 1 && $0 != 27 }))
+        let today = start.adding(days: 27)
+        let summary = try #require(WeightTrend.summary(estimates, through: today))
+        let last = try #require(WeightTrend.series(estimates, from: today.adding(days: -90), through: today).last)
+        #expect(summary.trend == last.trend && summary.trendError == last.trendError && last.date == today)
+        let week = try #require(summary.weekChange)
+        #expect(week.kilograms == estimates[27].trend - estimates[20].trend)
+        let range = try #require(WeightTrend.change(estimates, from: today.adding(days: -7), through: today))
+        #expect(range == week)
+        #expect(abs(try #require(range.weeklyRate) - week.kilograms) < 1e-12)
+    }
+
+    /// With no weigh-in today, today's trend is yesterday's moved by
+    /// yesterday's logged balance. Moving a 520 kcal lunch off yesterday
+    /// lowers it by 520 / 7,700 kg and leaves every earlier day as it was.
+    @Test func pastTheLastWeighInTheTrendIsAForecastFromLoggedFood() throws {
+        var history = days(28, weighIn: { $0 != 27 })
+        let before = EnergyBalance.estimate(history)
+        history[26].intake = 1480
+        let after = EnergyBalance.estimate(history)
+        let yesterday = after[26], today = after[27]
+        #expect(today.weight == nil && yesterday.weight != nil)
+        #expect(abs(today.trend - (yesterday.trend + (1480 - yesterday.expenditure) / 7700)) < 1e-9)
+        #expect(abs(before[27].trend - today.trend - 520.0 / 7700) < 1e-9)
+        #expect(after.dropLast().map(\.trend) == before.dropLast().map(\.trend))
+        #expect(after.dropLast().map(\.expenditure) == before.dropLast().map(\.expenditure))
+        #expect(today.trendError > yesterday.trendError)
+        #expect(try #require(WeightTrend.summary(after, through: start.adding(days: 27))).trend == today.trend)
+    }
+
+    /// Two readings in a row well above the trend are read as water: the
+    /// trend stays near the truth below them, following the logged deficit,
+    /// rather than bending up toward them.
+    @Test func twoHighReadingsAtTheEndAreReadAsWater() {
+        // Truth loses 28 g a day on 1,784 kcal logged against 2,000.
+        let history = (0..<28).map { day -> EnergyBalance.Day in
+            let truth = 80 - 0.028 * Double(day)
+            let water = day == 25 ? 0.3 : day == 26 ? 0.35 : 0.3 * sin(Double(day) * 1.7) + 0.12 * cos(Double(day) * 3.1)
+            return EnergyBalance.Day(date: start.adding(days: day), intake: 1784,
+                                     weights: day == 27 || day % 9 == 4 ? [] : [truth + water])
+        }
+        let estimates = EnergyBalance.estimate(history, prior: (2000, 300))
+        for day in [25, 26] {
+            let truth = 80 - 0.028 * Double(day)
+            #expect(estimates[day].trend < estimates[day].weight! - 0.1)
+            #expect(abs(estimates[day].trend - truth) < 0.2)
+        }
+        #expect(estimates[26].trend < estimates[24].trend && estimates[27].trend < estimates[26].trend)
+    }
+
     @Test func seriesKeepReadingsAndThinningKeepsTheEnds() throws {
         let estimates = EnergyBalance.estimate(days(30, weighIn: { $0 % 3 == 0 }))
         let points = WeightTrend.series(estimates, from: start.adding(days: 10), through: start.adding(days: 19))

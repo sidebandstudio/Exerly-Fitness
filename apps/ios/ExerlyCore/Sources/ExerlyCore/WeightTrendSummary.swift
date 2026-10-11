@@ -70,13 +70,18 @@ public enum WeightTrend {
         public var weighInDaysNeeded: Int { max(0, WeightTrend.minimumWeighInDays - weighInDays) }
     }
 
+    /// The one trend and weekly change that Today, Profile and Progress show.
     public struct Summary: Sendable, Hashable {
         /// The latest estimate's day, normally today.
         public var date: LocalDate
+        /// Past the last weigh-in, a forecast: that day's trend moved by each
+        /// later day's logged or expected balance. Food logged from that day
+        /// on moves only these days.
         public var trend: Double
         public var trendError: Double
-        /// The last seven days; nil before a week of history or with fewer
-        /// than two weigh-in days in it.
+        /// The last seven days, and the only figure the screens call "this
+        /// week"; nil before a week of history or with fewer than two
+        /// weigh-in days in it.
         public var weekChange: Change?
         public var expenditure: Expenditure
         /// Days with a reading, ever.

@@ -1042,3 +1042,24 @@ food's serving chips pushed them down, and that a tap on "Amount (g)" did
 nothing. The system scrolls only the text field above the keypad, so once
 the keypad is up the field scrolls its whole row, and the presets under it,
 into view, in every portion sheet. The caption now focuses the field.
+
+## 2026-10-11: One trend weight, and only one figure called "this week"
+
+Code-blind run 6 saw 160.0 lb and −0.5 lb this week on Today, 159.8 lb and
+−0.7 lb "a week" on Profile, the same with "this week" on Progress beside a
+"Weekly rate" of −0.57 lb, and the trend line dipping on its last day below
+the last two weigh-ins. Every screen reads `WeightTrend.summary` from the
+same estimates. Between the screenshots the tester moved yesterday's 522 kcal
+lunch to today, leaving yesterday complete at 989 kcal. With no weigh-in
+today, today's trend is a forecast, yesterday's moved by yesterday's logged
+balance: (989 − 1,861) / 7,700 kg, −0.25 lb instead of −0.10. Rebuilt from
+the realistic seed, the trend goes from 159.96 to 159.81 lb and the week
+from −0.55 to −0.70, exactly the screens' numbers. The trend sitting below
+160.6 and 160.7 is water: the seed adds +0.6 and +0.8 lb those days to true
+weights of 159.99 and 159.93. The model stays as it is.
+
+The labels were the fault. "This week" now names only the summary's
+seven-day change, worded by one function for Today, Profile, Progress and
+Siri, with "Steady this week" when it rounds to zero. Progress's rate over
+the chosen span is "Average, a week". A span now covers its full length, so
+1W's change is this week's instead of six days'.
