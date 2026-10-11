@@ -7,11 +7,17 @@ struct NutritionNumberInput: View {
     var identifier = ""
     var integer = false
     var placeholder = "Unknown"
+    @State private var focusRequest = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // The caption is part of the field: a tap on it starts typing, which
+            // matters when the keyboard's bar leaves only the caption showing.
             Text(title).font(.exLabel).foregroundStyle(Color.exTextSecondary)
-            ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, identifier: identifier)
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                .onTapGesture { focusRequest += 1 }
+            ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, identifier: identifier,
+                               focusRequest: focusRequest)
                 .padding(ExSpacing.item).background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))
         }
     }
