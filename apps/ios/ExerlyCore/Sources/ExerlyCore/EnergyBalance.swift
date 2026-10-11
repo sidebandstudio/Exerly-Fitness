@@ -186,6 +186,38 @@ public enum EnergyBalance {
     }
 }
 
+extension EnergyBalance {
+    /// How much one day's readings move the trend on another day.
+    public struct Influence: Sendable, Hashable {
+        public var date: LocalDate
+        /// The trend's change for each kilogram the day's mean reading changes.
+        public var effect: Double
+    }
+
+    /// What the trend on `date` rests on: for each day with readings from
+    /// `lookback` days before `date` through it, how far that trend moves per
+    /// kilogram the day's readings move. The filter and smoother are linear in
+    /// the readings, so each effect is exact. With a `prior`, the effects of
+    /// all readings ever sum to 1. Older readings also act through
+    /// expenditure, so an effect can be negative. Runs the estimate once per
+    /// day counted; call it off the main thread.
+    public static func influence(_ days: [Day], on date: LocalDate, lookback: Int = 28,
+                                 prior: (mean: Double, error: Double)? = nil,
+                                 parameters: Parameters = Parameters()) -> [Influence] {
+        func trend(_ days: [Day]) -> Double? {
+            estimate(days, prior: prior, parameters: parameters).first { $0.date == date }?.trend
+        }
+        guard let base = trend(days) else { return [] }
+        let window = date.adding(days: -lookback)...date
+        return days.indices.compactMap { index in
+            guard window.contains(days[index].date), !days[index].weights.isEmpty else { return nil }
+            var moved = days
+            moved[index].weights = days[index].weights.map { $0 + 1 }
+            return trend(moved).map { Influence(date: days[index].date, effect: $0 - base) }
+        }
+    }
+}
+
 extension NutritionStore {
     /// The days `EnergyBalance` needs, from this store's weigh-ins and log.
     /// Only complete and fasting days count as known intake.
