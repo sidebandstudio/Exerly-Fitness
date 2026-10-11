@@ -114,6 +114,7 @@ final class AppAccountWorkspace: ObservableObject {
             do {
                 try deleteTraining(accountID)
                 try purgeLegacy(accountID)
+                try ProgressPhotoStore.removeAll(accountID: accountID)
                 auth.finishLocalCleanup(for: accountID)
             } catch { /* Core retains this confirmed deletion for the next retry. */ }
         }

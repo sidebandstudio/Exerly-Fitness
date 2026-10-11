@@ -247,7 +247,7 @@ final class SyncEngine: ObservableObject {
     @discardableResult
     func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, commit: Bool = true) throws -> String {
         guard let accountID, let context else { throw APIError.unauthorized }
-        guard ["waist", "chest", "hips", "arms", "thighs", "neck", "calves", "body_fat"].contains(request.type),
+        guard BodySite(rawValue: request.type) != nil,
               request.value.isFinite, request.value > 0, request.value <= (request.type == "body_fat" ? 100 : 1000),
               request.unit == (request.type == "body_fat" ? "%" : "cm") else {
             throw APIError.serverError(400, "Enter a valid measurement.")
@@ -283,6 +283,18 @@ final class SyncEngine: ObservableObject {
             if automaticallySync { Task { await synchronize() } }
         }
         return entityID
+    }
+
+    /// Saves new measurements as one change: all of them or, on any error, none.
+    func saveMeasurements(_ requests: [BodyMeasurementRequest]) throws {
+        guard let context else { throw APIError.unauthorized }
+        do {
+            for request in requests { try saveMeasurement(request, commit: false) }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
     }
 
     func importLegacyMeasurements(_ reviewed: [LegacyMeasurementImport]) throws {

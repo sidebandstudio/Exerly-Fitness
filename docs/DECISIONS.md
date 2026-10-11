@@ -1234,6 +1234,51 @@ stand. Instead the missing serving is added once, where it's missed.
   regular size ("1 medium or regular slice"). "1 slice" of toasted rye had
   picked "1 slice, crust not eaten", 13.5 g.
 
+## 2026-10-11: Body depth: goal paths, gaps, what the trend rests on, every site, photos on the device
+
+Outcome 3's body rows (PARITY S06, S07, S09, S10), each on Progress → Body or Photos.
+
+- The goal stays in plan versions, edited in the plan editor that Targets
+  uses, so a change starts a new version and earlier weeks keep theirs.
+  `WeightGoal` adds the path each goal planned: it starts at the smoothed
+  trend on the day the goal (direction, rate, goal weight) was set, and
+  check-ins or nutrient-goal versions with the same goal continue it rather
+  than restarting it. The chart draws the goal weight and that path for
+  whichever goal was in force on each day. The rate stays a share of
+  bodyweight a week, as MacroFactor's does, so its amount eases as weight
+  falls; the editor already steps it in 0.1 lb or 0.05 kg, and
+  `NutritionRate.share(ofWeekly:)` converts an amount back.
+- On track means within 0.5 kg (about 1 lb) of the planned path, or within
+  the trend's ±1 SD when that's wider, so a noisy trend can't be called
+  ahead or behind. Maintaining has no ahead: any drift past the band is
+  shown as up or down.
+- Two or more days in a row without a reading draw the trend dashed and
+  fainter, including the days since the last weigh-in. Dots are only real
+  readings, as before.
+- "What it rests on" gives each of the last 28 days' readings its exact
+  effect on today's trend: the filter and smoother are linear in the
+  readings, so nudging one by 1 kg and re-running gives its weight. It costs
+  about 7 µs per day of history per reading in a release build and runs off
+  the main thread. Older readings act through expenditure and are summed
+  as the rest.
+- Measurements sync through the daily-log API, `/api/measurements`, not
+  ExerlyCore documents as the brief assumed. Its allowlist gains bust,
+  shoulders and both sides of ankle, bicep, calf, forearm, thigh and wrist;
+  `arms`, `thighs` and `calves` stay accepted so older history stays
+  editable. Moving measurements to documents would mean a second migration
+  for no gain the person sees. The one entry sheet saves its changed fields
+  in one SwiftData transaction.
+- Progress photos move from SwiftData to files, one folder per account in
+  Application Support with complete file protection, and leave the device
+  only through the share sheet. The `ProgressPhoto` model class is listed by
+  all three frozen schema versions, so adding a pose to it would stop
+  existing stores opening. Photos saved by earlier builds under the
+  account's email are adopted once as front photos (the viewer moves one to
+  another pose), each removed from SwiftData only after its copy is written.
+  Deleting the account removes the folder. A UI test launch supplies
+  synthetic images in place of the system photo picker, which XCTest can't
+  fill.
+
 ## 2026-10-11: Today's diary depth: left or eaten, water, day status, By time, habits
 
 PARITY N06, N18, N19, N20 and N33.

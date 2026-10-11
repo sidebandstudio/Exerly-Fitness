@@ -74,7 +74,7 @@ struct ProgressView_: View {
                             openingError: account.openingError)
         case .nutrition: NutritionInsightsView(workspace: workspace, unit: unit, timeZone: timeZone)
         case .training: TrainingInsightsView(workspace: workspace, unit: unit, timeZone: timeZone)
-        case .photos: PhotosTab()
+        case .photos: PhotosTab(workspace: workspace, unit: unit, timeZone: timeZone)
         }
     }
 }

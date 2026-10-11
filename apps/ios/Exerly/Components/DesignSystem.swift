@@ -34,6 +34,15 @@ struct ExScreen<Content: View>: View {
         // Regression: testScrollingFoodControlsPreservesThePortion, iOS 18/26.
         .simultaneousGesture(TapGesture())
         .exScrollEdges()
+        // iOS 26's keyboard Done bar is clear but takes every tap, so a field
+        // scrolled under it looked whole and ignored taps: Edit food's Calories
+        // on an iPhone 17 Pro, once a name was typed. The keyboard's area,
+        // that bar included, backs onto the page's colour, as title bars do.
+        // The colour grows down from an empty slot at the keyboard's top.
+        .overlay(alignment: .bottom) {
+            Color.exBackground.ignoresSafeArea(.keyboard, edges: .bottom).frame(height: 0)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
         .background(Color.exBackground)
     }
 }
