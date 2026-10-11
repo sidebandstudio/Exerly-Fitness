@@ -132,11 +132,15 @@ final class DriverUITests: ExerlyUITestCase {
             guard let match = pattern.firstMatch(in: raw, range: range) else { continue }
             func group(_ index: Int) -> String { Range(match.range(at: index), in: raw).map { String(raw[$0]) } ?? "" }
             let rest = group(6)
-            guard let label = field("label", in: rest), !label.isEmpty else { continue }
+            let value = plainField("value", in: rest).flatMap { $0.isEmpty || $0 == "none" ? nil : $0 }
+            // A field without a label reads as its placeholder, and a time wheel as its
+            // value, as VoiceOver reads them. Run 6's dumps had neither, nor any switch's state.
+            let label = field("label", in: rest).flatMap { $0.isEmpty ? nil : $0 } ?? field("placeholderValue", in: rest) ?? ""
+            guard !label.isEmpty || value != nil else { continue }
             let frame = CGRect(x: Double(group(2)) ?? 0, y: Double(group(3)) ?? 0, width: Double(group(4)) ?? 0, height: Double(group(5)) ?? 0)
             guard frame.width > 0, frame.height > 0, screen.intersects(frame) else { continue }
-            var line = "\(group(1)) “\(label)”"
-            if let value = field("value", in: rest), !value.isEmpty { line += " = \(value)" }
+            var line = label.isEmpty ? group(1) : "\(group(1)) “\(label)”"
+            if let value, value != label { line += " = \(value)" }
             line += " at (\(Int(frame.midX)), \(Int(frame.midY)))"
             if rest.contains("Disabled") { line += ", disabled" }
             if rest.contains("Selected") { line += ", selected" }
@@ -182,6 +186,7 @@ final class DriverUITests: ExerlyUITestCase {
         XCTAssertTrue(sheet.contains("StaticText “Log food”"), sheet)
         XCTAssertTrue(sheet.contains("Button “Log to "), sheet)
         XCTAssertFalse(sheet.contains("“Add food”"), "Add food is under it\n\(sheet)")
+        XCTAssertTrue(sheet.contains("TextField “Amount (g)” = "), "Values are read too\n\(sheet)")
     }
 
     /// A quoted field such as label: 'Today's workout', which ends at a
@@ -189,5 +194,16 @@ final class DriverUITests: ExerlyUITestCase {
     private func field(_ name: String, in text: String) -> String? {
         guard let match = text.range(of: "\(name): '(.*?)'(?=,|$)", options: .regularExpression) else { return nil }
         return String(text[match].dropFirst(name.count + 3).dropLast())
+    }
+
+    /// An unquoted field such as value: 7:00 AM, which XCTest writes last,
+    /// before flags such as Selected, and shortens with "..." when long.
+    private func plainField(_ name: String, in text: String) -> String? {
+        guard let start = text.range(of: "\(name): ") else { return nil }
+        var value = String(text[start.upperBound...])
+        for flag in [", Selected", ", Disabled", ", Keyboard Focused", ", Focused"] {
+            if let range = value.range(of: flag) { value = String(value[..<range.lowerBound]) }
+        }
+        return value
     }
 }
