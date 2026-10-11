@@ -21,15 +21,17 @@ struct BodyWeightSection: View {
         let store = workspace.nutrition
         let estimates = BodyEstimates.shared.estimates(store, through: today)
         VStack(alignment: .leading, spacing: ExSpacing.page) {
-            HealthWeighInPrompt()
             if let summary = WeightTrend.summary(estimates, through: today) {
                 let start = range.start(today: today, first: estimates.first?.date)
                 let points = WeightTrend.series(estimates, from: start, through: today)
                 let readings = store.weights.filter { $0.date >= start && $0.date <= today }
                 trendCard(summary, estimates: estimates, points: points, readings: readings, start: start, today: today)
+                // Under the chart: above it, the offer pushed the chart off an SE's first screen (run 6).
+                HealthWeighInPrompt()
                 expenditureCard(summary.expenditure, points: points)
                 history(store.weights.reversed(), today: today)
             } else {
+                HealthWeighInPrompt()
                 ExEmptyState(icon: "scalemass", title: "No weigh-ins yet",
                              message: "Weigh in a few mornings a week. Exerly turns the readings into a trend weight, "
                                 + "then into your expenditure once you've logged food for a while.",
@@ -49,7 +51,8 @@ struct BodyWeightSection: View {
             if summary.weighInDays >= 2, points.count >= 2 {
                 let shown = range.phrase(start: start, firstShown: points.first?.date)
                 WeightTrendChart(points: points, readings: readings, unit: unit, range: range, selection: $selection)
-                    .frame(height: typeSize.isAccessibilitySize ? 280 : 230)
+                    // 200, so the legend under it is on an SE's first screen too (run 6).
+                    .frame(height: typeSize.isAccessibilitySize ? 280 : 200)
                     .accessibilityLabel("Weight trend, \(shown == range.phrase ? range.spoken : shown)")
                     .accessibilityValue(chartSummary(summary, points: points, readings: readings, shown: shown))
                     .accessibilityIdentifier("body.chart")

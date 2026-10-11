@@ -103,7 +103,7 @@ struct NutritionQuickAddView: View {
                     .accessibilityLabel("Entry name, optional").accessibilityIdentifier("nutrition.quick.name")
             }
             .scrollDismissesKeyboard(.interactively)
-            .safeAreaInset(edge: .bottom) {
+            .exFooter {
                 VStack(alignment: .leading, spacing: ExSpacing.small) {
                     if !draft.errors.isEmpty {
                         Text(draft.errors.joined(separator: ". ")).font(.exCaption).foregroundStyle(Color.exError)

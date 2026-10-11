@@ -85,10 +85,12 @@ struct ActiveWorkoutView: View {
                     .background(Color.exBackground)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        // Below the sets, not over them: run 6 found the next exercise under it.
+        .exFooter {
             if let timer = store.restTimer, focus == nil {
                 RestTimerBar(timer: timer, adjust: { seconds in save { try store.extendRest(by: seconds) } },
                              skip: { withAnimation(.snappy) { save { try store.skipRest() } } })
+                    .background(Color.exBackground)
             }
         }
     }

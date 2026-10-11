@@ -94,7 +94,7 @@ struct NutritionEntryEditor: View {
                     errorsFocused = true
                 }
             }
-            .safeAreaInset(edge: .bottom) { logButton }
+            .exFooter { logButton }
             .navigationTitle(editing == nil ? "Log food" : "Food entry").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

@@ -52,7 +52,7 @@ struct SetupPage<Content: View>: View {
                 withAnimation(.snappy) { proxy.scrollTo(id, anchor: .center) }
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .exFooter {
             VStack(spacing: ExSpacing.small) {
                 if let error {
                     Label(error, systemImage: "exclamationmark.circle.fill")

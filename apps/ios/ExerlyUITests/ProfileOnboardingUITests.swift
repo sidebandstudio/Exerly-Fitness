@@ -197,6 +197,26 @@ final class ProfileOnboardingUITests: ExerlyUITestCase {
         capture(app, "profile-retap-top")
     }
 
+    /// Run 6 on an iPhone SE found Reminders and Nutrient goals behind the
+    /// tab bar, under the plan. They're on Profile's first screen now.
+    func testRemindersAndNutrientGoalsAreOnProfilesFirstScreen() async throws {
+        guard ProcessInfo.processInfo.environment["EXERLY_TEST_LARGEST_TYPE"] != "1" else {
+            throw XCTSkip("Measured at the default text size")
+        }
+        let app = try await signedInWithWeek(prefix: "profile-reach")
+        tap(app.tabBars.buttons["Profile"], in: app)
+        let goals = app.buttons["profile.nutrientGoals"], reminders = app.buttons["profile.reminders"]
+        XCTAssertTrue(goals.waitForExistence(timeout: 10) && reminders.waitForExistence(timeout: 10))
+        let tabs = app.tabBars.firstMatch.frame.minY
+        for row in [goals, reminders] {
+            XCTAssertTrue(row.isHittable, row.identifier)
+            XCTAssertLessThanOrEqual(row.frame.maxY, tabs, "\(row.identifier) is above the tab bar without scrolling")
+        }
+        capture(app, "profile-first-screen")
+        reminders.tap()
+        XCTAssertTrue(app.navigationBars["Reminders"].waitForExistence(timeout: 10))
+    }
+
     func testSignInAndSignUpLinkToEachOther() throws {
         let app = launch(resetSession: true)
         tap(app.buttons["I already have an account"], in: app)

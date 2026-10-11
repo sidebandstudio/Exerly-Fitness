@@ -164,7 +164,7 @@ private struct GymEditorView: View {
                 .font(.exCaption).foregroundStyle(Color.exTextSecondary)
         }
         .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) {
+        .exFooter {
             VStack(alignment: .leading, spacing: ExSpacing.small) {
                 if let error = model.error {
                     Text(error).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("gym.error")

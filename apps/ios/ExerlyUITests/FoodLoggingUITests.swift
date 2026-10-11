@@ -41,6 +41,31 @@ final class FoodLoggingUITests: ExerlyUITestCase {
 
     /// The portion sheet has one day and time. Moving the day keeps the time
     /// eaten, and the button names the day it logs to.
+    /// Run 6 tapped "About this food", half under the portion sheet's Log
+    /// button on an SE, and logged the food. The content ends where the
+    /// button's bar starts, so nothing under it can take a tap.
+    func testNothingInThePortionSheetSitsUnderItsLogButton() async throws {
+        let app = try await signedInWithWeek(prefix: "food-footer")
+        openSearch(app)
+        dismissKeyboard(app)
+        let food = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.food.", "Roasted potatoes,"))
+            .firstMatch
+        tap(food, in: app)
+        let save = app.buttons["nutrition.saveEntry"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        let viewport = try XCTUnwrap(scrollViewport(in: app))
+        XCTAssertLessThanOrEqual(viewport.maxY, save.frame.minY, "The portion's content ends above its Log button")
+        let about = app.buttons["About this food"]
+        XCTAssertTrue(about.exists)
+        // XCTest's own tap, as the tester's driver made it: it scrolls the row out first if it has to.
+        about.tap()
+        let opened = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Dates and times use")).firstMatch
+        XCTAssertTrue(opened.waitForExistence(timeout: 5), "About this food opened")
+        XCTAssertTrue(save.exists, "and nothing was logged")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "nutrition.loggedConfirmation").firstMatch.exists)
+        capture(app, "food-footer-about")
+    }
+
     func testMovingTheDayKeepsTheTimeAndTheButtonNamesTheDay() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "food-day")

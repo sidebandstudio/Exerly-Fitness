@@ -77,7 +77,7 @@ struct WeighInSheet: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { saveBar }
+        .exFooter { saveBar }
         .background(Color.exSurface1)
         .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.weighIn, .large], selection: $detent)
         .presentationDragIndicator(.visible)

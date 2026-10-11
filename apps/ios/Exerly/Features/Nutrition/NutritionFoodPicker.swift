@@ -101,7 +101,7 @@ struct NutritionFoodPicker: View {
             }
             .scrollDismissesKeyboard(.immediately)
             .overlay(alignment: .bottom) { toast }
-            .safeAreaInset(edge: .bottom) {
+            .exFooter {
                 if picking {
                     Button(pickedCount == 0 ? "Back to \(pickingInto)" : "Review \(pickingInto) · \(pickedCount) \(pickedCount == 1 ? "food" : "foods")") { dismiss() }
                         .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.reviewPlate")

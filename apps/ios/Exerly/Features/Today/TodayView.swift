@@ -150,10 +150,12 @@ struct TodayView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Review changes")
                 }
+                // The logging tools first: under the ring, a check-in or a pinned
+                // nutrient put them behind an SE's tab bar (run 6).
+                quickActions
                 checkInBanner
                 TodayNutritionCard(progress: store.progress(on: date), onSetTargets: date < today ? nil : { showsTargets = true },
                                    pinned: store.nutrientDays(store.pinnedNutrients(today: today), on: date)) { showsGoals = true }
-                quickActions
                 if isToday { suggestions }
                 if let error = actions.error {
                     Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
@@ -185,11 +187,13 @@ struct TodayView: View {
                     .accessibilityIdentifier("today.chooseDate")
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        // Below the meals, not over them, so the last foods can be chosen too (run 6).
+        .exFooter {
             if let selection {
                 TodaySelectionBar(count: selection.count) { destination = .entries(.copy) } move: { destination = .entries(.move) } close: {
                     withAnimation(.snappy) { self.selection = nil }
                 }
+                    .background(Color.exBackground)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }

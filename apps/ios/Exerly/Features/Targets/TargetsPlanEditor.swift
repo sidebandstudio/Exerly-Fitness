@@ -107,7 +107,7 @@ struct TargetsPlanEditor: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("planEditor.screen")
-            .safeAreaInset(edge: .bottom, spacing: 0) { saveBar(preview) }
+            .exFooter { saveBar(preview) }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

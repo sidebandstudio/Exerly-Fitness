@@ -81,7 +81,7 @@ struct NutritionPlateView: View {
                     if error != nil { scroll.scrollTo("plate-error", anchor: .bottom); errorFocused = true }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .exFooter {
                 if !draft.rows.isEmpty {
                     Button("Add foods", systemImage: "plus") { choosingFood = true }
                         .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.plateAddFoods")

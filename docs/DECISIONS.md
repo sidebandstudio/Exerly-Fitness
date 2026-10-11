@@ -1081,3 +1081,32 @@ reminders: the tester's tap fell outside the compact time picker's overlay,
 on the Meals row, and iOS 26 passed it on. The time is now a button showing
 it, which opens the same 5-minute wheels in a popover; a tap outside a
 popover only closes it.
+
+## 2026-10-11: Footers below the content, and the first screen on an SE
+
+Run 6 tapped "About this food", half hidden under the portion sheet's Log
+button on an iPhone SE, and logged the food. The brief asked for
+`safeAreaInset` rather than an overlay, but the sheet already used it:
+`safeAreaInset` insets the content yet still lays the scroll view out under
+the footer, where XCTest (and the run's driver) treat a half-covered row as
+visible and tap it, landing on the button. Every sticky footer (the portion
+sheet, Choose foods, Log a meal, Quick add, the weigh-in, the plan editor,
+gyms, plan setup and onboarding) and both floating bars (the rest timer and
+Today's Copy and Move) now sit below the scroll view (`exFooter`): the content
+ends at their top and scrolls clear of them, and nothing is under them.
+
+The run also read the tab bar as covering content. Every tab already scrolls
+its content clear of the tab bar; what it saw was the first screen's fold
+falling across controls, and rows blurred under title bars that took their
+taps. Bars now back onto the page's colour at the top as at the bottom (the
+hard scroll edge Progress used), on Today, Profile and every screen built on
+`ExScreen`, `ExList` or `ExForm`. On an SE's first screen:
+
+- Today's Search, Scan, Quick add and Weigh in come right under the week
+  strip. Under the ring, a check-in or a pinned nutrient pushed them under
+  the tab bar. The ring is still on the first screen.
+- Profile's Goals and reminders sit above Your plan, so Nutrient goals and
+  Reminders are on the first screen, as the 2026-10-10 entry meant them to be.
+- Train's workout card lists four exercises, so Preview and Empty workout show.
+- The Apple Health offer sits under the weight chart rather than above it,
+  and the chart is 30 points shorter, so its legend shows too.
