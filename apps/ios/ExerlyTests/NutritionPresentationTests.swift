@@ -64,6 +64,33 @@ final class NutritionPresentationTests: XCTestCase {
         XCTAssertFalse(again.amountIsDefault, "An amount logged before isn't a default")
     }
 
+    func testAServingAddedInThePortionStepIsSavedWithThePersonsFoodAtTheCountTyped() throws {
+        let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
+        let date = try XCTUnwrap(LocalDate("2026-10-10"))
+        let eggs = ExerlyCore.Food(name: "Eggs, scrambled", per100g: NutrientAmounts([.energy: 149]))
+        try store.saveFood(eggs)
+        let draft = NutritionEntryDraft(store: store, food: eggs, date: date, meal: "Breakfast", preferredUnit: .pounds)
+        XCTAssertTrue(draft.canAddServing)
+        XCTAssertFalse(draft.addServing(named: "egg", grams: "none", count: 2))
+        XCTAssertEqual(draft.errors, ["Enter the serving's weight in grams."])
+        XCTAssertTrue(draft.addServing(named: "egg", grams: "50", count: 2))
+        let egg = Serving("1 egg", grams: 50)
+        XCTAssertEqual(store.food(eggs.id)?.servings, [egg], "Saved with the food; a name without a count is one")
+        XCTAssertEqual(draft.measure, .serving(egg))
+        XCTAssertEqual(draft.amount.text, "2", "The count typed with the food")
+        XCTAssertEqual(try draft.preview().grams, 100)
+        XCTAssertFalse(draft.canAddServing, "It has one now")
+        let entry = try XCTUnwrap(draft.save())
+        XCTAssertEqual(entry.serving, egg)
+        XCTAssertEqual(entry.quantity, 2)
+        // Database foods and foods never saved aren't the person's to change.
+        let banana = ExerlyCore.Food(id: "usda:2709224", name: "Banana, raw", source: .usda, per100g: NutrientAmounts([.energy: 97]))
+        try store.saveFood(banana)
+        XCTAssertFalse(NutritionEntryDraft(store: store, food: banana, date: date, meal: "Snacks").canAddServing)
+        let unsaved = ExerlyCore.Food(name: "Synthetic toast", per100g: NutrientAmounts([.energy: 252]))
+        XCTAssertFalse(NutritionEntryDraft(store: store, food: unsaved, date: date, meal: "Snacks").canAddServing)
+    }
+
     func testExplicitLabelPortionReplacesInvalidInputAndPersistsWithoutChangingTheDefault() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

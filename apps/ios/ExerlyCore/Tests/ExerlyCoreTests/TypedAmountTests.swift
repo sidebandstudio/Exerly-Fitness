@@ -114,6 +114,52 @@ import Testing
         #expect(large.serving == Serving("1 egg", grams: 50) && large.quantity == 2 && !large.exact)
     }
 
+    @Test func aCountOfAServingNamedForSeveralOrPartOfOneIsCountedInThem() throws {
+        // A label's serving, as scanning keeps it, and a USDA half slice.
+        let bread = Food(name: "Synthetic wheat bread", per100g: NutrientAmounts([.energy: 250]),
+                         servings: [Serving("2 slices (56g)", grams: 56)])
+        let slice = try #require(portion(bread, TypedAmount(1, .serving("slice"))))
+        #expect(slice.serving == Serving("2 slices (56g)", grams: 56) && slice.quantity == 0.5 && slice.grams == 28 && slice.exact)
+        #expect(portion(bread, TypedAmount(3, .serving("slice")))?.grams == 84)
+        let shrimp = Food(name: "Shrimp toast", per100g: NutrientAmounts([.energy: 223]), servings: [Serving("1/2 slice", grams: 48)])
+        #expect(portion(shrimp, TypedAmount(1, .serving("slice")))?.grams == 96, "Not the half slice")
+        let eggs = Food(name: "Synthetic eggs, scrambled", per100g: NutrientAmounts([.energy: 149]),
+                        servings: [Serving("2 large eggs (100 g)", grams: 100)])
+        let two = try #require(portion(eggs, TypedAmount(2)))
+        #expect(two.quantity == 1 && two.grams == 100 && two.exact)
+        let soda = Food(name: "Synthetic cola", per100g: NutrientAmounts([.energy: 42]), servings: [Serving("12 oz can", grams: 355)])
+        #expect(portion(soda, TypedAmount(1, .serving("can")))?.grams == 355, "A measure before the name isn't a count")
+        // USDA's toast: a regular slice, not one with its crust left.
+        let rye = Food(name: "Bread, rye, toasted", per100g: NutrientAmounts([.energy: 284]),
+                       servings: [Serving("1 slice, crust not eaten", grams: 13.5), Serving("1 small or thin/very thin slice", grams: 22),
+                                  Serving("1 medium or regular slice", grams: 29)])
+        #expect(portion(rye, TypedAmount(1, .serving("slice")))?.serving == Serving("1 medium or regular slice", grams: 29))
+        let plain = Food(name: "Synthetic loaf", per100g: NutrientAmounts([.energy: 250]),
+                         servings: [Serving("1 medium or regular slice", grams: 29), Serving("1 slice", grams: 32)])
+        #expect(portion(plain, TypedAmount(2, .serving("slice")))?.grams == 64, "A plain slice first")
+    }
+
+    @Test func aServingAddedByItsSuggestedNameTakesTheCountTyped() throws {
+        #expect(TypedAmount(1, .serving("slice")).servingName(for: "toast") == "1 slice")
+        #expect(TypedAmount(2).servingName(for: "scrambled eggs") == "1 egg")
+        #expect(TypedAmount(2, .serving("large")).servingName(for: "eggs") == "1 large egg")
+        #expect(TypedAmount(1, .cups).servingName(for: "rice") == "1 cup")
+        #expect(TypedAmount(200, .grams).servingName(for: "chicken") == nil && TypedAmount(250, .milliliters).servingName(for: "milk") == nil)
+        #expect(TypedAmount(2).servingName(for: "") == nil)
+        #expect(["cookies", "strawberries", "peaches", "tomatoes", "toast", "glass"].map { TypedAmount(2).servingName(for: $0) }
+            == ["1 cookie", "1 strawberry", "1 peach", "1 tomato", "1 toast", "1 glass"])
+        // A food without servings has nothing to count until one is added.
+        var toast = Food(name: "Whole wheat toast", per100g: NutrientAmounts([.energy: 252]))
+        #expect(portion(toast, TypedAmount(1, .serving("slice"))) == nil)
+        toast.servings = [Serving("1 slice", grams: 28)]
+        #expect(portion(toast, TypedAmount(1, .serving("slice")))?.exact == true)
+        var eggs = Food(name: "Eggs, scrambled", per100g: NutrientAmounts([.energy: 149]))
+        #expect(portion(eggs, TypedAmount(2)) == nil)
+        eggs.servings = [Serving(try #require(TypedAmount(2).servingName(for: "eggs")), grams: 61)]
+        let two = try #require(portion(eggs, TypedAmount(2)))
+        #expect(two.serving == Serving("1 egg", grams: 61) && two.quantity == 2 && two.grams == 122 && two.exact)
+    }
+
     @Test func volumesUseAMeasureTheFoodNamesOrItsDensity() throws {
         let cups = try #require(portion(milk, TypedAmount(1.5, .cups)))
         #expect(cups.serving == Serving("1 cup", grams: 244) && cups.quantity == 1.5 && cups.grams == 366 && cups.exact)

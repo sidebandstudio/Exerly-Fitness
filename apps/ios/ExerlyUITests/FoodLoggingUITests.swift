@@ -241,6 +241,134 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(entry.label, "Greek yogurt, plain, 200 g, 146 calories")
     }
 
+    /// "1 slice toast" puts the person's own toast first, and plain toast
+    /// before toast dishes. Their toast has no slice, so its portion step
+    /// adds one, after which "1 slice toast" logs in one tap. "2 eggs" counts
+    /// their scrambled eggs the same way.
+    func testAServingAddedFromThePortionStepLogsTheNextTypedCountInOneTap() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "food-serving", units: "imperial")
+        let toast = SeedFood(name: "Whole wheat toast", per100g: ["energy": 252, "protein": 12.4, "carbohydrate": 42.7, "fat": 3.5])
+        let eggs = SeedFood(name: "Eggs, scrambled", per100g: ["energy": 149, "protein": 10, "carbohydrate": 1.6, "fat": 11])
+        for food in [toast, eggs] {
+            let payload: [String: Any] = ["id": food.id, "name": food.name, "source": "custom", "per100g": food.per100g,
+                                          "servings": [], "favorite": false, "createdAt": "2026-10-01T12:00:00.000Z"]
+            _ = try await request("PUT", "/v1/documents/saved_food/\(food.id)", body: ["base_revision": 0, "payload": payload], token: person.token)
+        }
+        try await seedEntry(eggs, grams: 120, daysAgo: 1, meal: "Breakfast", token: person.token)
+        try await seedEntry(toast, grams: 60, daysAgo: 1, meal: "Breakfast", token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+
+        // A slice, added once.
+        search("1 slice toast", in: app)
+        let toastRow = app.buttons["nutrition.quickLog.\(toast.id)"]
+        XCTAssertTrue(toastRow.waitForExistence(timeout: 10))
+        XCTAssertEqual(toastRow.label, "Choose an amount of Whole wheat toast", "No slice to count yet")
+        let database = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.food.usda:"))
+        XCTAssertTrue(database.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(database.firstMatch.label.hasPrefix("Bread, "), "Plain toast first: \(database.firstMatch.label)")
+        XCTAssertFalse(database.allElementsBoundByIndex.contains { $0.label.contains("Shrimp toast") || $0.label.contains("French toast") })
+        XCTAssertLessThan(toastRow.frame.minY, database.firstMatch.frame.minY, "The person's own toast above the database")
+        capture(app, "food-serving-search")
+        tap(toastRow, in: app)
+        addServing(expecting: "1 slice", grams: "28", in: app)
+        XCTAssertEqual(app.textFields["Number of servings"].value as? String, "1")
+        XCTAssertTrue(app.buttons["nutrition.measure.serving.1 slice.28.0"].isSelected)
+        capture(app, "food-serving-added")
+        tap(app.buttons["nutrition.saveEntry"], in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+
+        // Then one tap.
+        search("1 slice toast", in: app)
+        let slice = app.buttons["nutrition.quickLog.\(toast.id)"]
+        XCTAssertTrue(slice.waitForExistence(timeout: 10))
+        XCTAssertTrue(slice.label.hasPrefix("Log 1 slice · 1 oz of Whole wheat toast"), slice.label)
+        tap(slice, in: app)
+        let confirmation = app.descendants(matching: .any).matching(identifier: "nutrition.loggedConfirmation").firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertEqual(tapCount, 2, "Open search, then +; the amount is typed with the food")
+        tap(app.buttons["nutrition.closePicker"], in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+
+        // Eggs by count: the typed count carries into the serving added.
+        search("2 eggs", in: app)
+        let eggRow = app.buttons["nutrition.quickLog.\(eggs.id)"]
+        XCTAssertTrue(eggRow.waitForExistence(timeout: 10))
+        XCTAssertEqual(eggRow.label, "Choose an amount of Eggs, scrambled")
+        tap(eggRow, in: app)
+        addServing(expecting: "1 egg", grams: "50", in: app)
+        XCTAssertEqual(app.textFields["Number of servings"].value as? String, "2", "The 2 typed")
+        tap(app.buttons["nutrition.saveEntry"], in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+        search("2 eggs", in: app)
+        let twoEggs = app.buttons["nutrition.quickLog.\(eggs.id)"]
+        XCTAssertTrue(twoEggs.waitForExistence(timeout: 10))
+        XCTAssertTrue(twoEggs.label.hasPrefix("Log 2 × 1 egg · 3.5 oz of Eggs, scrambled"), twoEggs.label)
+        tap(twoEggs, in: app)
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+
+        // The servings and the entries reached the server.
+        var logged: [[String: Any]] = []
+        for _ in 0..<40 {
+            logged = try await entries(token: person.token).filter { $0["serving"] != nil }
+            if logged.count == 4 { break }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        let servings = logged.compactMap { entry -> String? in
+            guard let serving = entry["serving"] as? [String: Any], let name = serving["name"] as? String else { return nil }
+            return "\(name) × \(entry["quantity"] as? Double ?? 0) = \(entry["grams"] as? Double ?? 0) g"
+        }
+        XCTAssertEqual(servings.sorted(), ["1 egg × 2.0 = 100.0 g", "1 egg × 2.0 = 100.0 g", "1 slice × 1.0 = 28.0 g", "1 slice × 1.0 = 28.0 g"])
+        let foods = try await savedFoods(token: person.token)
+        let saved = { (id: String) in
+            (foods[id]?["servings"] as? [[String: Any]] ?? []).map { "\($0["name"] as? String ?? "") = \($0["grams"] as? Double ?? 0) g" }
+        }
+        XCTAssertEqual(saved(toast.id), ["1 slice = 28.0 g"], "Saved with the food, for every device")
+        XCTAssertEqual(saved(eggs.id), ["1 egg = 50.0 g"])
+    }
+
+    /// Opens food search from the home screen and types into it.
+    private func search(_ text: String, in app: XCUIApplication) {
+        openSearch(app)
+        let field = app.searchFields.firstMatch
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 3) { tap(field, in: app); tapCount = 1 }
+        field.typeText(text)
+    }
+
+    /// Adds a serving from the portion step's chip: its name comes from the
+    /// search, and only its weight is typed.
+    private func addServing(expecting name: String, grams: String, in app: XCUIApplication) {
+        let add = app.buttons["nutrition.addServing"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        XCTAssertEqual(add.label, "Add a serving, \(name)")
+        tap(add, in: app)
+        let alert = app.alerts["Add a serving"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertEqual(alert.textFields.element(boundBy: 0).value as? String, name)
+        let weight = alert.textFields.element(boundBy: 1)
+        weight.tap()
+        weight.typeText(grams)
+        capture(app, "food-serving-alert-\(name.replacingOccurrences(of: " ", with: "-"))")
+        alert.buttons["Add"].tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+    }
+
+    /// The account's saved foods by ID, from the change feed.
+    private func savedFoods(token: String) async throws -> [String: [String: Any]] {
+        var latest: [String: [String: Any]] = [:]
+        var cursor = 0
+        while true {
+            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
+            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == "saved_food" {
+                if let id = change["id"] as? String { latest[id] = change["payload"] as? [String: Any] }
+            }
+            cursor = page["cursor"] as? Int ?? cursor
+            guard page["has_more"] as? Bool == true else { break }
+        }
+        return latest
+    }
+
     /// A custom food's Duplicate opens an editable copy; saving it keeps both.
     func testDuplicatingACustomFoodOpensAnEditableCopy() async throws {
         try await control([:])

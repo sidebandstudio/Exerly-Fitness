@@ -156,7 +156,7 @@ struct NutritionFoodPicker: View {
                                      timeZone: timeZone, unit: unit, actions: actions, start: request.start,
                                      onHide: shelved.map { item in { hide(item) } }) {
                     sheetLogged = (sheetLogged ?? []) + [$0]
-                }
+                }.environment(\.foodSearchQuery, query)
             }
             .sheet(item: $asking, onDismiss: finishAsking) { request in
                 FoodPortionStep(store: store, food: request.food, start: request.start, unit: unit, title: "Add to \(pickingInto)",
@@ -164,7 +164,7 @@ struct NutritionFoodPicker: View {
                                 onConfirm: { amount, snapshot in
                                     askOutcome = .added
                                     pick(request.food, .chosen(amount, snapshot))
-                                })
+                                }).environment(\.foodSearchQuery, query)
             }
         }
         .onAppear(perform: refresh)

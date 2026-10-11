@@ -1160,3 +1160,29 @@ the query names ("Eggs, scrambled" for eggs) first, then history before
 saved foods as before. Their own "Whole wheat toast" doesn't name plain
 toast, so it keeps its place by history, and it is listed above the
 database anyway.
+
+## 2026-10-11: Servings counted as named, and added where they're missing
+
+Run 6 typed "2 eggs" and "1 slice toast", and the person's own Eggs,
+scrambled and Whole wheat toast said "Choose amount": they have no
+servings, and their portion sheet offered only g and oz. Nothing is
+borrowed from a database food, since a raw egg's 50 g isn't the person's
+scrambled eggs, so the rules of "Amounts typed with the food in search"
+stand. Instead the missing serving is added once, where it's missed.
+
+- Every portion step (Log food, an ingredient's, Log a meal's) shows the
+  person's own food without a serving a chip after g and oz: "+ 1 slice"
+  when the search named one ("2 eggs" gives 1 egg), else "+ Serving". An
+  alert asks its weight in grams, as the food editor's servings do, saves
+  it with the food as an ordinary saved_food change, and picks it at the
+  count typed: 2 eggs, not 1. The next "1 slice toast" or "2 eggs" logs in
+  one tap. An alert rather than fields keeps the sheet as short as it was
+  on an iPhone SE. Database foods aren't offered it, as with Duplicate, and
+  recipes have their own servings.
+- A serving's leading number counts what it names. One slice of a label's
+  "2 slices (56g)" is 28 g, where "1 slice" logged all 56 g, and one slice
+  of USDA's "1/2 slice" is two of it. A measure before the name ("12 oz
+  can") isn't a count.
+- A typed serving word picks the plain serving ("1 slice") first, then the
+  regular size ("1 medium or regular slice"). "1 slice" of toasted rye had
+  picked "1 slice, crust not eaten", 13.5 g.

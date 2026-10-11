@@ -84,7 +84,8 @@ enum NutritionPortionMeasure: Hashable {
 /// Grams, ounces, volumes and the food's own servings as chips. Switching
 /// converts the amount and keeps its weight, except that while a new food's
 /// amount is still its default, a named serving starts at one of it. The
-/// presets below set whole servings.
+/// presets below set whole servings. The person's own food without a
+/// serving gets a chip to add one.
 struct NutritionMeasureChips: View {
     @ObservedObject var draft: NutritionEntryDraft
     let unit: MassUnit
@@ -116,6 +117,7 @@ struct NutritionMeasureChips: View {
                     .accessibilityAddTraits(selected ? .isSelected : [])
                     .accessibilityIdentifier("nutrition.measure.\(measure.identifier)")
             }
+            if draft.canAddServing { NutritionAddServing(draft: draft) }
         }
         .sensoryFeedback(.selection, trigger: draft.measure)
     }
