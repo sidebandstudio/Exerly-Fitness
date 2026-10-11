@@ -3349,7 +3349,10 @@ final class ProductionUITests: ExerlyUITestCase {
             tap(app.buttons["preferences.unitSystem"], in: app)
             tap(app.buttons["Metric, kg and cm"], in: app)
         }
-        XCTAssertEqual(app.textFields["preferences.height"].value as? String, "167.75")
+        // On smaller phones the unit picker's menu leaves the height scrolled away.
+        let height = app.textFields["preferences.height"]
+        reveal(height, in: app)
+        XCTAssertEqual(height.value as? String, "167.75")
         tap(app.buttons["Food preferences"], in: app)
         replace(app.textFields["preferences.dietaryStyle"], with: "Mediterranean", in: app)
         dismissKeyboard(app)
