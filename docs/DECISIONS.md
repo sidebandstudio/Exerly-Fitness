@@ -1073,3 +1073,11 @@ main window than the tabs, so the accessibility containers were not at fault.
 The driver listed every layer, the screen under a sheet first and the sheet
 last, so the sheet looked missing. VoiceOver reads only the top layer of a
 modal presentation, and the dump now does too.
+
+## 2026-10-11: Reminder times open in a popover
+
+In run 6 the tap that closed the weigh-in time also turned on meal
+reminders: the tester's tap fell outside the compact time picker's overlay,
+on the Meals row, and iOS 26 passed it on. The time is now a button showing
+it, which opens the same 5-minute wheels in a popover; a tap outside a
+popover only closes it.

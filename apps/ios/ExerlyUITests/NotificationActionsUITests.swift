@@ -88,6 +88,33 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
     }
 
+    /// Run 6 closed the weigh-in time with a tap on "dismiss popup" that
+    /// landed on the Meals row, and the compact picker passed that tap on,
+    /// turning meal reminders on. The time opens in a popover now, and a tap
+    /// outside it only closes it.
+    func testClosingATimeLeavesTheRowUnderTheTapAlone() async throws {
+        let (app, _) = try await signedIn(reminders: ["weighIn": true], times: ["weighIn": "07:00"], prefix: "notify-close")
+        openReminders(app)
+        let switches = ["weighIn", "meals", "workouts", "sleep"].map { app.switches["reminders.\($0)"] }
+        let before = switches.map { $0.value as? String }
+        XCTAssertEqual(before, ["1", "0", "0", "0"])
+        tap(app.buttons["reminders.weighIn.time"], in: app)
+        let wheels = app.pickerWheels.firstMatch
+        XCTAssertTrue(wheels.waitForExistence(timeout: 5), app.debugDescription)
+        capture(app, "reminders-time-open")
+        // As the tester's driver closed it; else on the Weigh-in row, above the popover.
+        let outside = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "dismiss popup")).firstMatch
+        if outside.exists && outside.isHittable {
+            outside.tap()
+        } else {
+            let row = switches[0].frame
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: row.minX + 30, dy: row.midY)).tap()
+        }
+        XCTAssertTrue(wheels.waitForNonExistence(timeout: 5), "The tap closed the time\n\(app.debugDescription)")
+        XCTAssertEqual(switches.map { $0.value as? String }, before, "and changed nothing else")
+        XCTAssertEqual((app.buttons["reminders.weighIn.time"].value as? String)?.hasPrefix("7:00"), true, "The time is as it was")
+    }
+
     /// A 7:30 AM weigh-in reminder from Profile: open Reminders, turn it on by
     /// its title (asking iOS the first time), turn the minutes to 30, close the
     /// picker. It's saved and scheduled with no other step, then listed in words.
@@ -108,7 +135,7 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         app.staticTexts["Weigh-in"].tap(); actions += 1
         if springboard.alerts.firstMatch.waitForExistence(timeout: 5) { springboard.alerts.buttons["Allow"].tap(); actions += 1 }
         XCTAssertEqual(weighIn.value as? String, "1")
-        let time = app.datePickers["reminders.weighIn.time"]
+        let time = app.buttons["reminders.weighIn.time"]
         XCTAssertTrue(time.waitForExistence(timeout: 5), app.debugDescription)
         time.tap(); actions += 1
         let minutes = app.pickerWheels.element(boundBy: 1)
