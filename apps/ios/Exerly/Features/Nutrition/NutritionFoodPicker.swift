@@ -694,6 +694,8 @@ struct NutritionFoodPicker: View {
             dismiss()
         } else {
             confirm(entries, haptic: false)
+            // As after its +: a food searched with an amount clears the search for the next.
+            if FoodSearch.amount(in: query).amount != nil { readyForNext() }
         }
     }
 

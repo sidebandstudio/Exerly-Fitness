@@ -234,9 +234,16 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(app.searchFields.firstMatch.value as? String ?? "", "Search foods, or type 200 g chicken",
                        "The search clears for the next food, and says an amount can lead it")
 
+        // Logged from its portion sheet instead, the search clears the same way (run 6 cleared it by hand).
+        app.typeText("1 cup greek yogurt")
+        tap(row, in: app)
+        tap(app.buttons["nutrition.saveEntry"], in: app)
+        XCTAssertTrue(app.buttons["nutrition.saveEntry"].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.searchFields.firstMatch.value as? String ?? "", "Search foods, or type 200 g chicken")
+
         tap(app.buttons["Today"], in: app)
-        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.entry.", "Greek yogurt"))
-            .firstMatch
+        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.entry.",
+                                                     "Greek yogurt, plain, 200 g")).firstMatch
         reveal(entry, in: app)
         XCTAssertEqual(entry.label, "Greek yogurt, plain, 200 g, 146 calories")
     }
