@@ -85,6 +85,16 @@ class ExerlyUITestCase: XCTestCase {
         replace(app.secureTextFields["Password"], with: "Simulator-Test-123!", in: app)
         dismissKeyboard(app)
         tap(app.buttons["Log In"], in: app)
+        // At the largest text on an iPhone 17 Pro the form scrolls as the
+        // keyboard leaves and the tap can miss. Go on the keyboard submits too.
+        let password = app.secureTextFields["Password"]
+        if !app.navigationBars["Today"].waitForExistence(timeout: 10), password.exists {
+            if !app.keyboards.firstMatch.exists {
+                reveal(password, in: app)
+                password.tap()
+            }
+            app.typeText("\n")
+        }
         XCTAssertTrue(app.navigationBars["Today"].waitForExistence(timeout: 20))
         settleAfterSignIn(app)
     }

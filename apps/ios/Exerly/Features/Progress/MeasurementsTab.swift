@@ -3,8 +3,6 @@ import ExerlyCore
 import SwiftData
 import SwiftUI
 
-private let centimetersPerInch = USUnits.centimetersPerInch
-
 @MainActor
 final class MeasurementsViewModel: ObservableObject {
     @Published private(set) var isLoading = false
@@ -49,6 +47,8 @@ private enum WeighInRequest: Identifiable {
     }
 }
 
+/// Progress → Body: weight, the goal, measurements and expenditure, with the
+/// sheets they open and Undo for a deleted weigh-in.
 struct MeasurementsTab: View {
     let workspace: TrainingWorkspace?
     let unit: MassUnit
@@ -56,15 +56,21 @@ struct MeasurementsTab: View {
     let openingError: String?
     @Query private var legacyMeasurements: [Measurement]
     @EnvironmentObject private var sync: SyncEngine
-    @AppStorage("unitSystem") private var unitSystem = "imperial"
+    @EnvironmentObject private var auth: AuthViewModel
     @StateObject private var viewModel = MeasurementsViewModel()
-    @State private var showAddSheet = false
-    @State private var editing: BodyMeasurementDTO?
-    @State private var lastDeletedID: String?
+    @State private var logging = false
     @State private var actionError: String?
     @State private var showLegacyReview = false
     @State private var weighIn: WeighInRequest?
-    @State private var deletedWeight: WeightEntry?
+    @State private var goalEditor: TargetsEditorRequest?
+    @State private var toast: BodyToast?
+
+    struct BodyToast: Equatable {
+        let id = UUID()
+        let message: String
+        /// A deleted weigh-in to bring back.
+        var undo: WeightEntry?
+    }
 
     init(initialDate: CalendarDay, workspace: TrainingWorkspace?, unit: MassUnit, timeZone: TimeZone, openingError: String? = nil) {
         self.workspace = workspace
@@ -73,31 +79,23 @@ struct MeasurementsTab: View {
         self.openingError = openingError
     }
 
+    private var lengthUnit: LengthUnit { LengthUnit(unit) }
+
     var body: some View {
+        let records = MeasurementRecords(viewModel.measurements)
         ScrollView {
             VStack(alignment: .leading, spacing: ExSpacing.page) {
-                if let deletedWeight {
-                    banner("Weigh-in deleted.", action: "Undo") { undoDelete(deletedWeight) }
-                        .accessibilityIdentifier("body.undoDelete")
-                }
-                if lastDeletedID != nil {
-                    banner("Measurement removed.", action: "Undo") {
-                        do {
-                            try sync.undoMeasurementDeletion(entityID: lastDeletedID!)
-                            lastDeletedID = nil
-                        } catch { actionError = error.localizedDescription }
-                    }
-                }
                 if let actionError { Text(actionError).font(.exCaption).foregroundStyle(Color.exError) }
                 if let workspace {
                     BodyWeightSection(workspace: workspace, unit: unit, timeZone: timeZone, onWeighIn: { weighIn = .new },
-                                      onEdit: { weighIn = .edit($0) }, onDelete: delete)
+                                      onEdit: { weighIn = .edit($0) }, onDelete: delete, onDeleted: deleted,
+                                      onEditGoal: { editGoal(workspace) }, measurements: { measurementsCard(records) })
                 } else if let openingError {
                     ExCard { Text(openingError).font(.exBody).foregroundStyle(Color.exTextSecondary) }
+                    measurementsCard(records)
                 } else {
                     LoadingStateView(message: "Opening your weigh-ins…").frame(height: 160)
                 }
-                measurementsSection
                 if !legacyMeasurements.isEmpty {
                     Text("Measurements from an older version are preserved on this device. They have not been assigned to this account.")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary)
@@ -119,10 +117,26 @@ struct MeasurementsTab: View {
             await viewModel.load(today: sync.today)
             await workspace?.synchronize()
         }
+        .navigationDestination(for: BodySite.self) { site in
+            MeasurementHistoryView(site: site, unit: lengthUnit, timeZone: timeZone, model: viewModel)
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showAddSheet = true } label: { Image(systemName: "plus") }
-                    .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Add measurement")
+                Button { logging = true } label: { Image(systemName: "plus") }
+                    .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Log measurements")
+                    .accessibilityIdentifier("body.measurements.add")
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                TodayToast(message: toast.message, undo: toast.undo.map { entry in { undoDelete(entry) } },
+                           undoIdentifier: "body.undoDelete")
+                    .padding(.bottom, ExSpacing.small)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .task(id: toast.id) {
+                        try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 15 : 10))
+                        withAnimation(.snappy) { if self.toast == toast { self.toast = nil } }
+                    }
             }
         }
         .sheet(item: $weighIn) { request in
@@ -130,19 +144,20 @@ struct MeasurementsTab: View {
                 switch request {
                 case .new: WeighInSheet(workspace: workspace, unit: unit, timeZone: timeZone)
                 case .edit(let entry):
-                    WeighInSheet(workspace: workspace, unit: unit, timeZone: timeZone, editing: entry,
-                                 onDeleted: { deletedWeight = $0 })
+                    WeighInSheet(workspace: workspace, unit: unit, timeZone: timeZone, editing: entry, onDeleted: deleted)
                 }
             }
         }
-        .sheet(isPresented: $showAddSheet) {
-            AddMeasurementSheet(initialDate: sync.today, onSaved: {
+        .sheet(isPresented: $logging) {
+            MeasurementEntrySheet(latest: BodyMeasurements.latest(records.readings), unit: lengthUnit, today: sync.today) { count in
+                show("\(count) \(count == 1 ? "measurement" : "measurements") saved")
                 Task { await viewModel.load(today: sync.today) }
-            })
+            }
         }
-        .sheet(item: $editing) { measurement in
-            AddMeasurementSheet(initialDate: sync.today, editing: measurement, onDeleted: { lastDeletedID = $0 },
-                                onSaved: { Task { await viewModel.load(today: sync.today) } })
+        .sheet(item: $goalEditor) { request in
+            if let workspace {
+                TargetsPlanEditor(workspace: workspace, unit: unit, timeZone: timeZone, request: request) { message, _ in show(message) }
+            }
         }
         .sheet(isPresented: $showLegacyReview) { LegacyMeasurementReview() }
         .onChange(of: sync.changeToken) { _, _ in Task { await viewModel.load(today: sync.today) } }
@@ -154,14 +169,24 @@ struct MeasurementsTab: View {
         }
     }
 
-    private func banner(_ message: String, action: String, perform: @escaping () -> Void) -> some View {
-        HStack {
-            Text(message).font(.exBody).foregroundStyle(Color.exTextPrimary)
-            Spacer()
-            Button(action, action: perform).font(.exBodyMedium).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
-        }
-        .padding(.horizontal, ExSpacing.content)
-        .background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control, style: .continuous))
+    private func measurementsCard(_ records: MeasurementRecords) -> some View {
+        BodyMeasurementsCard(records: records, unit: lengthUnit, today: LocalDate(Date(), in: timeZone),
+                             isLoading: viewModel.isLoading, error: viewModel.error) { logging = true }
+    }
+
+    private func show(_ message: String, undo: WeightEntry? = nil) {
+        withAnimation(.snappy) { toast = BodyToast(message: message, undo: undo) }
+        UIAccessibility.post(notification: .announcement, argument: message)
+    }
+
+    private func editGoal(_ workspace: TrainingWorkspace) {
+        let today = LocalDate(Date(), in: timeZone)
+        let kind: TargetsEditorRequest.Kind = workspace.nutrition.plan(on: today) == nil ? .setup : .edit
+        goalEditor = .make(kind, store: workspace.nutrition, user: auth.currentUser, unit: unit, today: today)
+    }
+
+    private func deleted(_ entry: WeightEntry) {
+        show("Weigh-in deleted", undo: entry)
     }
 
     private func delete(_ entry: WeightEntry) {
@@ -172,7 +197,7 @@ struct MeasurementsTab: View {
             actionError = BodyFormat.message(error)
             return
         }
-        deletedWeight = entry
+        deleted(entry)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         Task {
             await LegacyWeighIns.forget(entry, accountID: workspace.accountID)
@@ -185,171 +210,10 @@ struct MeasurementsTab: View {
         guard let workspace else { return }
         do {
             try workspace.nutrition.logWeight(entry.weight, bodyFat: entry.bodyFat, at: entry.at, timeZone: timeZone)
-            deletedWeight = nil
+            withAnimation(.snappy) { toast = nil }
             Task { await workspace.synchronize() }
         } catch { actionError = BodyFormat.message(error) }
     }
-
-    private var measurementsSection: some View {
-        VStack(alignment: .leading, spacing: ExSpacing.item) {
-            ExSectionHeading("Measurements", detail: viewModel.measurements.isEmpty ? nil : "\(viewModel.measurements.count)")
-            if viewModel.measurements.isEmpty {
-                ExCard {
-                    Text(viewModel.isLoading ? "Loading measurements…" : "Waist, hips, arms and more. Add one with +.")
-                        .font(.exBody).foregroundStyle(Color.exTextSecondary)
-                    if let error = viewModel.error { Text(error).font(.exCaption).foregroundStyle(Color.exError) }
-                }
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(viewModel.measurements.enumerated()), id: \.element.id) { index, measurement in
-                        if index > 0 { Rectangle().fill(Color.exBorder.opacity(0.5)).frame(height: 0.5).padding(.leading, ExSpacing.content) }
-                        Button { editing = measurement } label: {
-                            HStack(spacing: ExSpacing.item) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(measurement.type.replacingOccurrences(of: "_", with: " ").capitalized)
-                                        .font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
-                                    Text(measurement.day?.formatted() ?? measurement.entry_date)
-                                        .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                                    if measurement.sync_state != "synced" {
-                                        Text(measurement.sync_state == "attention" ? "Needs review" : "Waiting to sync")
-                                            .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                                    }
-                                }
-                                Spacer(minLength: ExSpacing.small)
-                                Text(formatBodyMeasurement(measurement)).font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
-                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Color.exTextMuted)
-                                    .accessibilityHidden(true)
-                            }
-                            .padding(.horizontal, ExSpacing.content).frame(minHeight: 56).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain).accessibilityLabel("Edit \(measurement.type) measurement")
-                    }
-                }
-                .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5)
-                }
-            }
-        }
-    }
-
-    private func formatBodyMeasurement(_ measurement: BodyMeasurementDTO) -> String {
-        guard unitSystem == "imperial", measurement.unit.lowercased() == "cm" else {
-            return "\(measurement.value.formatted(.number.precision(.fractionLength(0...2)))) \(measurement.unit)"
-        }
-        return "\((measurement.value / centimetersPerInch).formatted(.number.precision(.fractionLength(0...2)))) in"
-    }
-}
-
-struct AddMeasurementSheet: View {
-    let onSaved: () -> Void
-    let editing: BodyMeasurementDTO?
-    let onDeleted: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var sync: SyncEngine
-    @AppStorage("unitSystem") private var unitSystem = "imperial"
-    @State private var type = "waist"
-    @State private var value = ""
-    @State private var selectedDate: CalendarDay
-    @State private var loadedInitialValue = false
-    @State private var errorMessage: String?
-
-    private let types = ["waist", "chest", "hips", "arms", "thighs", "neck", "calves", "body_fat"]
-
-    init(initialDate: CalendarDay, editing: BodyMeasurementDTO? = nil, onDeleted: @escaping (String) -> Void = { _ in }, onSaved: @escaping () -> Void = {}) {
-        self.editing = editing
-        self.onDeleted = onDeleted
-        self.onSaved = onSaved
-        _type = State(initialValue: editing?.type ?? "waist")
-        _selectedDate = State(initialValue: editing?.day ?? initialDate)
-    }
-
-    private var displayUnit: String {
-        if type == "body_fat" { return "%" }
-        return unitSystem == "imperial" ? "in" : "cm"
-    }
-    private var numericValue: Double? { try? Double(value, format: .number.locale(.current)) }
-
-    var body: some View {
-        NavigationStack {
-            ExScreen {
-                ExCard(accent: true) {
-                    ExEyebrow("Area", color: .exPrimaryText)
-                    Picker("Type", selection: $type) {
-                        ForEach(types, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ").capitalized).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("measurement.type")
-                    .tint(.exPrimaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ExQuantityControl(title: "Value (\(displayUnit))", text: $value,
-                                      step: type == "body_fat" ? 0.5 : 1, unit: displayUnit)
-                }
-
-                    ExCard {
-                        CalendarDayPicker("Measurement date", selection: $selectedDate, today: sync.today,
-                                          timeZoneIdentifier: sync.calendar.timeZoneIdentifier)
-                        .font(.exLabel)
-                        .foregroundStyle(.exTextSecondary)
-                        .tint(.exPrimaryText)
-                    }
-
-                    Button("Save", action: save).buttonStyle(ExActionStyle())
-                        .disabled(numericValue == nil || (numericValue ?? 0) <= 0)
-                    if let editing {
-                        Button("Delete measurement", role: .destructive) {
-                            do {
-                                let id = try sync.deleteMeasurement(editing)
-                                onDeleted(id)
-                                onSaved()
-                                dismiss()
-                            } catch { errorMessage = error.localizedDescription }
-                        }.frame(minHeight: 44)
-                    }
-
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.exCaption)
-                            .foregroundStyle(.exError)
-                            .multilineTextAlignment(.center)
-                    }
-            }
-            .background(Color.exBackground)
-            .navigationTitle(editing == nil ? "Add Measurement" : "Edit Measurement")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundStyle(.exTextSecondary)
-                }
-            }
-        }
-        .onAppear {
-            guard !loadedInitialValue else { return }
-            loadedInitialValue = true
-            if let editing {
-                let number = editing.unit == "cm" && unitSystem == "imperial" ? editing.value / centimetersPerInch : editing.value
-                value = number.formatted(.number.grouping(.never).precision(.fractionLength(0...4)))
-            }
-        }
-    }
-
-    private func save() {
-        guard let numeric = numericValue, numeric.isFinite, numeric > 0 else { return }
-        errorMessage = nil
-
-        let centimeters = type != "body_fat" && unitSystem == "imperial" ? numeric * centimetersPerInch : numeric
-        do {
-            try sync.saveMeasurement(BodyMeasurementRequest(type: type, value: centimeters,
-                unit: type == "body_fat" ? "%" : "cm", entry_date: selectedDate.rawValue, note: editing?.note,
-                source: editing?.source ?? "manual"), editing: editing)
-            onSaved()
-            dismiss()
-        } catch { errorMessage = error.localizedDescription }
-    }
-
 }
 
 private struct LegacyMeasurementReview: View {

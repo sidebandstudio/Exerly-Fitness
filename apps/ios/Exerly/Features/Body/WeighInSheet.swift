@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 /// A weigh-in in three taps: open it on the last reading, drag the ruler once
-/// (or tap ±, or tap the number to type), then Save. Also edits a saved one.
+/// (or tap ±, or tap the number to type), then Save. Also edits a saved one:
+/// its weight, body fat, day and time.
 struct WeighInSheet: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
@@ -19,6 +20,9 @@ struct WeighInSheet: View {
     @State private var value: Double
     @State private var bodyFat: Double?
     @State private var date: LocalDate
+    /// An edited weigh-in's clock time, read in `timeZone`.
+    @State private var time: Date
+    @State private var choosingTime = false
     @State private var typing: Field?
     @State private var typed = ""
     @State private var choosingDate = false
@@ -50,9 +54,13 @@ struct WeighInSheet: View {
         _value = State(initialValue: start)
         _bodyFat = State(initialValue: editing?.bodyFat)
         _date = State(initialValue: editing?.date ?? date ?? LocalDate(Date(), in: timeZone))
+        _time = State(initialValue: editing?.at ?? Date())
+        // An edit has more to show (day, time, Delete) and isn't the three-tap path.
+        _detent = State(initialValue: editing == nil ? .weighIn : .large)
     }
 
     private var range: ClosedRange<Double> { WeightRuler.range(for: unit) }
+    private var restingDetent: PresentationDetent { editing == nil ? .weighIn : .large }
     private var step: Double { WeightTrend.step(for: unit) }
     private var today: LocalDate { LocalDate(Date(), in: timeZone) }
     private var fromHealth: Bool { editing?.source == .appleHealth }
@@ -97,10 +105,14 @@ struct WeighInSheet: View {
         let title = Text(editing == nil ? "Weigh-in" : "Edit weigh-in").font(.exH3).foregroundStyle(Color.exTextPrimary)
             .accessibilityAddTraits(.isHeader)
         return Group {
-            if typeSize.isAccessibilitySize {
+            if typeSize.isAccessibilitySize || editing != nil {
+                // An edit's day and time sit under the title, clear of it on a small phone.
                 VStack(alignment: .leading, spacing: ExSpacing.small) {
                     HStack(spacing: ExSpacing.small) { close; title }
-                    dateChip
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: ExSpacing.small) { dateChip; if editing != nil { timeChip } }
+                        VStack(alignment: .leading, spacing: ExSpacing.small) { dateChip; if editing != nil { timeChip } }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -136,6 +148,27 @@ struct WeighInSheet: View {
             .environment(\.calendar, BodyDates.calendar).environment(\.timeZone, BodyDates.utc)
             .tint(Color.exPrimaryText).frame(minWidth: 300).padding(ExSpacing.item)
             .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var timeChip: some View {
+        Button { choosingTime = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "clock").font(.exLabel).accessibilityHidden(true)
+                Text(BodyFormat.time(time, in: timeZone)).font(.exLabel).lineLimit(1)
+            }
+            .foregroundStyle(Color.exPrimaryText).padding(.horizontal, 14).frame(minHeight: 44)
+            .background(Color.exPrimary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain).disabled(fromHealth)
+        .accessibilityLabel("Time, \(BodyFormat.time(time, in: timeZone))").accessibilityHint("Choose another time")
+        .accessibilityIdentifier("weighIn.time")
+        .popover(isPresented: $choosingTime) {
+            DatePicker("Weigh-in time", selection: $time, displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel).labelsHidden()
+                .environment(\.timeZone, timeZone)
+                .frame(minWidth: 280).padding(ExSpacing.item)
+                .presentationCompactAdaptation(.popover)
         }
     }
 
@@ -291,7 +324,7 @@ struct WeighInSheet: View {
     @discardableResult
     private func commit() -> Bool {
         let text = typed.trimmingCharacters(in: .whitespaces)
-        defer { if error == nil { typing = nil; typed = ""; if !typeSize.isAccessibilitySize { detent = .weighIn } } }
+        defer { if error == nil { typing = nil; typed = ""; if !typeSize.isAccessibilitySize { detent = restingDetent } } }
         guard !text.isEmpty else { error = nil; return true }
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -329,9 +362,10 @@ struct WeighInSheet: View {
             if var entry = editing {
                 if value != initialValue { entry.weight = Mass((value * 100).rounded() / 100, unit) }
                 entry.bodyFat = bodyFat
-                if entry.date != date {
+                let at = WeightTrend.instant(on: date, timeOf: time, in: timeZone)
+                if entry.date != date || abs(at.timeIntervalSince(entry.at)) >= 60 {
                     entry.date = date
-                    entry.at = WeightTrend.instant(on: date, timeOf: entry.at, in: timeZone)
+                    entry.at = at
                 }
                 try store.updateWeight(entry)
             } else {

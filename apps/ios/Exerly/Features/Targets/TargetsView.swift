@@ -506,15 +506,7 @@ struct TargetsView: View {
     }
 
     private func open(_ kind: TargetsEditorRequest.Kind) {
-        let today = today
-        let summary = WeightTrend.summary(BodyEstimates.shared.estimates(store, through: today), through: today)
-        var draft = NutritionPlanDraft(store.plan(on: today), goal: TargetsProfile.goal(auth.currentUser, unit: unit))
-        switch kind {
-        case .coach: draft.mode = .coached
-        case .adjust(_, let proposed, _): draft = NutritionPlanDraft(proposed)
-        case .setup, .edit: break
-        }
-        editor = TargetsEditorRequest(kind: kind, draft: draft, choice: basisChoice(summary: summary), current: store.plan(on: today))
+        editor = .make(kind, store: store, user: auth.currentUser, unit: unit, today: today)
     }
 }
 
@@ -537,4 +529,19 @@ struct TargetsEditorRequest: Identifiable {
     let choice: PlanBasisChoice?
     /// The version in force.
     let current: NutritionPlan?
+
+    /// The editor for `kind` on `today`: from the version in force, or toward
+    /// setup's goal when there's none yet, resting on the latest estimate.
+    @MainActor
+    static func make(_ kind: Kind, store: NutritionStore, user: UserDTO?, unit: MassUnit, today: LocalDate) -> TargetsEditorRequest {
+        let summary = WeightTrend.summary(BodyEstimates.shared.estimates(store, through: today), through: today)
+        var draft = NutritionPlanDraft(store.plan(on: today), goal: TargetsProfile.goal(user, unit: unit))
+        switch kind {
+        case .coach: draft.mode = .coached
+        case .adjust(_, let proposed, _): draft = NutritionPlanDraft(proposed)
+        case .setup, .edit: break
+        }
+        let choice = PlanBasisChoice.current(summary: summary, plans: store.plans, profile: TargetsProfile.body(user))
+        return TargetsEditorRequest(kind: kind, draft: draft, choice: choice, current: store.plan(on: today))
+    }
 }

@@ -43,11 +43,13 @@ struct PhotoAddSheet: View {
         NavigationStack {
             ExScreen {
                 ExCard(accent: true) {
-                    DatePicker("Date", selection: Binding(get: { BodyDates.anchor(date) }, set: { date = min(BodyDates.date($0), today) }),
-                               in: ...BodyDates.anchor(today), displayedComponents: .date)
-                        .font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).tint(Color.exPrimaryText)
-                        .environment(\.calendar, BodyDates.calendar).environment(\.timeZone, BodyDates.utc)
-                        .accessibilityIdentifier("photoAdd.date")
+                    BodyDateRow {
+                        DatePicker("Date", selection: Binding(get: { BodyDates.anchor(date) }, set: { date = min(BodyDates.date($0), today) }),
+                                   in: ...BodyDates.anchor(today), displayedComponents: .date)
+                            .font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).tint(Color.exPrimaryText)
+                            .environment(\.calendar, BodyDates.calendar).environment(\.timeZone, BodyDates.utc)
+                            .accessibilityIdentifier("photoAdd.date")
+                    }
                     Text("Same spot, same light, same time of day makes the comparison fair.")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 }

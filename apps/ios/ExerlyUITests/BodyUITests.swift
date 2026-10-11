@@ -138,8 +138,10 @@ final class BodyUITests: ExerlyUITestCase {
         func expectShown(on screen: String) {
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", shown)).firstMatch.exists,
                           "\(screen) writes \(shown)")
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "lb a week")).firstMatch.exists,
-                           "\(screen) calls the seven-day change \"this week\", never \"a week\"")
+            // The goal's planned rate ("Lose 0.9 lb a week to 170 lb") is a rate, worded as Targets words it.
+            let goalRate = "identifier == 'body.goal.headline' OR label BEGINSWITH 'Lose ' OR label BEGINSWITH 'Gain '"
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND NOT (\(goalRate))", "lb a week"))
+                .firstMatch.exists, "\(screen) calls the seven-day change \"this week\", never \"a week\"")
         }
         expectShown(on: "Today")
 
