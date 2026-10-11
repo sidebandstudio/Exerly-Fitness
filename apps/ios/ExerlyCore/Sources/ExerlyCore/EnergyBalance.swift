@@ -188,7 +188,8 @@ public enum EnergyBalance {
 
 extension NutritionStore {
     /// The days `EnergyBalance` needs, from this store's weigh-ins and log.
-    /// Only complete and fasting days count as known intake.
+    /// Only complete days with food and fasting days count as known intake:
+    /// a day marked complete with nothing logged is unknown, not a zero.
     public func energyBalanceDays(from start: LocalDate, through end: LocalDate) -> [EnergyBalance.Day] {
         guard start <= end else { return [] }
         var readings: [LocalDate: [Double]] = [:]
@@ -203,7 +204,7 @@ extension NutritionStore {
             let date = start.adding(days: offset)
             let status = day(date).status
             let intake: Double? = switch status {
-            case .complete: energy[date] ?? 0
+            case .complete: energy[date]
             case .fasting: energy[date] ?? 0
             default: nil
             }

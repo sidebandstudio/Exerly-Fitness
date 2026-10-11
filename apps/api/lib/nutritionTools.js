@@ -74,7 +74,8 @@ function balanceDays(n, start, end) {
     const energy = logged.reduce((sum, entry) => sum + (nutrients(entry).energy ?? 0), 0);
     days.push({
       date,
-      intake: status === 'complete' || status === 'fasting' ? energy : null,
+      // A day marked complete with nothing logged is unknown, not a zero.
+      intake: status === 'fasting' || (status === 'complete' && logged.length) ? energy : null,
       weights: n.weights
         .filter((weight) => weight.date === date)
         .map((weight) => kilograms(weight.weight)),
