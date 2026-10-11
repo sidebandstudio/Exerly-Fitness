@@ -66,6 +66,14 @@ final class NutrientGoalPresentationTests: XCTestCase {
         XCTAssertEqual(IntakeFormat.eatenOfGoal(day(1600, NutrientGoal(floor: 1500, target: 2000)), spoken: true),
                        "1,600 of 2,000 milligrams eaten")
         XCTAssertNil(IntakeFormat.eatenOfGoal(day(nil, NutrientGoal(ceiling: 2300), reporting: 0)))
+        // Run 6 read "2.1 g to go" beside "33 / 35 g": the eaten figure is as precise as the one beside it.
+        let fiber = NutrientDay(nutrient: .fiber, amount: 32.9, goal: NutrientGoal(floor: 35), entries: 2, reporting: 2)
+        XCTAssertEqual(IntakeFormat.standing(fiber), "2.1 g to go")
+        XCTAssertEqual(IntakeFormat.eatenOfGoal(fiber), "32.9 / 35 g")
+        XCTAssertEqual(IntakeFormat.eatenOfGoal(fiber, spoken: true), "32.9 of 35 grams eaten")
+        let earlier = NutrientDay(nutrient: .fiber, amount: 20.25, goal: NutrientGoal(floor: 35), entries: 2, reporting: 2)
+        XCTAssertEqual(IntakeFormat.standing(earlier), "15 g to go")
+        XCTAssertEqual(IntakeFormat.eatenOfGoal(earlier), "20 / 35 g", "Whole figures stay whole")
         XCTAssertTrue(IntakeFormat.standingParts(day(400, NutrientGoal(floor: 1500)))! == (1100, "to go"))
         XCTAssertEqual(IntakeFormat.completeness(reporting: 3, entries: 5), "From 3 of 5 foods")
         XCTAssertEqual(IntakeFormat.completeness(reporting: 3, entries: 5, spoken: true), "From 3 of 5 foods that report it")
