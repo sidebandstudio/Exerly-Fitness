@@ -144,21 +144,10 @@ struct ProgressPhotosView: View {
             .filter { dates.contains($0.date) }.map { ($0.date, $0.trend) }, uniquingKeysWith: { a, _ in a })
     }
 
-    /// Photos an earlier version saved for this account's email in the shared
-    /// store move here once, as front photos on their dates. Each is removed
-    /// from the old store only after its copy is saved.
+    /// Photos an earlier version saved for this account's email move into the store once.
     private func adoptOlderPhotos() {
-        guard let email, !email.isEmpty else { return }
-        let descriptor = FetchDescriptor<ProgressPhoto>(predicate: #Predicate { $0.userId == email })
-        guard let older = try? modelContext.fetch(descriptor), !older.isEmpty else { return }
-        for photo in older {
-            guard let data = photo.imageData else { continue }
-            do {
-                try store.add(data, date: LocalDate(photo.date, in: timeZone), pose: .front, addedAt: photo.date)
-                modelContext.delete(photo)
-            } catch { self.error = "Some older photos couldn't be moved. They're still on this device." }
-        }
-        try? modelContext.save()
+        guard let email, store.adoptOlderPhotos(from: modelContext, email: email, timeZone: timeZone) > 0 else { return }
+        error = "Some older photos couldn't be moved. They're still on this device."
     }
 }
 

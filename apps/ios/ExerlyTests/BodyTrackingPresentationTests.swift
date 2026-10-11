@@ -1,4 +1,5 @@
 import ExerlyCore
+import SwiftData
 import UIKit
 import XCTest
 @testable import Exerly
@@ -99,6 +100,32 @@ final class BodyTrackingPresentationTests: XCTestCase {
         try store.delete(photo)
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.url(photo).path))
         XCTAssertTrue(store.photos.isEmpty)
+    }
+
+    /// An earlier version's photos for this email move once, keep their
+    /// dates, and leave SwiftData only when copied; another email's stay.
+    func testOlderPhotosMoveOnceWithoutLosingAny() throws {
+        let container = try ModelContainer(for: ProgressPhoto.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let newYork = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        // 23:30 in New York on Oct 4 is Oct 5 in UTC: the date is the person's.
+        let late = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-05T03:30:00Z"))
+        context.insert(ProgressPhoto(imageData: photoData(), date: late, userId: "a@example.com"))
+        context.insert(ProgressPhoto(imageData: Data("not an image".utf8), date: late, userId: "a@example.com"))
+        context.insert(ProgressPhoto(imageData: nil, date: late, userId: "a@example.com"))
+        context.insert(ProgressPhoto(imageData: photoData(), date: late, userId: "b@example.com"))
+        try context.save()
+
+        let store = ProgressPhotoStore(accountID: "account-a", root: root)
+        XCTAssertEqual(store.adoptOlderPhotos(from: context, email: "a@example.com", timeZone: newYork), 1,
+                       "The unreadable one stays where it was")
+        XCTAssertEqual(store.photos.map(\.date), [try XCTUnwrap(LocalDate("2026-10-04"))])
+        XCTAssertEqual(store.photos.map(\.pose), [.front])
+        let left = try context.fetch(FetchDescriptor<ProgressPhoto>())
+        XCTAssertEqual(left.filter { $0.userId == "a@example.com" }.count, 2, "Only the copied photo leaves SwiftData")
+        XCTAssertEqual(left.filter { $0.userId == "b@example.com" }.count, 1, "Another account's photo isn't touched")
+        XCTAssertEqual(store.adoptOlderPhotos(from: context, email: "a@example.com", timeZone: newYork), 1)
+        XCTAssertEqual(store.photos.count, 1, "Opening again adds nothing twice")
     }
 
     func testLargePhotosAreScaledDownAndUnreadableOnesRefused() throws {

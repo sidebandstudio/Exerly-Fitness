@@ -1,6 +1,7 @@
 import ExerlyCore
 import Foundation
 import ImageIO
+import SwiftData
 import UIKit
 
 /// Progress photos on this device only, one folder per account under
@@ -125,6 +126,28 @@ final class ProgressPhotoStore: ObservableObject {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try ExerlyJSON.canonical(next).write(to: index, options: [.atomic, .completeFileProtection])
         photos = Self.sorted(next)
+    }
+
+    /// Photos an earlier version saved for `email` in the shared SwiftData
+    /// store move here once, as front photos on their dates. Each leaves
+    /// SwiftData only after its copy is saved; one that can't be read or
+    /// saved stays where it was. Returns how many stayed; a record with no
+    /// image has nothing to move and isn't counted.
+    @discardableResult
+    func adoptOlderPhotos(from context: ModelContext, email: String, timeZone: TimeZone) -> Int {
+        let descriptor = FetchDescriptor<ProgressPhoto>(predicate: #Predicate { $0.userId == email })
+        guard !email.isEmpty, let older = try? context.fetch(descriptor), !older.isEmpty else { return 0 }
+        var stayed = 0
+        for photo in older {
+            guard let data = photo.imageData else { continue }
+            guard (try? add(data, date: LocalDate(photo.date, in: timeZone), pose: .front, addedAt: photo.date)) != nil else {
+                stayed += 1
+                continue
+            }
+            context.delete(photo)
+        }
+        try? context.save()
+        return stayed
     }
 
     /// The image upright, scaled down to `maximumPixels`, as a JPEG.

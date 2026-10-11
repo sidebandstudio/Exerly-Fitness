@@ -19,7 +19,10 @@ struct PhotoAddSheet: View {
     let today: LocalDate
     @State private var date: LocalDate
     @State private var chosen: [PhotoPose: Data] = [:]
+    /// The pose the library picker fills. Kept apart from whether the picker
+    /// shows: it closes before its selection arrives.
     @State private var picking: PhotoPose?
+    @State private var showsPicker = false
     @State private var shooting: PhotoPose?
     @State private var item: PhotosPickerItem?
     @State private var error: String?
@@ -75,7 +78,7 @@ struct PhotoAddSheet: View {
             }
         }
         .interactiveDismissDisabled(!chosen.isEmpty)
-        .photosPicker(isPresented: Binding(get: { picking != nil }, set: { if !$0 { picking = nil } }), selection: $item, matching: .images)
+        .photosPicker(isPresented: $showsPicker, selection: $item, matching: .images)
         .onChange(of: item) { _, item in
             guard let item, let pose = picking else { return }
             Task {
@@ -83,7 +86,6 @@ struct PhotoAddSheet: View {
                     error = "That photo couldn't be read. Try another."
                 }
                 self.item = nil
-                picking = nil
             }
         }
         .fullScreenCover(item: $shooting) { pose in
@@ -116,7 +118,11 @@ struct PhotoAddSheet: View {
     }
 
     private func choose(_ pose: PhotoPose) {
-        guard !Self.testImages.isEmpty else { picking = pose; return }
+        guard !Self.testImages.isEmpty else {
+            picking = pose
+            showsPicker = true
+            return
+        }
         chosen[pose] = Self.testImages[(store.photos.count + chosen.count) % Self.testImages.count]
     }
 
