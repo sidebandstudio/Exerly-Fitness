@@ -399,6 +399,7 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
       'butter',
       'potatoes',
       'ground beef',
+      'bacon',
       'salt',
       'flour',
       '',
@@ -415,6 +416,8 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
         'Butter, NFS',
         'Potato, NFS',
         'Beef, ground, raw',
+        // Not "Bacon strip, meatless".
+        'Bacon, NS as to type of meat, cooked',
         null,
         null,
         null,
