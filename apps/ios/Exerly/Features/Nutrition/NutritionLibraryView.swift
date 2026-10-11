@@ -32,6 +32,7 @@ struct NutritionLibraryView: View {
     @State private var query = ""
     @State private var creating = false
     @State private var creatingRecipe = false
+    @State private var importingRecipe = false
     @State private var showArchived = false
     /// A recipe just saved here, offered to log now, and what was logged.
     @State private var saved: ExerlyCore.Food?
@@ -84,6 +85,8 @@ struct NutritionLibraryView: View {
                         .accessibilityIdentifier("nutrition.libraryNewFood")
                     Button("New recipe", systemImage: "frying.pan") { creatingRecipe = true }
                         .accessibilityIdentifier("nutrition.libraryNewRecipe")
+                    Button("Import recipe", systemImage: "link") { importingRecipe = true }
+                        .accessibilityIdentifier("nutrition.libraryImportRecipe")
                 }.accessibilityIdentifier("nutrition.libraryCreate")
             }
         }
@@ -91,6 +94,11 @@ struct NutritionLibraryView: View {
         .sheet(isPresented: $creatingRecipe) {
             if let api = auth.accountAPI {
                 RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit) { saved = $0; logged = nil }
+            }
+        }
+        .sheet(isPresented: $importingRecipe) {
+            if let api = auth.accountAPI {
+                RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit, startsImporting: true) { saved = $0; logged = nil }
             }
         }
         .sheet(item: $logging) { food in
@@ -293,6 +301,15 @@ private struct NutritionLibraryDetail: View {
         .navigationTitle("Saved food").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let food = workspace.nutrition.food(foodID), food.archivedAt == nil {
+                if food.source == .recipe {
+                    ToolbarItem(placement: .primaryAction) {
+                        ShareLink(item: RecipeShareItem(recipe: food), subject: Text(food.name),
+                                  message: Text(RecipeShareItem.summary(food, unit: unit)),
+                                  preview: SharePreview(food.name, image: Image(systemName: "frying.pan"))) {
+                            Label("Share recipe", systemImage: "square.and.arrow.up")
+                        }.accessibilityIdentifier("recipe.libraryShare")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button(food.favorite ? "Remove from favorites" : "Add to favorites", systemImage: food.favorite ? "star.fill" : "star") {
                         if actions.setFavorite(!food.favorite, reviewed: food) { sync() }

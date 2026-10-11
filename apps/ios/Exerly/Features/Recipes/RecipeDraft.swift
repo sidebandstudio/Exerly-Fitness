@@ -14,6 +14,8 @@ final class RecipeDraft: ObservableObject {
         var food: ExerlyCore.Food?
         /// False while it sits at a default amount no one has looked at.
         var checked = true
+        /// The line of an imported recipe it came from.
+        var line: String?
 
         /// The ingredient as a diary entry, so the portion editor can open it.
         var entry: FoodEntry {
@@ -30,6 +32,10 @@ final class RecipeDraft: ObservableObject {
     @Published var servings: NutritionNumberField
     @Published var preparation: String
     @Published private(set) var errors: [String] = []
+    /// Lines of an imported recipe no food matched, each to search for or skip.
+    @Published private(set) var unmatched: [String] = []
+    /// The page an imported recipe came from.
+    @Published private(set) var sourceURL: String?
     let unit: MassUnit
     let isNew: Bool
     private let store: NutritionStore
@@ -38,9 +44,10 @@ final class RecipeDraft: ObservableObject {
     private let initialCooked: NutritionNumberField
     private let initialServings: NutritionNumberField
 
-    /// Edits a saved recipe, or starts a new one, empty or from `start`
-    /// (a meal, or a copy of another recipe).
-    init(store: NutritionStore, unit: MassUnit, editing: ExerlyCore.Food? = nil, start: ExerlyCore.Food? = nil) {
+    /// Edits a saved recipe, or starts a new one, empty, from `start` (a
+    /// meal, or a copy of another recipe) or from an imported recipe.
+    init(store: NutritionStore, unit: MassUnit, editing: ExerlyCore.Food? = nil, start: ExerlyCore.Food? = nil,
+         imported: RecipeImport? = nil) {
         self.store = store
         self.unit = unit
         original = editing
@@ -56,10 +63,34 @@ final class RecipeDraft: ObservableObject {
         servings = count
         initialServings = count
         preparation = food.preparation ?? ""
+        sourceURL = food.sourceURL
+        if let imported { apply(imported) }
+    }
+
+    /// Fills the draft from an imported recipe: its name unless one is
+    /// typed, its ingredients after any here (those at a guessed amount
+    /// marked to check), the lines it couldn't match, its yield, its steps
+    /// unless some are written, and its source.
+    func apply(_ imported: RecipeImport) {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = imported.name }
+        rows += imported.ingredients.map { Row(id: UUID(), ingredient: $0.ingredient, food: $0.food, checked: $0.exact, line: $0.line) }
+        unmatched = imported.unmatched
+        if let count = imported.servingCount { servings = NutritionNumberField(count) }
+        if let grams = imported.yieldGrams { cookedWeight = NutritionNumberField(unit == .pounds ? USUnits.ounces(grams: grams) : grams) }
+        if let steps = imported.preparation, preparation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { preparation = steps }
+        sourceURL = imported.sourceURL
+        errors = []
+    }
+
+    /// Takes a line off the unmatched list: skipped, or found by search.
+    func settle(_ line: String) {
+        if let index = unmatched.firstIndex(of: line) { unmatched.remove(at: index) }
+        errors = []
     }
 
     var hasChanges: Bool {
-        (isNew && !rows.isEmpty) || name != template.name || rows.map(\.ingredient) != (template.ingredients ?? [])
+        (isNew && !rows.isEmpty) || !unmatched.isEmpty || sourceURL != template.sourceURL || name != template.name
+            || rows.map(\.ingredient) != (template.ingredients ?? [])
             || cookedWeight != initialCooked || servings != initialServings || preparation != (template.preparation ?? "")
     }
 
@@ -80,6 +111,7 @@ final class RecipeDraft: ObservableObject {
         food.servingCount = count
         let note = preparation.trimmingCharacters(in: .whitespacesAndNewlines)
         food.preparation = note.isEmpty ? nil : note
+        food.sourceURL = sourceURL
         return food
     }
 
@@ -121,6 +153,10 @@ final class RecipeDraft: ObservableObject {
     @discardableResult
     func save(locale: Locale = .current) -> ExerlyCore.Food? {
         errors = []
+        if let line = unmatched.first {
+            errors = ["Search for \u{201C}\(line)\u{201D} or skip it before saving."]
+            return nil
+        }
         if let unchecked {
             errors = ["Check the amount of \(unchecked.ingredient.food.name) before saving. It came in at a default."]
             return nil
