@@ -177,9 +177,18 @@ struct TargetsCheckInCard: View {
                         + "The goal is \(goalMovement(trend: estimate.trend)) a week.")
                 }
             }
-            evidenceRow("checklist", "\(review.completeDays) of the last 7 days fully logged, \(review.weighInDays) with a weigh-in.")
+            evidenceRow("checklist", Self.coverage(complete: review.completeDays, fasting: review.fastingDays,
+                                                   partial: review.partialDays, weighIns: review.weighInDays))
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// "6 of the last 7 days fully logged, 1 of them a fast; 1 partial day left out. 5 with a weigh-in."
+    static func coverage(complete: Int, fasting: Int, partial: Int, weighIns: Int) -> String {
+        var text = "\(complete) of the last 7 days fully logged"
+        if fasting > 0 { text += fasting == 1 ? ", 1 of them a fast" : ", \(fasting) of them fasts" }
+        if partial > 0 { text += "; \(partial) partial \(partial == 1 ? "day" : "days") left out" }
+        return text + ". \(weighIns) with a weigh-in."
     }
 
     private func evidenceRow(_ icon: String, _ text: String) -> some View {
@@ -289,10 +298,11 @@ struct TargetsCheckInCard: View {
             let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small))
                 : AnyLayout(HStackLayout(spacing: ExSpacing.item))
             layout {
-                coverage("Fully logged", count: review.completeDays)
+                coverage(review.fastingDays > 0 ? "Fully logged or fasted" : "Fully logged", count: review.completeDays)
                 coverage("Weigh-ins", count: review.weighInDays)
             }
-            Text("Log whole days and mark them complete, and weigh in most mornings. Your targets stay as they are until the check-in can run.")
+            Text((review.partialDays > 0 ? "Partial days are left out. " : "")
+                + "Log whole days and mark them complete, and weigh in most mornings. Your targets stay as they are until the check-in can run.")
                 .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
         }
     }

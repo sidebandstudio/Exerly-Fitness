@@ -1,12 +1,18 @@
 import ExerlyCore
 import SwiftUI
 
+/// A part of Your details another screen can open it at.
+enum PreferencesSection: String {
+    case foodLog
+}
+
 struct EditProfileView: View {
+    var section: PreferencesSection?
     @EnvironmentObject private var authVM: AuthViewModel
     var body: some View {
         NavigationStack {
             if let accountID = authVM.currentUser?.id {
-                PreferencesEditor(accountID: accountID, auth: authVM)
+                PreferencesEditor(accountID: accountID, auth: authVM, section: section)
                     .id("\(authVM.sessionID):\(accountID)")
             }
         }
@@ -24,8 +30,10 @@ private struct PreferencesEditor: View {
     @State private var editTask: Task<Void, Never>?
     @State private var feetText = ""
     @State private var inchesText = ""
+    let section: PreferencesSection?
 
-    init(accountID: String, auth: AuthViewModel) {
+    init(accountID: String, auth: AuthViewModel, section: PreferencesSection? = nil) {
+        self.section = section
         let sessionID = auth.sessionID
         _store = StateObject(wrappedValue: PreferencesStore(
             accountID: accountID,
@@ -60,6 +68,7 @@ private struct PreferencesEditor: View {
                 if store.conflict != nil { conflictSection }
                 if store.draft != nil {
                     basicSection.disabled(store.isLocked)
+                    foodLogSection.disabled(store.isLocked)
                     foodSection.disabled(store.isLocked)
                     trainingSection.disabled(store.isLocked)
                     sleepSection.disabled(store.isLocked)
@@ -71,6 +80,9 @@ private struct PreferencesEditor: View {
             }
             .onChange(of: store.conflict?.revision) { _, revision in
                 if revision != nil { focusedField = nil; proxy.scrollTo("preferences-status", anchor: .top) }
+            }
+            .onChange(of: store.draft != nil, initial: true) { _, ready in
+                if ready, let section { proxy.scrollTo(section.rawValue, anchor: .top) }
             }
         }
         .tint(.exPrimaryText)
@@ -197,6 +209,42 @@ private struct PreferencesEditor: View {
                 .font(.subheadline).foregroundStyle(.secondary)
         }
     }
+    /// How Today reads the day's food, and the water goal its water row counts toward.
+    private var foodLogSection: some View {
+        Section {
+            Picker(PreferenceFields.label("nutritionDisplay"), selection: Binding(
+                get: { fields["nutritionDisplay"] == "consumed" ? "consumed" : "remaining" },
+                set: { store.edit("nutritionDisplay", value: $0) })) {
+                Text("What's left").tag("remaining")
+                Text("What you've eaten").tag("consumed")
+            }
+            .accessibilityIdentifier("preferences.nutritionDisplay")
+            .frame(minHeight: 44)
+            .id(PreferencesSection.foodLog.rawValue)
+            Picker(PreferenceFields.label("waterGoalMl"), selection: binding("waterGoalMl")) {
+                Text("No goal").tag("")
+                ForEach(waterGoals, id: \.self) { ml in Text(WaterDisplay.amount(ml, imperial: imperial)).tag(String(ml)) }
+                if let saved = Int(fields["waterGoalMl"] ?? ""), !waterGoals.contains(saved) {
+                    Text(WaterDisplay.amount(saved, imperial: imperial)).tag(String(saved))
+                }
+            }
+            .accessibilityIdentifier("preferences.waterGoalMl")
+            .frame(minHeight: 44)
+        } header: {
+            Text("Food log")
+        } footer: {
+            Text("Today's calorie ring and macros lead with your choice. Going over always shows with a plus, as in +120 over. The water goal counts water you log on Today.")
+        }
+    }
+
+    private var imperial: Bool { fields["unitSystem"] == "imperial" }
+
+    /// Goals in steps of 250 ml, or of 8 fl oz in U.S. units.
+    private var waterGoals: [Int] {
+        imperial ? stride(from: 32, through: 160, by: 8).map { USUnits.wholeMilliliters(fluidOunces: Double($0)) }
+            : Array(stride(from: 1000, through: 5000, by: 250))
+    }
+
     private var foodSection: some View {
         Section {
             DisclosureGroup("Food preferences", isExpanded: $foodExpanded) {

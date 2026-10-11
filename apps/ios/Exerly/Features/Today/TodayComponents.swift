@@ -107,9 +107,12 @@ struct TodayWeekStrip: View {
 }
 
 /// The day's calories as a ring, with the three macros beside it and any
-/// pinned nutrients under them.
+/// pinned nutrients under them. Each leads with what's left, or with what's
+/// eaten when the person prefers that, and an overage reads "+12 over".
 struct TodayNutritionCard: View {
     let progress: DayProgress
+    /// Lead with what's eaten rather than what's left (Your details).
+    var leadsWithEaten = false
     /// Opens targets for a day without them; nil for a past day, which
     /// only shows what was eaten.
     let onSetTargets: (() -> Void)?
@@ -128,9 +131,9 @@ struct TodayNutritionCard: View {
                 layout {
                     ringButton
                     VStack(spacing: ExSpacing.item) {
-                        TodayMacroLine(title: "Protein", progress: progress.protein, color: .exPrimaryText)
-                        TodayMacroLine(title: "Carbs", progress: progress.carbohydrate, color: .exAccent)
-                        TodayMacroLine(title: "Fat", progress: progress.fat, color: .exSecondary)
+                        TodayMacroLine(title: "Protein", progress: progress.protein, color: .exPrimaryText, eaten: leadsWithEaten)
+                        TodayMacroLine(title: "Carbs", progress: progress.carbohydrate, color: .exAccent, eaten: leadsWithEaten)
+                        TodayMacroLine(title: "Fat", progress: progress.fat, color: .exSecondary, eaten: leadsWithEaten)
                     }
                 }
                 if !pinned.isEmpty {
@@ -166,10 +169,9 @@ struct TodayNutritionCard: View {
     /// The ring opens targets, so it is a real button: it says so to
     /// VoiceOver and gives under a finger.
     @ViewBuilder private var ringButton: some View {
-        let energy = progress.energy
-        let over = (energy.over ?? 0) > 0
-        let spoken = "\(Self.number(energy.consumed)) eaten of \(Self.number(energy.target ?? 0)). "
-            + "\(Self.number(over ? energy.over ?? 0 : energy.remaining ?? 0)) \(over ? "over" : "left")."
+        let energy = progress.energy, left = Self.left(energy)
+        let eaten = "\(Self.number(energy.consumed)) eaten of \(Self.number(energy.target ?? 0))."
+        let spoken = leadsWithEaten ? "\(eaten) \(left.amount) \(left.words)." : "\(left.amount) \(left.words). \(eaten)"
         if let onSetTargets {
             Button(action: onSetTargets) { ring }
                 .buttonStyle(TodayPressStyle())
@@ -187,8 +189,12 @@ struct TodayNutritionCard: View {
     }
 
     private var ring: some View {
-        let energy = progress.energy
-        let over = (energy.over ?? 0) > 0
+        let energy = progress.energy, left = Self.left(energy)
+        let target = Self.number(energy.target ?? 0)
+        // The leading figure, its words, and the line under them.
+        let (figure, words, detail) = leadsWithEaten
+            ? (Self.number(energy.consumed), "kcal eaten", left.over ? "\(left.amount) over" : "of \(target)")
+            : (left.amount, "kcal \(left.words)", "\(Self.number(energy.consumed)) / \(target)")
         return ZStack {
             Circle().stroke(Color.exPrimary.opacity(0.14), lineWidth: 11)
             Circle().trim(from: 0, to: min(energy.fraction ?? 0, 1))
@@ -197,13 +203,14 @@ struct TodayNutritionCard: View {
                 .rotationEffect(.degrees(-90))
                 .animation(.snappy, value: energy.fraction)
             VStack(spacing: 0) {
-                Text(Self.number(over ? energy.over ?? 0 : energy.remaining ?? 0))
+                Text(figure)
                     .font(.system(.title, design: .rounded, weight: .bold)).monospacedDigit()
-                    .foregroundStyle(over ? Color.exAccent : Color.exTextPrimary)
+                    .foregroundStyle(left.over && !leadsWithEaten ? Color.exAccent : Color.exTextPrimary)
                     .contentTransition(.numericText()).minimumScaleFactor(0.6).lineLimit(1)
-                Text(over ? "kcal over" : "kcal left").font(.exSmall.weight(.medium)).foregroundStyle(Color.exTextSecondary)
-                Text("\(Self.number(energy.consumed)) / \(Self.number(energy.target ?? 0))")
-                    .font(.exSmall).monospacedDigit().foregroundStyle(Color.exTextMuted).padding(.top, 2)
+                    .accessibilityIdentifier("today.ring.figure")
+                Text(words).font(.exSmall.weight(.medium)).foregroundStyle(Color.exTextSecondary)
+                Text(detail).font(.exSmall).monospacedDigit().minimumScaleFactor(0.8).lineLimit(1)
+                    .foregroundStyle(left.over && leadsWithEaten ? Color.exAccent : Color.exTextMuted).padding(.top, 2)
             }.padding(14)
         }
         .frame(width: ringSize, height: ringSize)
@@ -212,27 +219,30 @@ struct TodayNutritionCard: View {
 
     static func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0))) }
 
-    /// What's left of a target, or how far past it, as the ring says it:
-    /// ("57", "left") until a whole unit over, then ("12", "over").
+    /// What's left of a target, or how far past it, signed, as the ring
+    /// says it: ("57", "left") until a whole unit over, then ("+12", "over").
     static func left(_ progress: NutrientProgress) -> (amount: String, words: String, over: Bool) {
         let over = (progress.over ?? 0).rounded() > 0
-        return (number(over ? progress.over ?? 0 : progress.remaining ?? 0), over ? "over" : "left", over)
+        return (over ? "+" + number(progress.over ?? 0) : number(progress.remaining ?? 0), over ? "over" : "left", over)
     }
 }
 
 /// A macro as the ring reads calories: what's left first, or how far over,
-/// then what's eaten of the target.
+/// then what's eaten of the target; or the other way round with `eaten`.
 struct TodayMacroLine: View {
     let title: String
     let progress: NutrientProgress
     let color: Color
+    var eaten = false
 
     var body: some View {
         let left = TodayNutritionCard.left(progress)
-        let eaten = TodayNutritionCard.number(progress.consumed), target = TodayNutritionCard.number(progress.target ?? 0)
+        let consumed = TodayNutritionCard.number(progress.consumed), target = TodayNutritionCard.number(progress.target ?? 0)
         let name = Text(title).font(.exLabel).foregroundStyle(Color.exTextSecondary)
-        let amount = Text(left.amount).font(.exStatSmall).foregroundStyle(left.over ? Color.exAccent : Color.exTextPrimary)
-        let words = Text(" g \(left.words)").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+        let amount = Text(eaten ? consumed : left.amount).font(.exStatSmall)
+            .foregroundStyle(left.over && !eaten ? Color.exAccent : Color.exTextPrimary)
+        let words = Text(eaten ? " of \(target) g" : " g \(left.words)").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+        let leftText = "\(left.amount) grams \(left.words)", eatenText = "\(consumed) of \(target) grams eaten"
         VStack(alignment: .leading, spacing: 4) {
             // One line where it fits; at the largest sizes on a small phone, one under the other.
             ViewThatFits(in: .horizontal) {
@@ -240,11 +250,12 @@ struct TodayMacroLine: View {
                 VStack(alignment: .leading, spacing: 2) { name; Text("\(amount)\(words)").monospacedDigit() }
             }
             ExProgressBar(value: progress.consumed, total: progress.target ?? 0, color: color)
-            Text("\(eaten) / \(target) g").font(.exSmall).monospacedDigit().foregroundStyle(Color.exTextMuted)
+            Text(eaten ? "\(left.amount) g \(left.words)" : "\(consumed) / \(target) g").font(.exSmall).monospacedDigit()
+                .foregroundStyle(left.over && eaten ? Color.exAccent : Color.exTextMuted)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue("\(left.amount) grams \(left.words), \(eaten) of \(target) grams eaten")
+        .accessibilityValue(eaten ? "\(eatenText), \(leftText)" : "\(leftText), \(eatenText)")
         .accessibilityIdentifier("today.macro.\(title.lowercased())")
     }
 }

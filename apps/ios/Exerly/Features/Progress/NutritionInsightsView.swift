@@ -98,7 +98,7 @@ private struct NutritionInsightsContent: View {
 
     /// The span, how many of its days count, and why the rest don't.
     private func coverage(_ series: IntakeSeries, store: NutritionStore, today: LocalDate) -> some View {
-        let fasts = series.days.filter { $0.counted && $0.status == .fasting }.count
+        let fasts = series.fastedDays
         var reasons: [String] = []
         if series.partialDays > 0 { reasons.append("\(series.partialDays) partial") }
         if series.emptyDays > 0 { reasons.append("\(series.emptyDays) not logged") }

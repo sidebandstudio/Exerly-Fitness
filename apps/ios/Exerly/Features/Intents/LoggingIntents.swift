@@ -190,6 +190,23 @@ struct LogWeightIntent: AppIntent {
     }
 }
 
+struct LogWaterIntent: AppIntent {
+    static let title: LocalizedStringResource = "Log water"
+    static let description = IntentDescription("Adds water to today: a glass, or the amount you give in the units you use in Exerly.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "Amount", description: "In millilitres or fluid ounces, as you use in Exerly. Leave empty for a glass.")
+    var amount: Double?
+
+    static var parameterSummary: some ParameterSummary { Summary("Log water") { \.$amount } }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let text = try await LoggingActions.logWater(amount)
+        return .result(dialog: "\(text)")
+    }
+}
+
 struct CaloriesLeftIntent: AppIntent {
     static let title: LocalizedStringResource = "Calories left"
     static let description = IntentDescription("Tells you what you've eaten today, what's left of your target, and your protein.")
@@ -221,6 +238,11 @@ struct ExerlyShortcuts: AppShortcutsProvider {
             "Record my weight in \(.applicationName)",
             "Log a weigh-in in \(.applicationName)",
         ], shortTitle: "Log weight", systemImageName: "scalemass.fill")
+        AppShortcut(intent: LogWaterIntent(), phrases: [
+            "Log water in \(.applicationName)",
+            "Log a glass of water in \(.applicationName)",
+            "Add water in \(.applicationName)",
+        ], shortTitle: "Log water", systemImageName: "drop.fill")
         AppShortcut(intent: CaloriesLeftIntent(), phrases: [
             "How many calories do I have left in \(.applicationName)",
             "Calories left in \(.applicationName)",

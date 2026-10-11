@@ -1335,6 +1335,39 @@ final class ProductionTests: XCTestCase {
         XCTAssertNil(TrendResponseDTO.savedWeights([], from: "2026-08-01", to: "2026-08-07").summary)
     }
 
+    func testWaterComesOffDownToZeroAndTheLogWaterShortcutUsesTheSameQueue() async throws {
+        let token = "e30.eyJzdWIiOiJhIn0.fixture"
+        keychain.saveSession(token: token, refreshToken: "fixture-refresh")
+        StubURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self), configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false, observeClock: false)
+        let user = UserDTO(id: "a", email: "a@exerly.test", timezone: "UTC", unitSystem: "metric", waterGoalMl: 2000)
+        defaults.set(try JSONEncoder().encode(user), forKey: APIClient.accountCacheKey(token))
+        func log(_ amount: Double?, token: String? = token) async throws -> String {
+            try await LoggingActions.logWater(amount, sync: engine, container: container, token: token, defaults: defaults)
+        }
+        // With no screen open, the shortcut opens the signed-in account's queue.
+        XCTAssertFalse(engine.isConfigured(for: "a"))
+        let glass = try await log(nil)
+        XCTAssertEqual(glass, "Logged 250 ml of water. 250 ml today, 1,750 ml to go.")
+        XCTAssertTrue(engine.isConfigured(for: "a"))
+        let bottle = try await log(500)
+        XCTAssertEqual(bottle, "Logged 500 ml of water. 750 ml today, 1,250 ml to go.")
+        // Taking off more than the day has stops at zero and queues only what was there.
+        let day = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(try engine.addWater(XCTUnwrap(day.water), milliliters: -1000), -750)
+        let emptied = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(emptied.waterMl, 0)
+        XCTAssertThrowsError(try engine.addWater(XCTUnwrap(emptied.water), milliliters: -250), "Nothing left to take off")
+        let deltas = try ModelContext(container).fetch(FetchDescriptor<PendingMutation>())
+            .compactMap { try JSONSerialization.jsonObject(with: $0.payload) as? [String: Any] }.compactMap { $0["deltaMl"] as? Int }
+        XCTAssertEqual(deltas.sorted(), [-750, 250, 500])
+        do { _ = try await log(9000); XCTFail("Too much at once") } catch {
+            XCTAssertEqual(error as? LoggingIntentError, .invalid("Enter a whole number from 1 to 5,000 ml."))
+        }
+        do { _ = try await log(nil, token: nil); XCTFail("Signed out") } catch { XCTAssertEqual(error as? LoggingIntentError, .signedOut) }
+    }
+
     func testWaterAdditionsSurviveLostAcknowledgementRelaunchAndAnotherDevice() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let url = FileManager.default.temporaryDirectory.appending(path: "water-\(UUID().uuidString).store")

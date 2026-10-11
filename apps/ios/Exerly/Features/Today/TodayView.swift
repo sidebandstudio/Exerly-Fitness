@@ -19,7 +19,8 @@ struct TodayHostView: View {
             if let workspace = account.training, workspace.accountID == accountID,
                let api = auth.accountAPI, api.accountID == accountID {
                 TodayView(workspace: workspace, api: api, unit: unit, timeZone: timeZone, link: $link, reselected: reselected,
-                          entered: entered, showTraining: showTraining)
+                          entered: entered, leadsWithEaten: auth.currentUser?.leadsWithEaten ?? false,
+                          waterGoal: auth.currentUser?.waterGoalMl, showTraining: showTraining)
                     .id(workspace.identity)
             } else if account.openingError != nil {
                 ContentUnavailableView {
@@ -50,6 +51,10 @@ struct TodayView: View {
     /// its top with the day strip in view, as Profile does. Run 6 came back
     /// from logging to a screen scrolled past the strip.
     let entered: Int
+    /// From Your details: the ring and macros lead with what's eaten.
+    let leadsWithEaten: Bool
+    /// The daily water goal in millilitres, from Your details.
+    let waterGoal: Int?
     let showTraining: () -> Void
     @State private var date: LocalDate
     @State private var scroll = ScrollPosition(edge: .top)
@@ -73,6 +78,10 @@ struct TodayView: View {
     /// Foods chosen to copy or move together; nil when not choosing.
     @State private var selection: Set<UUID>?
     @State private var backgrounded = false
+    /// The cards' order and which are hidden, for this account (TodayLayout).
+    @AppStorage private var layoutText: String
+    /// Food along the hours instead of by meal, for this account.
+    @AppStorage private var byTime: Bool
     @StateObject private var actions: NutritionDiaryActions
     @EnvironmentObject private var dailySync: SyncEngine
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -90,6 +99,8 @@ struct TodayView: View {
             case moveBack([FoodEntry])
             /// Suggests a hidden food again, where its chip was.
             case unhide(FoodSuggestion, Int)
+            /// Takes back a change to a day's water, in millilitres.
+            case water(LocalDate, Int)
         }
         let id = UUID()
         let message: String
@@ -99,7 +110,7 @@ struct TodayView: View {
 
     enum Destination: Identifiable {
         case date, add(String), scan(String), quick(String), edit(FoodEntry), log(FoodSuggestion),
-             notes, copy(String?), recipe(String), nutrients, weighIn, entries(TodayEntriesDestination.Action)
+             notes, copy(String?), recipe(String), nutrients, weighIn, entries(TodayEntriesDestination.Action), customize
         var id: String {
             switch self {
             case .date: "date"
@@ -114,12 +125,14 @@ struct TodayView: View {
             case .nutrients: "nutrients"
             case .weighIn: "weighIn"
             case .entries(let action): "entries-\(action)"
+            case .customize: "customize"
             }
         }
     }
 
     init(workspace: TrainingWorkspace, api: AccountAPI, unit: MassUnit, timeZone: TimeZone, link: Binding<URL?>,
-         reselected: Int = 0, entered: Int = 0, showTraining: @escaping () -> Void) {
+         reselected: Int = 0, entered: Int = 0, leadsWithEaten: Bool = false, waterGoal: Int? = nil,
+         showTraining: @escaping () -> Void) {
         self.workspace = workspace
         self.api = api
         self.unit = unit
@@ -127,7 +140,11 @@ struct TodayView: View {
         _link = link
         self.reselected = reselected
         self.entered = entered
+        self.leadsWithEaten = leadsWithEaten
+        self.waterGoal = waterGoal
         self.showTraining = showTraining
+        _layoutText = AppStorage(wrappedValue: "", TodayLayout.key(accountID: workspace.accountID))
+        _byTime = AppStorage(wrappedValue: false, "today.byTime.v1.\(workspace.accountID)")
         _date = State(initialValue: LocalDate(Date(), in: timeZone))
         _openedOn = State(initialValue: LocalDate(Date(), in: timeZone))
         _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
@@ -137,6 +154,7 @@ struct TodayView: View {
     private var today: LocalDate { LocalDate(Date(), in: timeZone) }
     private var isToday: Bool { date == today }
     private var currentMeal: String { store.suggestedMeal(at: .now, timeZone: timeZone) }
+    private var layout: TodayLayout { TodayLayout(layoutText) }
 
     var body: some View {
         ScrollView {
@@ -157,21 +175,17 @@ struct TodayView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Review changes")
                 }
-                // The logging tools first: under the ring, a check-in or a pinned
-                // nutrient put them behind an SE's tab bar (run 6).
-                quickActions
-                checkInBanner
-                TodayNutritionCard(progress: store.progress(on: date), onSetTargets: date < today ? nil : { showsTargets = true },
-                                   pinned: store.nutrientDays(store.pinnedNutrients(today: today), on: date)) { showsGoals = true }
-                if isToday { suggestions }
-                if let error = actions.error {
-                    Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
+                // The cards in the person's order. By default the logging tools come
+                // first: under the ring, a check-in or a pinned nutrient put them
+                // behind an SE's tab bar (run 6). "Log again" follows the ring, or
+                // the shortcuts when the ring is hidden.
+                let visible = layout.visible
+                let logAgainAfter = visible.first { $0 == .nutrition } ?? visible.first { $0 == .quickActions }
+                if logAgainAfter == nil { logAgain }
+                ForEach(visible) { card in
+                    self.card(card)
+                    if card == logAgainAfter { logAgain }
                 }
-                training
-                if isToday {
-                    WeightTrendCard(workspace: workspace, unit: unit, timeZone: timeZone) { destination = .weighIn }
-                }
-                meals
                 dayFooter
             }
             .frame(maxWidth: 700, alignment: .leading)
@@ -180,6 +194,7 @@ struct TodayView: View {
             .padding(.top, ExSpacing.small)
             .padding(.bottom, ExSpacing.major)
         }
+        .animation(.snappy, value: layoutText)
         .scrollPosition($scroll)
         .scrollIndicators(.hidden)
         .exScrollEdges()
@@ -193,6 +208,7 @@ struct TodayView: View {
                 Button("Choose a date", systemImage: "calendar") { destination = .date }
                     .accessibilityIdentifier("today.chooseDate")
             }
+            ToolbarItem(placement: .topBarTrailing) { dayMenu }
         }
         // Below the meals, not over them, so the last foods can be chosen too (run 6).
         .exFooter {
@@ -290,10 +306,74 @@ struct TodayView: View {
         return NutritionFormat.pickerDate(date, timeZone: timeZone).formatted(style)
     }
 
+    /// The date, and the day's status once it has one.
     private var subtitle: String {
         var style = Date.FormatStyle.dateTime.month(.wide).day()
         style.timeZone = timeZone
-        return NutritionFormat.pickerDate(date, timeZone: timeZone).formatted(style)
+        let status = store.day(date).status
+        let day = NutritionFormat.pickerDate(date, timeZone: timeZone).formatted(style)
+        return status == .unlogged ? day : "\(day) · \(NutritionFormat.status(status))"
+    }
+
+    /// The day's status and note, and Customize, from anywhere on the screen.
+    private var dayMenu: some View {
+        let day = store.day(date)
+        return Menu {
+            Section("This day") {
+                ForEach(DayStatus.allCases, id: \.self) { status in
+                    Button { setStatus(status) } label: {
+                        if day.status == status {
+                            Label(NutritionFormat.status(status), systemImage: "checkmark")
+                        } else { Text(NutritionFormat.status(status)) }
+                    }
+                    .accessibilityIdentifier("today.dayMenu.status.\(status.rawValue)")
+                }
+                Button(day.notes.isEmpty ? "Add a note" : "Edit note", systemImage: "square.and.pencil") { destination = .notes }
+                    .accessibilityIdentifier("today.dayMenu.note")
+            }
+            Section {
+                Button("Customize Today", systemImage: "slider.horizontal.3") { destination = .customize }
+                    .accessibilityIdentifier("today.dayMenu.customize")
+            }
+        } label: {
+            Label("Day options", systemImage: "ellipsis")
+        }
+        .accessibilityIdentifier("today.dayMenu")
+    }
+
+    // MARK: Cards
+
+    @ViewBuilder private func card(_ card: TodayLayout.Card) -> some View {
+        switch card {
+        case .quickActions: quickActions
+        case .nutrition:
+            checkInBanner
+            TodayNutritionCard(progress: store.progress(on: date), leadsWithEaten: leadsWithEaten,
+                               onSetTargets: date < today ? nil : { showsTargets = true },
+                               pinned: store.nutrientDays(store.pinnedNutrients(today: today), on: date)) { showsGoals = true }
+        case .training: training
+        case .weight:
+            if isToday {
+                WeightTrendCard(workspace: workspace, unit: unit, timeZone: timeZone) { destination = .weighIn }
+            }
+        case .water:
+            // Water is logged on the day it's drunk, so not ahead.
+            if date <= today {
+                TodayWaterCard(date: date, store: store, imperial: unit == .pounds, goal: waterGoal) { change in
+                    let amount = WaterDisplay.amount(abs(change), imperial: unit == .pounds)
+                    show(change > 0 ? "Added \(amount) of water" : "Removed \(amount) of water", undo: .water(date, change))
+                } failed: { show($0, failed: true) }
+            }
+        case .meals: meals
+        }
+    }
+
+    /// Usual foods to log again, today only, and any logging error.
+    @ViewBuilder private var logAgain: some View {
+        if isToday { suggestions }
+        if let error = actions.error {
+            Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
+        }
     }
 
     // MARK: Logging
@@ -488,6 +568,13 @@ struct TodayView: View {
                 }
                 Task { await workspace.synchronize() }
             } catch { show("Could not undo. Find it in Food library to suggest it again.", failed: true) }
+        case .water(let day, let change):
+            do {
+                // The day's water is saved by then, so this takes the change back from it.
+                try dailySync.addWater(WaterDayDTO(entry_date: day.description, ml: 0, revision: 0), milliliters: -change)
+                withAnimation(.snappy) { self.toast = nil }
+                UIAccessibility.post(notification: .announcement, argument: change > 0 ? "Water removed" : "Water added back")
+            } catch { show("Could not undo. Your water is as it was.", failed: true) }
         case nil: break
         }
     }
@@ -496,6 +583,7 @@ struct TodayView: View {
         switch undo {
         case .restoreDeleted: "nutrition.undoDelete"
         case .removeWeight: "today.undoWeighIn"
+        case .water: "today.undoWater"
         default: "today.undo"
         }
     }
@@ -605,7 +693,7 @@ struct TodayView: View {
             let header = typeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
             header {
-                Text("Meals").font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
+                grouping
                 if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
                 if !entries.isEmpty {
                     Button(selection == nil ? "Select" : "Done") {
@@ -624,32 +712,68 @@ struct TodayView: View {
                     .accessibilityIdentifier("today.repeatDay")
                 }
             }
-            ForEach(names, id: \.self) { meal in
-                let logged = entries.filter { $0.meal == meal }
-                TodayMealCard(meal: meal, entries: logged, energy: byMeal[meal]?.energy ?? 0,
-                              repeatable: logged.isEmpty ? store.repeatable(meal, for: date) : nil,
-                              recipes: logged.isEmpty ? store.recipes(for: meal, through: date).prefix(2).compactMap {
-                                  store.quickPortion(for: $0, unit: unit)
-                              } : [],
-                              timeZone: timeZone, unit: unit, selection: selection) {
-                    actions.clearError()
-                    destination = .add(meal)
-                } edit: { entry in
-                    if selection != nil {
-                        selection?.formSymmetricDifference([entry.id])
-                    } else {
+            if byTime {
+                TodayTimelineView(timeline: store.timeline(on: date, timeZone: timeZone), timeZone: timeZone, unit: unit,
+                                  selection: selection) { entry in choose(entry) }
+            } else {
+                ForEach(names, id: \.self) { meal in
+                    let logged = entries.filter { $0.meal == meal }
+                    TodayMealCard(meal: meal, entries: logged, energy: byMeal[meal]?.energy ?? 0,
+                                  repeatable: logged.isEmpty ? store.repeatable(meal, for: date) : nil,
+                                  recipes: logged.isEmpty ? store.recipes(for: meal, through: date).prefix(2).compactMap {
+                                      store.quickPortion(for: $0, unit: unit)
+                                  } : [],
+                                  timeZone: timeZone, unit: unit, selection: selection) {
                         actions.clearError()
-                        destination = .edit(entry)
+                        destination = .add(meal)
+                    } edit: { entry in
+                        choose(entry)
+                    } repeatMeal: { repeated in
+                        apply(repeated)
+                    } logRecipe: { portion in
+                        log(portion, to: meal)
+                    } copy: { destination = .copy(meal) } saveAsRecipe: { destination = .recipe(meal) } select: {
+                        withAnimation(.snappy) { selection = Set(logged.map(\.id)) }
                     }
-                } repeatMeal: { repeated in
-                    apply(repeated)
-                } logRecipe: { portion in
-                    log(portion, to: meal)
-                } copy: { destination = .copy(meal) } saveAsRecipe: { destination = .recipe(meal) } select: {
-                    withAnimation(.snappy) { selection = Set(logged.map(\.id)) }
                 }
             }
         }
+    }
+
+    /// A tap on a food: chooses it while choosing, else opens it.
+    private func choose(_ entry: FoodEntry) {
+        if selection != nil {
+            selection?.formSymmetricDifference([entry.id])
+        } else {
+            actions.clearError()
+            destination = .edit(entry)
+        }
+    }
+
+    /// Meals or By time: how the day's food is grouped.
+    private var grouping: some View {
+        HStack(spacing: 2) {
+            ForEach([false, true], id: \.self) { timed in
+                let chosen = byTime == timed
+                Button {
+                    withAnimation(.snappy) { byTime = timed }
+                    UISelectionFeedbackGenerator().selectionChanged()
+                } label: {
+                    Text(timed ? "By time" : "Meals").font(.exLabel.weight(.semibold))
+                        .foregroundStyle(chosen ? Color.white : Color.exTextSecondary)
+                        .padding(.horizontal, ExSpacing.item).frame(minHeight: 34)
+                        .background(chosen ? Color.exActionFill : .clear, in: Capsule())
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(timed ? "Food by time" : "Food by meal")
+                .accessibilityAddTraits(chosen ? [.isSelected, .isHeader] : [])
+                .accessibilityIdentifier(timed ? "today.grouping.time" : "today.grouping.meals")
+            }
+        }
+        .padding(.horizontal, 3)
+        .background(Color.exSurface2, in: Capsule())
+        .fixedSize()
     }
 
     private var mealNames: [String] {
@@ -803,7 +927,7 @@ struct TodayView: View {
 
     @ViewBuilder private func sheet(_ destination: Destination) -> some View {
         switch destination {
-        case .date: NutritionDateView(date: $date, timeZone: timeZone)
+        case .date: NutritionDateView(date: $date, store: store, timeZone: timeZone)
         case .add(let meal):
             NutritionFoodPicker(workspace: workspace, api: api, date: date, meal: meal,
                                 timeZone: timeZone, unit: unit, actions: actions) {}
@@ -845,6 +969,8 @@ struct TodayView: View {
             WeighInSheet(workspace: workspace, unit: unit, timeZone: timeZone) { entry in
                 show("Weighed in at \(BodyFormat.reading(entry.weight, unit))", undo: .removeWeight(entry.id))
             }
+        case .customize:
+            TodayCustomizeView(layout: Binding(get: { layout }, set: { layoutText = $0.text }))
         case .entries(let action):
             let chosen = store.entries(on: date).filter { selection?.contains($0.id) == true }
             TodayEntriesDestination(action: action, count: chosen.count, source: date, today: today, meals: mealNames,
