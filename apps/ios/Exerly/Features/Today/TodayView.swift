@@ -8,6 +8,8 @@ struct TodayHostView: View {
     @Binding var link: URL?
     /// Taps on the Today tab while it shows.
     var reselected = 0
+    /// Returns to the Today tab from another one.
+    var entered = 0
     let showTraining: () -> Void
     @EnvironmentObject private var account: AppAccountWorkspace
     @EnvironmentObject private var auth: AuthViewModel
@@ -17,7 +19,7 @@ struct TodayHostView: View {
             if let workspace = account.training, workspace.accountID == accountID,
                let api = auth.accountAPI, api.accountID == accountID {
                 TodayView(workspace: workspace, api: api, unit: unit, timeZone: timeZone, link: $link, reselected: reselected,
-                          showTraining: showTraining)
+                          entered: entered, showTraining: showTraining)
                     .id(workspace.identity)
             } else if account.openingError != nil {
                 ContentUnavailableView {
@@ -44,6 +46,10 @@ struct TodayView: View {
     @Binding var link: URL?
     /// Taps on the Today tab while it shows: each returns to today, at the top.
     let reselected: Int
+    /// Returns from another tab: the day stays, and the screen starts from
+    /// its top with the day strip in view, as Profile does. Run 6 came back
+    /// from logging to a screen scrolled past the strip.
+    let entered: Int
     let showTraining: () -> Void
     @State private var date: LocalDate
     @State private var scroll = ScrollPosition(edge: .top)
@@ -113,13 +119,14 @@ struct TodayView: View {
     }
 
     init(workspace: TrainingWorkspace, api: AccountAPI, unit: MassUnit, timeZone: TimeZone, link: Binding<URL?>,
-         reselected: Int = 0, showTraining: @escaping () -> Void) {
+         reselected: Int = 0, entered: Int = 0, showTraining: @escaping () -> Void) {
         self.workspace = workspace
         self.api = api
         self.unit = unit
         self.timeZone = timeZone
         _link = link
         self.reselected = reselected
+        self.entered = entered
         self.showTraining = showTraining
         _date = State(initialValue: LocalDate(Date(), in: timeZone))
         _openedOn = State(initialValue: LocalDate(Date(), in: timeZone))
@@ -150,10 +157,12 @@ struct TodayView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Review changes")
                 }
+                // The logging tools first: under the ring, a check-in or a pinned
+                // nutrient put them behind an SE's tab bar (run 6).
+                quickActions
                 checkInBanner
                 TodayNutritionCard(progress: store.progress(on: date), onSetTargets: date < today ? nil : { showsTargets = true },
                                    pinned: store.nutrientDays(store.pinnedNutrients(today: today), on: date)) { showsGoals = true }
-                quickActions
                 if isToday { suggestions }
                 if let error = actions.error {
                     Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
@@ -185,11 +194,13 @@ struct TodayView: View {
                     .accessibilityIdentifier("today.chooseDate")
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        // Below the meals, not over them, so the last foods can be chosen too (run 6).
+        .exFooter {
             if let selection {
                 TodaySelectionBar(count: selection.count) { destination = .entries(.copy) } move: { destination = .entries(.move) } close: {
                     withAnimation(.snappy) { self.selection = nil }
                 }
+                    .background(Color.exBackground)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -236,6 +247,7 @@ struct TodayView: View {
             date = today
             withAnimation(.snappy) { scroll.scrollTo(edge: .top) }
         }
+        .onChange(of: entered) { withAnimation(.snappy) { scroll.scrollTo(edge: .top) } }
         .task(id: link) { openLink() }
         .task(id: planKey) { plan = isToday ? workspace.nextWorkout(bodyweight: bodyweight, unit: unit) : nil }
         .onChange(of: scenePhase) { _, phase in
@@ -807,7 +819,8 @@ struct TodayView: View {
         case .log(let suggestion):
             NutritionEntryEditor(workspace: workspace,
                                  food: store.food(suggestion.food.foodID) ?? suggestion.food.foodForLogging(serving: suggestion.serving),
-                                 date: date, meal: currentMeal, timeZone: timeZone, unit: unit, actions: actions) { _ in }
+                                 date: date, meal: currentMeal, timeZone: timeZone, unit: unit, actions: actions,
+                                 onHide: { hide(suggestion) }) { _ in }
         case .notes: NutritionDayNotesView(workspace: workspace, date: date, timeZone: timeZone)
         case .copy(let meal): NutritionCopyView(workspace: workspace, source: date, meal: meal, timeZone: timeZone)
         case .recipe(let meal):

@@ -9,6 +9,9 @@ struct NutritionEntryEditor: View {
     let timeZone: TimeZone
     let unit: MassUnit
     let editing: FoodEntry?
+    /// "Don't suggest this", for a food offered as usual or recent; the
+    /// screen it came from hides it, with Undo.
+    let onHide: (() -> Void)?
     let onSaved: (FoodEntry) -> Void
     @ObservedObject var actions: NutritionDiaryActions
     @StateObject private var draft: NutritionEntryDraft
@@ -30,12 +33,13 @@ struct NutritionEntryEditor: View {
     /// instead of the last amount logged.
     init(workspace: TrainingWorkspace, food: ExerlyCore.Food, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, editing: FoodEntry? = nil,
-         start: LoggedAmount? = nil, onSaved: @escaping (FoodEntry) -> Void) {
+         start: LoggedAmount? = nil, onHide: (() -> Void)? = nil, onSaved: @escaping (FoodEntry) -> Void) {
         self.workspace = workspace
         self.timeZone = timeZone
         self.unit = unit
         self.actions = actions
         self.editing = editing
+        self.onHide = onHide
         self.onSaved = onSaved
         _libraryActions = StateObject(wrappedValue: NutritionLibraryActions(store: workspace.nutrition))
         _draft = StateObject(wrappedValue: NutritionEntryDraft(store: workspace.nutrition, food: food,
@@ -94,7 +98,7 @@ struct NutritionEntryEditor: View {
                     errorsFocused = true
                 }
             }
-            .safeAreaInset(edge: .bottom) { logButton }
+            .exFooter { logButton }
             .navigationTitle(editing == nil ? "Log food" : "Food entry").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -104,6 +108,17 @@ struct NutritionEntryEditor: View {
                     }.accessibilityIdentifier("nutrition.cancelEntry")
                 }
                 ToolbarItem(placement: .primaryAction) { favoriteButton }
+                if let onHide, editing == nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu("More", systemImage: "ellipsis") {
+                            Button("Don't suggest this", systemImage: "eye.slash") {
+                                typing = false
+                                dismiss()
+                                onHide()
+                            }.accessibilityIdentifier("nutrition.entryHideSuggestion")
+                        }.accessibilityIdentifier("nutrition.entryMore")
+                    }
+                }
                 if editing != nil {
                     // Up here rather than under the nutrients, where it took three swipes to reach.
                     ToolbarItem(placement: .primaryAction) {

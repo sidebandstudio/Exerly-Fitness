@@ -35,11 +35,12 @@ enum IntakeFormat {
         }
     }
 
-    /// Whole numbers from 10, a decimal from 1, two below.
-    static func number(_ value: Double, _ unit: Nutrient.Unit) -> String {
-        let magnitude = abs(value)
-        let digits = unit == .kilocalories || magnitude >= 10 ? 0...0 : magnitude >= 1 ? 0...1 : 0...2
-        return value.formatted(.number.precision(.fractionLength(digits)))
+    /// Whole numbers from 10, a decimal from 1, two below. With `like`, as
+    /// many decimals as that figure shows too, so two read side by side add
+    /// up: "32.9 / 35 g" beside "2.1 g to go", not "33 / 35 g".
+    static func number(_ value: Double, _ unit: Nutrient.Unit, like other: Double? = nil) -> String {
+        func decimals(_ value: Double) -> Int { unit == .kilocalories || abs(value) >= 10 ? 0 : abs(value) >= 1 ? 1 : 2 }
+        return value.formatted(.number.precision(.fractionLength(0...max(decimals(value), other.map(decimals) ?? 0))))
     }
 
     static func amount(_ value: Double, _ nutrient: Nutrient) -> String {
@@ -167,7 +168,7 @@ enum IntakeFormat {
         case .met(let left?): eaten + left
         case .met(nil): goal.target ?? goal.floor ?? goal.ceiling ?? eaten
         }
-        let text = number(eaten, day.nutrient.unit)
+        let text = number(eaten, day.nutrient.unit, like: standingParts(day)?.amount)
         return spoken ? "\(text) of \(spokenAmount(bound, day.nutrient)) eaten" : "\(text) / \(amount(bound, day.nutrient))"
     }
 

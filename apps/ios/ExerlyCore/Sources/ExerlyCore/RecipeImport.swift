@@ -242,7 +242,7 @@ public struct RecipeImport: Sendable, Hashable {
     }
 
     /// A name's words in the singular, in any order: "Black beans" is "beans black".
-    static func nameWords(_ name: String) -> Set<String> { Set(FoodSearch.words(name).map(Food.singular)) }
+    static func nameWords(_ name: String) -> Set<String> { Set(FoodSearch.words(name).map(FoodSearch.singular)) }
 }
 
 /// A recipe shared as a `.exerlyrecipe` file, for someone else to add a copy

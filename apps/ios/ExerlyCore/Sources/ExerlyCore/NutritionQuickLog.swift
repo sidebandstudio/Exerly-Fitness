@@ -119,8 +119,8 @@ extension NutritionStore {
 
 /// A food the person asked not to be suggested ("Don't suggest this"). It
 /// stays out of usual foods and Log again, and its recipes stay out of a
-/// meal's suggestions, until they let it back. Search and Recent still find
-/// it. One synced document per food, its ID the food's.
+/// meal's suggestions, and out of Add food's Recent, until they let it back.
+/// Search still finds it. One synced document per food, its ID the food's.
 public struct HiddenSuggestion: Sendable, Codable, Hashable, Identifiable {
     /// The food's ID.
     public var id: String

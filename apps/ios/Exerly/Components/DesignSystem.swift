@@ -39,10 +39,33 @@ struct ExScreen<Content: View>: View {
 }
 
 extension View {
+    /// Bars back onto the page's colour where content scrolls under them,
+    /// at the top as at the bottom. Under the soft edge, rows showed through
+    /// a title bar blurred, looking tappable when the bar took the tap (run 6).
     @ViewBuilder func exScrollEdges() -> some View {
         if #available(iOS 26, *) {
-            scrollEdgeEffectStyle(.hard, for: .bottom)
+            scrollEdgeEffectStyle(.hard, for: .all)
         } else { self }
+    }
+
+    /// A footer that stays put, such as a Log button or the rest timer, below
+    /// the scrolling content rather than over it. `safeAreaInset` insets the
+    /// content but still lays the scroll view out under the footer, where a
+    /// hidden row could be reached and its tap land on the footer (run 6).
+    /// Here the content ends at the footer's top and scrolls clear of it.
+    func exFooter<Footer: View>(@ViewBuilder _ footer: () -> Footer) -> some View {
+        VStack(spacing: 0) {
+            self
+            footer()
+        }
+    }
+
+    /// A floating confirmation's surface: opaque, so the list under it never
+    /// reads through, lifted off it by a border and a shadow.
+    func exToastSurface<S: InsettableShape>(_ shape: S) -> some View {
+        background(Color.exSurface2, in: shape)
+            .overlay { shape.strokeBorder(Color.exBorder.opacity(0.6), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
     }
 }
 

@@ -14,7 +14,8 @@ struct TodayWorkoutCard: View {
     let empty: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    private let shown = 5
+    /// Four, so Preview and Empty workout stay above an SE's tab bar (run 6).
+    private let shown = 4
 
     var body: some View {
         TrainingHeroSurface {

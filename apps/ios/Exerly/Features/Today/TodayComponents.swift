@@ -297,7 +297,8 @@ struct TodaySuggestionChip: View {
     var logged = false
     let open: () -> Void
     let log: () -> Void
-    /// "Don't suggest this", from a long press or VoiceOver's actions.
+    /// "Don't suggest this", from a long press, VoiceOver's actions or the
+    /// portion sheet's menu.
     let hide: () -> Void
 
     var body: some View {
@@ -332,7 +333,10 @@ struct TodaySuggestionChip: View {
         .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5) }
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // As on Add food's usual and recent foods: what the chip does, then Don't suggest this.
         .contextMenu {
+            Button(logged ? "Undo" : "Log \(portion)", systemImage: logged ? "arrow.uturn.backward" : "plus", action: log)
+            Button("Details", systemImage: "info.circle", action: open)
             Button("Don't suggest this", systemImage: "eye.slash", action: hide).accessibilityIdentifier("today.suggestion.hide")
         }
     }
@@ -354,21 +358,29 @@ struct TodayToast: View {
     var failed = false
     let undo: (() -> Void)?
     var undoIdentifier = "today.undo"
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        HStack(spacing: ExSpacing.item) {
-            Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(failed ? Color.exWarning : Color.exSuccess).accessibilityHidden(true)
-            Text(message).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(2)
-            Spacer(minLength: 0)
+        // At the largest sizes Undo goes under the message, as in Add food's toast.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+            : AnyLayout(HStackLayout(spacing: ExSpacing.item))
+        layout {
+            HStack(spacing: ExSpacing.item) {
+                Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(failed ? Color.exWarning : Color.exSuccess).accessibilityHidden(true)
+                Text(message).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+            }
+            if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
             if let undo {
-                Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
-                    .frame(minWidth: 44, minHeight: 44).accessibilityIdentifier(undoIdentifier)
+                // Padded as Add food's toast pads it, clear of the rounded edge.
+                Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).fixedSize()
+                    .padding(.horizontal, ExSpacing.item).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    .accessibilityIdentifier(undoIdentifier)
             }
         }
-        .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.small)
+        .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight).padding(.vertical, 4)
         .frame(minHeight: 52)
-        .glassEffect(.regular, in: Capsule())
+        .exToastSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .padding(.horizontal, ExSpacing.page)
         .accessibilityElement(children: .contain)
     }

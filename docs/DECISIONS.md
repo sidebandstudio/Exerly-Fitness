@@ -1089,3 +1089,147 @@ through AirDrop, Messages or Files. Not built: sharing a link from Safari's
 share sheet, which needs a share extension and an App Group to hand the URL
 over (still unregistered); people paste it, one tap with the system's Paste
 button.
+
+## 2026-10-11: One trend weight, and only one figure called "this week"
+
+Code-blind run 6 saw 160.0 lb and −0.5 lb this week on Today, 159.8 lb and
+−0.7 lb "a week" on Profile, the same with "this week" on Progress beside a
+"Weekly rate" of −0.57 lb, and the trend line dipping on its last day below
+the last two weigh-ins. Every screen reads `WeightTrend.summary` from the
+same estimates. Between the screenshots the tester moved yesterday's 522 kcal
+lunch to today, leaving yesterday complete at 989 kcal. With no weigh-in
+today, today's trend is a forecast, yesterday's moved by yesterday's logged
+balance: (989 − 1,861) / 7,700 kg, −0.25 lb instead of −0.10. Rebuilt from
+the realistic seed, the trend goes from 159.96 to 159.81 lb and the week
+from −0.55 to −0.70, exactly the screens' numbers. The trend sitting below
+160.6 and 160.7 is water: the seed adds +0.6 and +0.8 lb those days to true
+weights of 159.99 and 159.93. The model stays as it is.
+
+The labels were the fault. "This week" now names only the summary's
+seven-day change, worded by one function for Today, Profile, Progress and
+Siri, with "Steady this week" when it rounds to zero. Progress's rate over
+the chosen span is "Average, a week". A span now covers its full length, so
+1W's change is this week's instead of six days'.
+
+## 2026-10-11: The driver's screen text reads only the top layer
+
+Run 6 reported no screen-reader text for the Log food sheet, the "…" menu,
+New recipe, Choose foods, the Fiber goal and the workout summary. In
+`app.debugDescription` each is there and labelled, as a later child of the
+main window than the tabs, so the accessibility containers were not at fault.
+The driver listed every layer, the screen under a sheet first and the sheet
+last, so the sheet looked missing. VoiceOver reads only the top layer of a
+modal presentation, and the dump now does too.
+
+## 2026-10-11: Reminder times open in a popover
+
+In run 6 the tap that closed the weigh-in time also turned on meal
+reminders: the tester's tap fell outside the compact time picker's overlay,
+on the Meals row, and iOS 26 passed it on. The time is now a button showing
+it, which opens the same 5-minute wheels in a popover; a tap outside a
+popover only closes it.
+
+## 2026-10-11: Footers below the content, and the first screen on an SE
+
+Run 6 tapped "About this food", half hidden under the portion sheet's Log
+button on an iPhone SE, and logged the food. The brief asked for
+`safeAreaInset` rather than an overlay, but the sheet already used it:
+`safeAreaInset` insets the content yet still lays the scroll view out under
+the footer, where XCTest (and the run's driver) treat a half-covered row as
+visible and tap it, landing on the button. Every sticky footer (the portion
+sheet, Choose foods, Log a meal, Quick add, the weigh-in, the plan editor,
+gyms, plan setup and onboarding) and both floating bars (the rest timer and
+Today's Copy and Move) now sit below the scroll view (`exFooter`): the content
+ends at their top and scrolls clear of them, and nothing is under them.
+
+The run also read the tab bar as covering content. Every tab already scrolls
+its content clear of the tab bar; what it saw was the first screen's fold
+falling across controls, and rows blurred under title bars that took their
+taps. Bars now back onto the page's colour at the top as at the bottom (the
+hard scroll edge Progress used), on Today, Profile and every screen built on
+`ExScreen`, `ExList` or `ExForm`. On an SE's first screen:
+
+- Today's Search, Scan, Quick add and Weigh in come right under the week
+  strip. Under the ring, a check-in or a pinned nutrient pushed them under
+  the tab bar. The ring is still on the first screen.
+- Profile's Goals and reminders sit above Your plan, so Nutrient goals and
+  Reminders are on the first screen, as the 2026-10-10 entry meant them to be.
+- Train's workout card lists four exercises, so Preview and Empty workout show.
+- The Apple Health offer sits under the weight chart rather than above it,
+  and the chart is 30 points shorter, so its legend shows too.
+
+## 2026-10-11: Hide a suggestion where it's suggested
+
+Run 6 couldn't stop a food being suggested. It long-pressed a food in Add
+food's Recent and got its portion sheet, then swiped one and got the sheet
+again. Only usual foods had the menu, so on a recent food a long press was a
+slow tap on the row's button, and a swipe that ended inside that full-width
+button counted as a tap too. Now every usual and recent food in Add food, and
+every Log again chip on Today, has a menu on a long press: Log (Undo once
+logged), Details and Don't suggest this. Add food's rows also take a swipe
+left, which uncovers Hide; a long swipe hides at once. SwiftUI's
+`swipeActions` work only in a List, and these rows are in the screen's scroll
+view, so the swipe is a sideways-only pan that never starts on a vertical drag
+and, once started, keeps the row's button from taking the touch. The portion
+sheet opened from one of these foods, or from a chip, has Don't suggest this
+in its "…" menu. Each has Undo.
+
+A hidden food now leaves Add food's Recent too. The 2026-10-10 entry kept it
+there, but hiding a recent food that then stays put looks like nothing
+happened. Search, Favorites and My foods still find it, and Food library lists
+it with Suggest again.
+
+## 2026-10-11: Today and Log food start fresh when entered from another tab
+
+Run 6 came back to Log food with its last search still typed and to Today
+scrolled past its week strip. Entered from another tab, Log food clears its
+search and picks the meal for now, and Today returns to its top, keeping the
+day it shows, as Profile already did. Re-tapping Today still also goes back to
+today.
+
+## 2026-10-11: A plain food before dishes named with it
+
+In code-blind run 6, "1 slice toast" listed Shrimp toast and French toast
+first under Food database. Generic foods rank by how directly the query
+names them (design 023), and no FNDDS food is called "Toast": toast is
+"Bread, white, toasted". A part of a name in the query's "-ed" form now
+names it as the word does, the way "Fish, salmon" names salmon, so toasted
+breads come before Shrimp, French and Melba toast, whose names add words. Of
+99 common searches only "toast" and "roast" changed in their first five.
+Among toasted breads the order is still by length (rye, soy, rice, white),
+since FNDDS has no popularity. Two other fixes were tried and dropped:
+matching "NFS", which design 023 calls plain but the code never matches,
+and counting "NS as to" as plain. They put "Chicken, meatless, NFS" first
+for chicken and a frozen spaghetti dinner first for spaghetti.
+
+The person's own foods rank by the same rule (`FoodSearch.names`): those
+the query names ("Eggs, scrambled" for eggs) first, then history before
+saved foods as before. Their own "Whole wheat toast" doesn't name plain
+toast, so it keeps its place by history, and it is listed above the
+database anyway.
+
+## 2026-10-11: Servings counted as named, and added where they're missing
+
+Run 6 typed "2 eggs" and "1 slice toast", and the person's own Eggs,
+scrambled and Whole wheat toast said "Choose amount": they have no
+servings, and their portion sheet offered only g and oz. Nothing is
+borrowed from a database food, since a raw egg's 50 g isn't the person's
+scrambled eggs, so the rules of "Amounts typed with the food in search"
+stand. Instead the missing serving is added once, where it's missed.
+
+- Every portion step (Log food, an ingredient's, Log a meal's) shows the
+  person's own food without a serving a chip after g and oz: "+ 1 slice"
+  when the search named one ("2 eggs" gives 1 egg), else "+ Serving". An
+  alert asks its weight in grams, as the food editor's servings do, saves
+  it with the food as an ordinary saved_food change, and picks it at the
+  count typed: 2 eggs, not 1. The next "1 slice toast" or "2 eggs" logs in
+  one tap. An alert rather than fields keeps the sheet as short as it was
+  on an iPhone SE. Database foods aren't offered it, as with Duplicate, and
+  recipes have their own servings.
+- A serving's leading number counts what it names. One slice of a label's
+  "2 slices (56g)" is 28 g, where "1 slice" logged all 56 g, and one slice
+  of USDA's "1/2 slice" is two of it. A measure before the name ("12 oz
+  can") isn't a count.
+- A typed serving word picks the plain serving ("1 slice") first, then the
+  regular size ("1 medium or regular slice"). "1 slice" of toasted rye had
+  picked "1 slice, crust not eaten", 13.5 g.

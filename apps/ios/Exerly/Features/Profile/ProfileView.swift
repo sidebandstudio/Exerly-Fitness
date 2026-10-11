@@ -1,8 +1,8 @@
 import ExerlyCore
 import SwiftUI
 
-/// The Profile tab: who you are and your body numbers, your plan, then
-/// everything else grouped by what you'd come here to do.
+/// The Profile tab: who you are and your body numbers, goals and reminders,
+/// your plan, then everything else grouped by what you'd come here to do.
 struct ProfileView: View {
     /// Changes each time the tab is entered from another one; the screen
     /// returns to its top, as tabs do.
@@ -34,6 +34,7 @@ struct ProfileView: View {
                 ProfileIdentityCard(name: user?.name?.isEmpty == false ? user?.name ?? "" : "Your profile",
                                     email: user?.email ?? "", workspace: workspace, user: user, unit: unit,
                                     timeZone: timeZone) { showEditProfile = true }
+                goalsAndReminders
                 NavigationLink {
                     TargetsHostView(accountID: accountID, unit: unit, timeZone: timeZone)
                 } label: {
@@ -44,7 +45,6 @@ struct ProfileView: View {
                 .accessibilityValue(ProfilePlanCard.spoken(workspace: workspace, timeZone: timeZone))
                 .accessibilityHint("Opens your calorie and macro targets")
                 .accessibilityIdentifier("profile.targets")
-                goalsAndReminders
                 food
                 connections
                 preferences
@@ -77,7 +77,8 @@ struct ProfileView: View {
 
     // MARK: Groups
 
-    /// Under the plan, where both are in reach without scrolling.
+    /// Above the plan, so both are in reach without scrolling on an SE too;
+    /// under it they sat behind the tab bar (run 6).
     private var goalsAndReminders: some View {
         ProfileSection(title: "Goals and reminders") {
             if let workspace {

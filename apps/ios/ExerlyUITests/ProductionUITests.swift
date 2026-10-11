@@ -3426,6 +3426,8 @@ final class ProductionUITests: ExerlyUITestCase {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         XCTAssertFalse(springboard.alerts.firstMatch.exists, "Loading saved reminder intent must not request OS permission")
         XCTAssertEqual(app.switches["reminders.sleep"].value as? String, "1", "Reminders show the account's saved choice")
+        // Below a small phone's fold once a reminder's time row shows.
+        reveal(app.switches["reminders.device"], in: app)
         XCTAssertEqual(app.switches["reminders.device"].value as? String, "0")
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -3466,8 +3468,9 @@ final class ProductionUITests: ExerlyUITestCase {
         app.terminate(); app.launchArguments = []; app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         openReminders(app)
-        XCTAssertEqual(app.switches["reminders.device"].value as? String, "0")
         XCTAssertEqual(app.switches["reminders.sleep"].value as? String, "1")
+        reveal(app.switches["reminders.device"], in: app)
+        XCTAssertEqual(app.switches["reminders.device"].value as? String, "0")
     }
 
     private func openReminders(_ app: XCUIApplication) {

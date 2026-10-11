@@ -103,7 +103,7 @@ enum LoggingActions {
         if store.weights.count > 1,
            let summary = WeightTrend.summary(BodyEstimates.shared.estimates(store, through: today), through: today) {
             text += " Trend \(BodyFormat.weight(summary.trend, unit))"
-            if let week = summary.weekChange { text += ", \(BodyFormat.spokenChange(week.kilograms, unit)) this week" }
+            if let week = summary.weekChange { text += ", \(BodyCopy.spokenWeekChange(week, unit))" }
             text += "."
         }
         return text

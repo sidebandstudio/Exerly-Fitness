@@ -259,32 +259,24 @@ private struct RemindersEditor: View {
     }
 
     private func timeRow(_ title: String, key: String, identifier: String) -> some View {
-        LabeledContent(title) {
-            ReminderTimePicker(time: Binding(
-                get: { ReminderClock.date(value(key)) ?? .now },
-                set: { set([key: ReminderClock.text($0)]) }
-            ))
-            .accessibilityIdentifier(identifier)
-        }
-        .font(.exBody)
+        ReminderTimeRow(title: title, identifier: identifier, time: Binding(
+            get: { ReminderClock.date(value(key)) ?? .now },
+            set: { set([key: ReminderClock.text($0)]) }
+        ))
     }
 
     @ViewBuilder private var mealRows: some View {
         let times = mealTimes
         ForEach(Array(times.enumerated()), id: \.offset) { index, time in
             HStack(spacing: ExSpacing.small) {
-                LabeledContent(mealName(time)) {
-                    ReminderTimePicker(time: Binding(
-                        get: { ReminderClock.date(time) ?? .now },
-                        set: { date in
-                            var next = times
-                            next[index] = ReminderClock.text(date)
-                            set([ReminderKind.meals.timeKey: next.joined(separator: "\n")])
-                        }
-                    ))
-                    .accessibilityIdentifier("reminders.meals.time.\(index)")
-                }
-                .font(.exBody)
+                ReminderTimeRow(title: mealName(time), identifier: "reminders.meals.time.\(index)", time: Binding(
+                    get: { ReminderClock.date(time) ?? .now },
+                    set: { date in
+                        var next = times
+                        next[index] = ReminderClock.text(date)
+                        set([ReminderKind.meals.timeKey: next.joined(separator: "\n")])
+                    }
+                ))
                 Button("Remove \(mealName(time)) reminder", systemImage: "minus.circle.fill") {
                     var next = times
                     next.remove(at: index)
@@ -405,17 +397,52 @@ private struct RemindersEditor: View {
     }
 }
 
-/// The system's compact time picker in 5-minute steps, which SwiftUI's
-/// DatePicker can't set: a reminder doesn't need the minute, and :30 is six
-/// steps of the wheel rather than thirty. A time saved off the step, such as
-/// 07:03 from another client, keeps 1-minute steps so it shows as it is.
+/// A reminder's time row: its name, and the time as the compact picker
+/// showed it. A tap anywhere on the row, as in Settings, opens the wheels in
+/// a popover at the time. The compact picker's own overlay let the tap that
+/// closed it through to the row under it, turning Meals on in run 6; a tap
+/// outside a popover only closes it.
+struct ReminderTimeRow: View {
+    let title: String
+    let identifier: String
+    @Binding var time: Date
+    @State private var choosing = false
+
+    var body: some View {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+        let shown = ReminderClock.display(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+        Button { choosing = true } label: {
+            LabeledContent {
+                Text(shown).font(.exBody).monospacedDigit()
+                    .foregroundStyle(choosing ? Color.exPrimaryText : Color.exTextPrimary)
+                    .padding(.horizontal, 12).frame(minHeight: 36)
+                    .background(Color.exSurface2, in: Capsule())
+                    .popover(isPresented: $choosing) {
+                        ReminderTimePicker(time: $time).padding(ExSpacing.small)
+                            .presentationCompactAdaptation(.popover)
+                    }
+            } label: {
+                Text(title).font(.exBody).foregroundStyle(Color.exTextPrimary)
+            }
+        }
+        .accessibilityLabel(title)
+        .accessibilityValue(shown)
+        .accessibilityHint("Opens the time")
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// The system's time wheels in 5-minute steps, which SwiftUI's DatePicker
+/// can't set: a reminder doesn't need the minute, and :30 is six steps of
+/// the wheel rather than thirty. A time saved off the step, such as 07:03
+/// from another client, keeps 1-minute steps so it shows as it is.
 struct ReminderTimePicker: UIViewRepresentable {
     @Binding var time: Date
 
     func makeUIView(context: Context) -> UIDatePicker {
         let picker = UIDatePicker()
         picker.datePickerMode = .time
-        picker.preferredDatePickerStyle = .compact
+        picker.preferredDatePickerStyle = .wheels
         picker.tintColor = UIColor(Color.exPrimaryText)
         picker.setContentHuggingPriority(.required, for: .horizontal)
         picker.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)

@@ -21,15 +21,17 @@ struct BodyWeightSection: View {
         let store = workspace.nutrition
         let estimates = BodyEstimates.shared.estimates(store, through: today)
         VStack(alignment: .leading, spacing: ExSpacing.page) {
-            HealthWeighInPrompt()
             if let summary = WeightTrend.summary(estimates, through: today) {
                 let start = range.start(today: today, first: estimates.first?.date)
                 let points = WeightTrend.series(estimates, from: start, through: today)
                 let readings = store.weights.filter { $0.date >= start && $0.date <= today }
                 trendCard(summary, estimates: estimates, points: points, readings: readings, start: start, today: today)
+                // Under the chart: above it, the offer pushed the chart off an SE's first screen (run 6).
+                HealthWeighInPrompt()
                 expenditureCard(summary.expenditure, points: points)
                 history(store.weights.reversed(), today: today)
             } else {
+                HealthWeighInPrompt()
                 ExEmptyState(icon: "scalemass", title: "No weigh-ins yet",
                              message: "Weigh in a few mornings a week. Exerly turns the readings into a trend weight, "
                                 + "then into your expenditure once you've logged food for a while.",
@@ -49,7 +51,8 @@ struct BodyWeightSection: View {
             if summary.weighInDays >= 2, points.count >= 2 {
                 let shown = range.phrase(start: start, firstShown: points.first?.date)
                 WeightTrendChart(points: points, readings: readings, unit: unit, range: range, selection: $selection)
-                    .frame(height: typeSize.isAccessibilitySize ? 280 : 230)
+                    // 200, so the legend under it is on an SE's first screen too (run 6).
+                    .frame(height: typeSize.isAccessibilitySize ? 280 : 200)
                     .accessibilityLabel("Weight trend, \(shown == range.phrase ? range.spoken : shown)")
                     .accessibilityValue(chartSummary(summary, points: points, readings: readings, shown: shown))
                     .accessibilityIdentifier("body.chart")
@@ -80,18 +83,18 @@ struct BodyWeightSection: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Trend weight \(BodyFormat.spokenWeight(trend, unit)), give or take "
-            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). \(readoutDetail(picked, summary: summary, today: today))")
+            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). \(readoutDetail(picked, summary: summary, today: today, spoken: true))")
         .accessibilityIdentifier("body.trend")
     }
 
-    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, today: LocalDate) -> String {
+    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, today: LocalDate, spoken: Bool = false) -> String {
         let store = workspace.nutrition
         if let picked {
             let day = BodyFormat.day(picked.date, today: today)
             return picked.reading.map { "\(day) · scale \(BodyFormat.weight($0, unit))" } ?? "\(day) · no weigh-in"
         }
         var parts: [String] = []
-        if let week = summary.weekChange { parts.append("\(BodyFormat.change(week.kilograms, unit)) this week") }
+        if let week = summary.weekChange { parts.append(spoken ? BodyCopy.spokenWeekChange(week, unit) : BodyCopy.weekChange(week, unit)) }
         if let last = store.weights.last {
             parts.append("last scale \(BodyFormat.reading(last.weight, unit)) \(BodyFormat.day(last.date, today: today).lowercased())")
         }
@@ -158,8 +161,9 @@ struct BodyWeightSection: View {
             stat("Change", value: change.map { BodyFormat.change($0.kilograms, unit) } ?? "–",
                  detail: range.phrase(start: start, firstShown: points.first?.date),
                  spoken: change.map { BodyFormat.spokenChange($0.kilograms, unit) } ?? "Not enough weigh-ins")
-            stat("Weekly rate", value: change?.weeklyRate.map { BodyFormat.change($0, unit, digits: 2) } ?? "–",
-                 detail: change?.weeklyRate == nil ? "needs a week" : "per week",
+            // The range's average, kept apart from "this week", the summary's seven-day change.
+            stat("Average", value: change?.weeklyRate.map { BodyFormat.change($0, unit, digits: 2) } ?? "–",
+                 detail: change?.weeklyRate == nil ? "needs a week" : "a week",
                  spoken: change?.weeklyRate.map { "\(BodyFormat.spokenChange($0, unit, digits: 2)) a week" } ?? "Needs a week of weigh-ins")
             stat("Weigh-ins", value: "\(days)", detail: "of \(span) days", spoken: "\(days) days with a weigh-in, of \(span)")
         }

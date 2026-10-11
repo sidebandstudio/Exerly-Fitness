@@ -187,11 +187,12 @@ extension Food {
         case .tablespoons: return byVolume(USUnits.millilitersPerFluidOunce / 2, named: "tbsp")
         case .teaspoons: return byVolume(USUnits.millilitersPerFluidOunce / 6, named: "tsp")
         case .serving(let word):
-            if let serving = serving(named: word) { return amount(serving, count) }
+            if let serving = serving(named: word) { return amount(serving, count / serving.count) }
             guard TypedAmount.sizes.contains(word) else { return nil }
-            return countServing.map { amount($0, count, exact: false) } ?? firstServing.flatMap { amount($0, count, exact: false) }
+            return countServing.map { amount($0, count / $0.count, exact: false) }
+                ?? firstServing.flatMap { amount($0, count, exact: false) }
         case nil:
-            if let serving = countServing { return amount(serving, count) }
+            if let serving = countServing { return amount(serving, count / serving.count) }
             return firstServing.flatMap { amount($0, count, exact: false) }
         }
     }
@@ -201,9 +202,9 @@ extension Food {
     /// else its first serving (a recipe's serving without one) unless that
     /// is a measure such as "1 cup", which a count can't mean.
     public var countServing: Serving? {
-        let named = Set(FoodSearch.words(name).map(Self.singular))
+        let named = Set(FoodSearch.words(name).map(FoodSearch.singular))
         let noun = { (serving: Serving) in
-            serving.name.lowercased().split(separator: " ").dropFirst().first.map { Self.singular(String($0)) }
+            serving.name.lowercased().split(separator: " ").dropFirst().first.map { FoodSearch.singular(String($0)) }
         }
         if let serving = servings.first(where: { noun($0).map(named.contains) == true }) { return serving }
         if let serving = servings.first(where: { ["whole", "medium", "each", "piece", "item"].contains(noun($0) ?? "") }) {
@@ -218,14 +219,18 @@ extension Food {
     private var firstServing: Serving? { servings.first ?? recipeServing }
 
     /// The serving named by `word`, or for a container its package size:
-    /// "can" finds "1 can (15 oz)" or "1 can", "large" "1 large breast". One
-    /// whose name starts with the word comes first.
+    /// "can" finds "1 can (15 oz)" or "1 can", "large" "1 large breast". A
+    /// plain one ("1 slice") comes first, then the regular size ("1 medium
+    /// or regular slice") rather than USDA's "1 slice, crust not eaten",
+    /// then one whose name starts with the word.
     private func serving(named word: String) -> Serving? {
-        let words = { (serving: Serving) in FoodSearch.words(serving.name).map(Self.singular) }
+        let words = { (serving: Serving) in FoodSearch.words(serving.name).map(FoodSearch.singular) }
         let synonyms: Set<String> = word == "can" || word == "tin" ? ["can", "tin"]
             : TypedAmount.packages.contains(word) ? TypedAmount.packages.subtracting(["can", "tin"]) : [word]
         let matching = (servings + recipePortions).filter { !synonyms.isDisjoint(with: words($0)) }
-        return matching.first { words($0).dropFirst().first.map(synonyms.contains) == true } ?? matching.first
+        return matching.first { words($0).count == 2 && synonyms.contains(words($0)[1]) }
+            ?? matching.first { words($0).contains("regular") }
+            ?? matching.first { words($0).dropFirst().first.map(synonyms.contains) == true } ?? matching.first
     }
 
     /// Grams in a millilitre: the label's density, or one from a measure it
@@ -247,11 +252,53 @@ extension Food {
         let name = serving.lowercased()
         return name == "1 \(measure)" || !exactly && (name.hasPrefix("1 \(measure),") || name.hasPrefix("1 \(measure) ("))
     }
+}
 
+extension Serving {
+    /// How many of what it names this is, by its leading number: 2 for "2
+    /// slices (56 g)", 0.5 for "1/2 slice", and 1 for "1 egg" or a measure
+    /// such as "12 oz can". A typed count divides by it, so one slice of a
+    /// label's "2 slices (56 g)" is half of that serving, 28 g.
+    public var count: Double {
+        let words = name.split(separator: " ")
+        guard let first = words.first, let (count, rest) = FoodSearch.number(first), rest.isEmpty, count > 0 else { return 1 }
+        let next = words.dropFirst().first?.lowercased() ?? ""
+        return TypedAmount.measures[next] != nil || ["fl", "fluid"].contains(next) ? 1 : count
+    }
+}
+
+extension TypedAmount {
+    /// A name for a serving of this amount, to add to a food that has none
+    /// to count or measure it by: "1 slice" for "1 slice toast", "1 egg"
+    /// for "2 eggs", "1 large egg" for "2 large eggs", "1 cup" for "1 cup
+    /// rice". `food` is what was searched. Nil for a weight or millilitres,
+    /// which every food takes or none names.
+    public func servingName(for food: String) -> String? {
+        let noun = FoodSearch.words(food).last.map(Self.singular)
+        switch unit {
+        case nil: return noun.map { "1 \($0)" }
+        case .serving(let word):
+            // A size says what it is a size of.
+            guard TypedAmount.sizes.contains(word), let noun else { return "1 \(word)" }
+            return "1 \(word) \(noun)"
+        case .cups: return "1 cup"
+        case .tablespoons: return "1 tbsp"
+        case .teaspoons: return "1 tsp"
+        default: return nil
+        }
+    }
+
+    /// A plural noun in the singular, to be read: "eggs" is egg, "peaches"
+    /// peach, "cookies" cookie and "berries" berry. `FoodSearch.singular`
+    /// only has to match.
     static func singular(_ word: String) -> String {
-        if word.count > 3 && word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
-        if word.count > 3 && word.hasSuffix("oes") { return String(word.dropLast(2)) }
-        if word.count > 3 && word.hasSuffix("s") && !word.hasSuffix("ss") { return String(word.dropLast()) }
-        return word
+        guard word.count > 3, word.hasSuffix("s"), !word.hasSuffix("ss") else { return word }
+        if word.hasSuffix("ies") {
+            // A doubled consonant before it ("berries", "patties") ends in y.
+            let before = Array(word.dropLast(3).suffix(2))
+            return before.count == 2 && before[0] == before[1] ? String(word.dropLast(3)) + "y" : String(word.dropLast())
+        }
+        if ["oes", "ches", "shes", "xes", "sses"].contains(where: word.hasSuffix) { return String(word.dropLast(2)) }
+        return String(word.dropLast())
     }
 }

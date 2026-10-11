@@ -49,7 +49,7 @@ private struct TrainingPlanSetupContent: View {
                     }
                 }
                 .id(page)
-                .safeAreaInset(edge: .bottom) {
+                .exFooter {
                     Button(page == 2 ? "Build plan" : "Continue") {
                         if page == 2 { model.prepare() } else { page += 1 }
                     }.buttonStyle(ExActionStyle()).accessibilityIdentifier("planSetup.continue")
@@ -280,7 +280,7 @@ private struct TrainingPlanPreview: View {
                 }
             }
         }.exListStyle()
-        .safeAreaInset(edge: .bottom) {
+        .exFooter {
             if model.canSave {
                 VStack(alignment: .leading, spacing: ExSpacing.small) {
                     if let error = model.error {

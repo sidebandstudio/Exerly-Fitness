@@ -69,3 +69,19 @@ test('without a food that has every word, the foods with most of them come first
   // A food with every word still wins over ones with most of them.
   assert.equal(first('kidney beans canned'), 'Kidney beans, from canned, fat added');
 });
+
+test('a staple comes before dishes named with it, as food search ranks the person’s own foods', () => {
+  // Toast is toasted bread; Shrimp toast, French toast and Melba toast are
+  // other foods with more words in their name.
+  const toast = generic.search('toast', 5, { now }).map((food) => food.name);
+  assert.equal(toast.length, 5);
+  for (const name of toast) assert.match(name, /^Bread, .*toasted$/);
+  assert.ok(!generic.search('toast', 20).some((food) => /Shrimp|French/.test(food.name)));
+  // Naming the dish still finds it first.
+  assert.equal(first('french toast'), 'French toast, NFS');
+  assert.equal(first('shrimp toast'), 'Shrimp toast');
+  assert.equal(first('whole wheat toast'), 'Bread, whole wheat, toasted');
+  // A slice of it is a slice USDA weighs.
+  const slice = generic.search('toast', 1, { now })[0].servings.find((s) => /slice/.test(s.name));
+  assert.ok(slice.grams > 0);
+});

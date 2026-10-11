@@ -159,7 +159,8 @@ final class NutritionEntryDraft: ObservableObject {
     @Published var loggedAt: Date
     @Published private(set) var snapshot: FoodSnapshot
     @Published private(set) var errors: [String] = []
-    let food: ExerlyCore.Food
+    /// The food as logged; `addServing` gives it a serving.
+    @Published private(set) var food: ExerlyCore.Food
     private let store: NutritionStore
     private let timeZone: TimeZone
     /// The time last set for the person rather than by them.
@@ -293,15 +294,15 @@ final class NutritionEntryDraft: ObservableObject {
     /// Choosing a label portion replaces the amount. Switching its measure
     /// below preserves the current amount instead.
     @discardableResult
-    func selectPortion(_ serving: Serving) -> Bool {
+    func selectPortion(_ serving: Serving, quantity: Double = 1) -> Bool {
         errors = []
         do {
             guard publishedServings.contains(serving) else {
                 throw NutritionDraftError.input("Choose a portion provided for this food.")
             }
-            let portion = try NutritionStore.preview(snapshot.foodForLogging(serving: serving), serving: serving, quantity: 1)
+            let portion = try NutritionStore.preview(snapshot.foodForLogging(serving: serving), serving: serving, quantity: quantity)
             let selected = NutritionPortionMeasure.saved(serving, food: food)
-            let field = NutritionNumberField(1)
+            let field = NutritionNumberField(quantity)
             anchor = PortionAnchor(measure: selected, amount: field, grams: portion.grams,
                                    serving: portion.serving, quantity: portion.quantity)
             measure = selected
@@ -309,6 +310,36 @@ final class NutritionEntryDraft: ObservableObject {
             amount = field
             convertingAmount = false
             return true
+        } catch { errors = NutritionDraftError.messages(error); return false }
+    }
+
+    /// Whether the person can name a serving of this food here: it is their
+    /// own saved food, not a recipe, and has no serving to count it by.
+    var canAddServing: Bool {
+        guard snapshot.unweighed != true, let saved = store.food(food.id), saved.archivedAt == nil,
+              [.custom, .imported].contains(saved.source), saved.ingredients == nil else { return false }
+        return publishedServings.isEmpty
+    }
+
+    /// Saves a serving such as "1 slice" (a name without a count gets "1 ")
+    /// with the person's food, then switches to `count` of it, so the next
+    /// "1 slice toast" logs in one tap.
+    @discardableResult
+    func addServing(named name: String, grams text: String, count: Double = 1, locale: Locale = .current) -> Bool {
+        errors = []
+        do {
+            var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { throw NutritionDraftError.input("Name the serving, as in 1 slice.") }
+            if trimmed.first?.isNumber != true { trimmed = "1 \(trimmed)" }
+            guard let grams = TrainingInput.number(text, locale: locale), grams.isFinite, grams > 0 else {
+                throw NutritionDraftError.input("Enter the serving's weight in grams.")
+            }
+            guard var saved = store.food(food.id) else { throw NutritionDraftError.input("Only your own foods can be given a serving.") }
+            let serving = Serving(trimmed, grams: grams)
+            saved.servings.append(serving)
+            try store.saveFood(saved)
+            food.servings.append(serving)
+            return selectPortion(serving, quantity: count / serving.count)
         } catch { errors = NutritionDraftError.messages(error); return false }
     }
 

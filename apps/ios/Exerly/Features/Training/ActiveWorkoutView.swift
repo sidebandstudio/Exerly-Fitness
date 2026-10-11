@@ -85,10 +85,12 @@ struct ActiveWorkoutView: View {
                     .background(Color.exBackground)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        // Below the sets, not over them: run 6 found the next exercise under it.
+        .exFooter {
             if let timer = store.restTimer, focus == nil {
                 RestTimerBar(timer: timer, adjust: { seconds in save { try store.extendRest(by: seconds) } },
                              skip: { withAnimation(.snappy) { save { try store.skipRest() } } })
+                    .background(Color.exBackground)
             }
         }
     }
@@ -431,7 +433,7 @@ struct ActiveWorkoutView: View {
     /// How many sets are done, and for a program day whether it counts as
     /// done (see `ProgramSchedule.completes`) or stays next.
     private func finishMessage(_ summary: WorkoutSummary) -> String {
-        let sets = "\(summary.completedSets) of \(summary.totalSets) sets are done"
+        let sets = "\(summary.completedSets) of \(summary.totalSets) sets \(summary.completedSets == 1 ? "is" : "are") done"
         let removed = "Sets you didn't complete are removed."
         guard let program, let live = store.activeSession else { return "\(sets). \(removed)" }
         let day = TrainingFormat.title(of: live).name

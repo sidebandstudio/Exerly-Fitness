@@ -102,7 +102,7 @@ struct WeightTrendCard: View {
             HStack(spacing: 4) {
                 Image(systemName: shown < 0 ? "arrow.down.right" : shown > 0 ? "arrow.up.right" : "arrow.right")
                     .font(.exCaption.weight(.semibold)).accessibilityHidden(true)
-                Text(shown == 0 ? "Steady this week" : "\(BodyFormat.change(week.kilograms, unit)) this week").font(.exLabel)
+                Text(BodyCopy.weekChange(week, unit)).font(.exLabel)
             }.foregroundStyle(Color.exTextSecondary)
         } else {
             Text(summary.weighInDays < 2 ? "One reading so far" : "Weekly change after 7 days")
@@ -137,7 +137,7 @@ struct WeightTrendCard: View {
     private func spokenSummary(_ summary: WeightTrend.Summary) -> String {
         var parts = ["Trend weight \(BodyFormat.spokenWeight(summary.trend, unit)), give or take "
             + "\(BodyFormat.number(Mass.kg(summary.trendError).value(in: unit)))"]
-        if let week = summary.weekChange { parts.append("\(BodyFormat.spokenChange(week.kilograms, unit)) this week") }
+        if let week = summary.weekChange { parts.append(BodyCopy.spokenWeekChange(week, unit)) }
         return parts.joined(separator: ". ")
     }
 }
@@ -188,6 +188,19 @@ struct WeighInButton: View {
 
 /// Sentences shared by the weight screens.
 enum BodyCopy {
+    /// The summary's seven-day change, the only figure called "this week":
+    /// "−0.7 lb this week", or "Steady this week" when it rounds to nothing.
+    static func weekChange(_ change: WeightTrend.Change, _ unit: MassUnit) -> String {
+        let steady = (Mass.kg(change.kilograms).value(in: unit) * 10).rounded() == 0
+        return steady ? "Steady this week" : "\(BodyFormat.change(change.kilograms, unit)) this week"
+    }
+
+    /// `weekChange` in words: "down 0.7 pounds this week", "steady this week".
+    static func spokenWeekChange(_ change: WeightTrend.Change, _ unit: MassUnit) -> String {
+        let words = BodyFormat.spokenChange(change.kilograms, unit)
+        return words == "no change" ? "steady this week" : "\(words) this week"
+    }
+
     /// Why expenditure isn't shown yet, in one line.
     static func expenditureWaiting(_ value: WeightTrend.Expenditure) -> String {
         if value.loggedDaysNeeded > 0 {

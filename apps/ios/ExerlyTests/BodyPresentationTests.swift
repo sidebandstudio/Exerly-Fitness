@@ -61,8 +61,9 @@ final class BodyPresentationTests: XCTestCase {
     func testRangesEndTodayAndAllStartsAtTheFirstWeighIn() throws {
         let today = try XCTUnwrap(LocalDate("2026-10-09"))
         let first = try XCTUnwrap(LocalDate("2025-01-02"))
-        XCTAssertEqual(BodyRange.week.start(today: today, first: first), LocalDate("2026-10-03"))
-        XCTAssertEqual(BodyRange.month.start(today: today, first: first), today.adding(days: -29))
+        XCTAssertEqual(BodyRange.week.start(today: today, first: first), LocalDate("2026-10-02"),
+                       "A week's change spans the seven days of the summary's \"this week\"")
+        XCTAssertEqual(BodyRange.month.start(today: today, first: first), today.adding(days: -30))
         XCTAssertEqual(BodyRange.all.start(today: today, first: first), first)
         XCTAssertEqual(BodyRange.all.start(today: today, first: nil), today)
         let start = BodyRange.quarter.start(today: today, first: first)

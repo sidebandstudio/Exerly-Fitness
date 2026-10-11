@@ -46,16 +46,23 @@ const matches = (list, word) => list.some((w) => w.startsWith(word));
 
 const sameWords = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
 
+/** A word of a food's name as the query word it is the "-ed" form of: "toasted" is toast. */
+const asWanted = (word, wanted) =>
+  wanted.find((w) => word === `${w}ed` || (w.endsWith('e') && word === `${w}d`)) ?? word;
+
 /**
  * How directly a food is named by the query: 0 when its first part is the
  * query ("Banana" for banana), k when its first k + 1 parts are ("Beef,
- * ground" for ground beef), or a later part alone is ("Fish, salmon").
+ * ground" for ground beef), or a later part alone is ("Fish, salmon"). A part
+ * may be the query's "-ed" form, so "Bread, white, toasted" is toast, the
+ * staple, before a dish whose name holds more words ("Shrimp toast").
  */
 function naming(food, wanted) {
-  for (let k = 0; k < food.parts.length; k++) {
-    if (sameWords(food.parts.slice(0, k + 1).flat(), wanted)) return k;
+  const parts = food.parts.map((part) => part.map((word) => asWanted(word, wanted)));
+  for (let k = 0; k < parts.length; k++) {
+    if (sameWords(parts.slice(0, k + 1).flat(), wanted)) return k;
   }
-  const part = food.parts.findIndex((p) => sameWords(p, wanted));
+  const part = parts.findIndex((p) => sameWords(p, wanted));
   return part >= 0 ? part : Infinity;
 }
 

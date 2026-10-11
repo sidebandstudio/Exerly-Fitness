@@ -8,7 +8,8 @@ enum BodyRange: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Days shown, ending today; nil for everything.
+    /// The span in days, ending today, so the week's change is the summary's
+    /// "this week"; nil for everything.
     var days: Int? {
         switch self {
         case .week: 7
@@ -51,7 +52,7 @@ enum BodyRange: String, CaseIterable, Identifiable {
     }
 
     func start(today: LocalDate, first: LocalDate?) -> LocalDate {
-        days.map { today.adding(days: -($0 - 1)) } ?? first ?? today
+        days.map { today.adding(days: -$0) } ?? first ?? today
     }
 
     var axisFormat: Date.FormatStyle {

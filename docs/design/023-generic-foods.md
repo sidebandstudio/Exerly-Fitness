@@ -48,7 +48,9 @@ of the query must start a word of the food's name, with plurals folded
 
 1. Foods the query names: the first part of the name ("Banana, raw" for
    banana), the first parts together ("Beef, ground" for ground beef), or a
-   later part alone ("Fish, salmon" for salmon).
+   later part alone ("Fish, salmon" for salmon). A part may be the query's
+   "-ed" form, so toasted breads are toast, before Shrimp toast and French
+   toast.
 2. Foods whose first part holds more of the query.
 3. Whole words before prefixes.
 4. Plain forms ("raw", "NFS") before prepared ones.
