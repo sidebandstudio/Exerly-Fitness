@@ -66,7 +66,9 @@ final class RecipeUITests: ExerlyUITestCase {
 
     private func energy(_ app: XCUIApplication) -> String? {
         let hero = app.descendants(matching: .any)["nutrition.portionEnergy"]
-        return hero.waitForExistence(timeout: 5) ? hero.label : nil
+        // On smaller phones the totals have scrolled away by the time the servings are set.
+        if !hero.waitForExistence(timeout: 3) { revealAbove(hero, in: app) }
+        return hero.exists ? hero.label : nil
     }
 
     func testARecipeFromThreeIngredientsLogsOneServingWithItsTotals() async throws {
@@ -455,6 +457,7 @@ final class RecipeUITests: ExerlyUITestCase {
         for (id, amount) in [("usda:2705853", "500 g"), ("off:0041000000016", "1 can · 425 g"), ("off:0041000000023", "1 can · 411 g"),
                              ("usda:2709795", "1 whole · 148 g")] {
             let row = app.buttons["recipe.ingredient.\(id)"]
+            reveal(row, in: app)
             XCTAssertTrue(row.label.contains(amount), "\(amount): \(row.label)")
         }
         tap(app.buttons["4"], in: app)
