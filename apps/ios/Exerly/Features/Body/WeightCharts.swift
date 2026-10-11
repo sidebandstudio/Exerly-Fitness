@@ -103,17 +103,29 @@ struct WeightSparkline: View {
     }
 }
 
-/// Scale readings as dots, the trend as a line inside its ±1 SD band, with a
-/// readout for the day under a finger.
+/// Scale readings as dots, the trend as a line inside its ±1 SD band, dashed
+/// across gaps in the weigh-ins, the goal in force and the path it planned,
+/// with a readout for the day under a finger.
 struct WeightTrendChart: View {
     let points: [WeightTrend.Point]
     let readings: [WeightEntry]
     let unit: MassUnit
     let range: BodyRange
+    var goals: [WeightGoal.Stretch] = []
     @Binding var selection: LocalDate?
     @State private var scrub: Date?
 
     private var line: [WeightTrend.Point] { WeightTrend.thinned(points, limit: 240) }
+
+    /// The trend's runs, each thinned in proportion, so a gap keeps its edges.
+    private var runs: [WeightTrend.Run] {
+        let total = max(points.count, 1)
+        return WeightTrend.runs(points).map { run in
+            var run = run
+            run.points = WeightTrend.thinned(run.points, limit: max(2, 240 * run.points.count / total))
+            return run
+        }
+    }
 
     var body: some View {
         Chart {
@@ -123,15 +135,35 @@ struct WeightTrendChart: View {
                          yEnd: .value("High", display(point.trend + point.trendError)))
                     .foregroundStyle(Color.exPrimary.opacity(0.17)).interpolationMethod(.monotone)
             }
+            ForEach(Array(shownGoals.enumerated()), id: \.offset) { index, goal in
+                if let weight = goal.goal.goalWeight, drawsLine(goal) {
+                    RuleMark(xStart: .value("Day", BodyDates.anchor(clamp(goal.start))),
+                             xEnd: .value("Day", BodyDates.anchor(clamp(goal.end))), y: .value("Goal", display(weight.kilograms)))
+                        .foregroundStyle(Color.exAccent.opacity(0.75)).lineStyle(StrokeStyle(lineWidth: 1.2, dash: [2, 3]))
+                }
+                ForEach(path(goal), id: \.self) { day in
+                    LineMark(x: .value("Day", BodyDates.anchor(day)), y: .value("Plan", display(goal.planned(on: day))),
+                             series: .value("Series", "Plan \(index)"))
+                        .foregroundStyle(Color.exTextSecondary.opacity(0.7))
+                        .lineStyle(StrokeStyle(lineWidth: 1.4, lineCap: .round, dash: [5, 4]))
+                }
+            }
             ForEach(readings) { entry in
                 PointMark(x: .value("Day", BodyDates.anchor(entry.date)), y: .value("Scale", entry.weight.value(in: unit)))
                     .symbolSize(dotSize).foregroundStyle(Color.exTextSecondary.opacity(selection == nil ? 0.6 : 0.35))
             }
-            ForEach(line) { point in
-                LineMark(x: .value("Day", BodyDates.anchor(point.date)), y: .value("Trend", display(point.trend)),
-                         series: .value("Series", "Trend"))
-                    .foregroundStyle(LinearGradient(colors: [.exPrimary, .exAccent], startPoint: .leading, endPoint: .trailing))
-                    .lineStyle(StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
+            // One series per run, all under the same gradient, so the line is one
+            // colour sweep; across a gap it's dashed and fainter, never dotted with readings.
+            ForEach(Array(runs.enumerated()), id: \.offset) { index, run in
+                ForEach(run.points) { point in
+                    LineMark(x: .value("Day", BodyDates.anchor(point.date)), y: .value("Trend", display(point.trend)),
+                             series: .value("Series", "Trend \(index)"))
+                        .foregroundStyle(LinearGradient(colors: [.exPrimary, .exAccent], startPoint: .leading, endPoint: .trailing))
+                        .opacity(run.measured ? 1 : 0.55)
+                        .lineStyle(run.measured ? StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round)
+                            : StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [4, 4]))
+                        .interpolationMethod(.monotone)
+                }
             }
             if let selected = selection.flatMap({ day in points.first { $0.date == day } }) {
                 RuleMark(x: .value("Day", BodyDates.anchor(selected.date)))
@@ -139,6 +171,18 @@ struct WeightTrendChart: View {
                 PointMark(x: .value("Day", BodyDates.anchor(selected.date)), y: .value("Trend", display(selected.trend)))
                     .symbolSize(70).foregroundStyle(Color.exAccent)
                     .symbol { Circle().fill(Color.exAccent).frame(width: 10, height: 10).overlay(Circle().stroke(Color.exSurface1, lineWidth: 2)) }
+            }
+            // Today's goal weight is named: on its line, or at the edge it lies beyond.
+            if let goal = shownGoals.last, let weight = goal.goal.goalWeight?.kilograms, let lastDay {
+                let onChart = drawsLine(goal)
+                let below = weight < domain.lowerBound
+                PointMark(x: .value("Day", BodyDates.anchor(lastDay)),
+                          y: .value("Goal", display(onChart ? weight : below ? domain.lowerBound : domain.upperBound)))
+                    .opacity(0)
+                    .annotation(position: onChart || below ? .top : .bottom, alignment: .trailing, spacing: 2) {
+                        Text("Goal \(BodyFormat.weight(weight, unit))\(onChart ? "" : below ? " ↓" : " ↑")")
+                            .font(.exSmall.weight(.semibold)).foregroundStyle(Color.exAccent)
+                    }
             }
         }
         .chartYScale(domain: display(domain.lowerBound)...display(domain.upperBound))
@@ -171,7 +215,7 @@ struct WeightTrendChart: View {
         .bodyChartDates()
         // One summarised element with an audio graph, not one per mark.
         .accessibilityElement(children: .ignore)
-        .accessibilityChartDescriptor(WeightChartDescriptor(points: points, unit: unit))
+        .accessibilityChartDescriptor(WeightChartDescriptor(points: points, unit: unit, goals: shownGoals))
     }
 
     private var dotSize: CGFloat {
@@ -185,11 +229,54 @@ struct WeightTrendChart: View {
 
     private func display(_ kilograms: Double) -> Double { Mass.kg(kilograms).value(in: unit) }
 
-    /// The band and the trend, widened to every single reading.
-    private var domain: ClosedRange<Double> {
+    private var firstDay: LocalDate? { points.first?.date }
+    private var lastDay: LocalDate? { points.last?.date }
+
+    private func clamp(_ date: LocalDate) -> LocalDate {
+        guard let firstDay, let lastDay else { return date }
+        return min(max(date, firstDay), lastDay)
+    }
+
+    /// Goals in force on a day the chart shows.
+    private var shownGoals: [WeightGoal.Stretch] {
+        guard let firstDay, let lastDay else { return [] }
+        return goals.filter { $0.end >= firstDay && $0.start <= lastDay }
+    }
+
+    /// The days a goal's path is drawn through on the chart: every few days and its ends.
+    private func path(_ goal: WeightGoal.Stretch) -> [LocalDate] {
+        let start = clamp(max(goal.anchor, goal.start)), end = clamp(goal.end)
+        guard start < end else { return [] }
+        let step = max(1, start.days(until: end) / 40)
+        return Array(stride(from: 0, to: start.days(until: end), by: step).map { start.adding(days: $0) }) + [end]
+    }
+
+    /// The trend's band and readings: what the goal line must not squash.
+    private var dataDomain: ClosedRange<Double> {
         let base = WeightTrend.domain(points, minimumSpan: unit == .pounds ? 0.9 : 0.6) ?? 70...71
         let values = readings.map(\.weight.kilograms)
         return min(base.lowerBound, (values.min() ?? .infinity) - 0.1)...max(base.upperBound, (values.max() ?? -.infinity) + 0.1)
+    }
+
+    /// A goal weight draws as a line across the days it was in force when
+    /// that's at least a day of the chart and within the data's own height of
+    /// it; farther, it would flatten the trend, and the goal card has it.
+    private func drawsLine(_ goal: WeightGoal.Stretch) -> Bool {
+        guard let kilograms = goal.goal.goalWeight?.kilograms, clamp(goal.start) < clamp(goal.end) else { return false }
+        let data = dataDomain, span = data.upperBound - data.lowerBound
+        return kilograms >= data.lowerBound - span && kilograms <= data.upperBound + span
+    }
+
+    /// The data, widened to the planned paths and the goal weights shown.
+    private var domain: ClosedRange<Double> {
+        var values = [dataDomain.lowerBound, dataDomain.upperBound]
+        for goal in shownGoals {
+            values += path(goal).map { goal.planned(on: $0) }
+            if let weight = goal.goal.goalWeight?.kilograms, drawsLine(goal) { values.append(weight) }
+        }
+        let low = values.min() ?? 70, high = values.max() ?? 71
+        let pad = (high - low) > (dataDomain.upperBound - dataDomain.lowerBound) ? (high - low) * 0.04 : 0
+        return (low - pad)...(high + pad)
     }
 
     private func nearest(_ date: LocalDate) -> LocalDate? {
@@ -249,6 +336,7 @@ struct ExpenditureChart: View {
 struct WeightChartDescriptor: AXChartDescriptorRepresentable {
     let points: [WeightTrend.Point]
     let unit: MassUnit
+    var goals: [WeightGoal.Stretch] = []
 
     func makeChartDescriptor() -> AXChartDescriptor {
         let values = points.map { Mass.kg($0.trend).value(in: unit) }
@@ -263,7 +351,12 @@ struct WeightChartDescriptor: AXChartDescriptorRepresentable {
         let scale = AXDataSeriesDescriptor(name: "Scale readings", isContinuous: false, dataPoints: points.enumerated().compactMap { index, point in
             point.reading.map { AXDataPoint(x: Double(index), y: Mass.kg($0).value(in: unit)) }
         })
-        return AXChartDescriptor(title: "Weight trend", summary: nil, xAxis: x, yAxis: y, additionalAxes: [], series: [trend, scale])
+        let plan = AXDataSeriesDescriptor(name: "Planned path", isContinuous: true, dataPoints: points.enumerated().compactMap { index, point in
+            goals.last { $0.anchor <= point.date && $0.end >= point.date }
+                .map { AXDataPoint(x: Double(index), y: Mass.kg($0.planned(on: point.date)).value(in: unit)) }
+        })
+        return AXChartDescriptor(title: "Weight trend", summary: nil, xAxis: x, yAxis: y, additionalAxes: [],
+                                 series: [trend, scale] + (plan.dataPoints.isEmpty ? [] : [plan]))
     }
 }
 
