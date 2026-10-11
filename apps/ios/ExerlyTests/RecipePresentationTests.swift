@@ -88,4 +88,62 @@ final class RecipePresentationTests: XCTestCase {
         XCTAssertTrue(saved.favorite)
         XCTAssertEqual(saved.ingredients?.map(\.food.name), ["Synthetic milk"])
     }
+
+    func testAnImportedRecipeFillsTheDraftAndSavesOnlyOnceEachLineIsResolved() throws {
+        let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
+        let page = WebRecipe(name: "Synthetic porridge", ingredients: ["80 g synthetic oats", "Synthetic milk", "1 pinch saffron"],
+                             servings: 2, instructions: "1. Simmer.", url: "https://recipes.example/porridge")
+        let imported = RecipeImport(page: page, own: [oats, milk], database: [nil, nil, nil], unit: .kilograms)
+        let draft = RecipeDraft(store: store, unit: .kilograms, imported: imported)
+        XCTAssertEqual(draft.name, "Synthetic porridge")
+        XCTAssertEqual(draft.rows.map(\.ingredient.grams), [80, 100], "Milk had no amount: its default")
+        XCTAssertEqual(draft.rows.map(\.checked), [true, false], "A guessed amount is marked to check")
+        XCTAssertEqual(draft.rows.first?.line, "80 g synthetic oats")
+        XCTAssertEqual(draft.unmatched, ["1 pinch saffron"])
+        XCTAssertEqual(draft.servings.text, "2")
+        XCTAssertEqual(draft.preparation, "1. Simmer.")
+        XCTAssertTrue(draft.hasChanges)
+
+        XCTAssertNil(draft.save())
+        XCTAssertEqual(draft.errors, ["Search for \u{201C}1 pinch saffron\u{201D} or skip it before saving."])
+        XCTAssertTrue(store.foods.isEmpty, "Nothing saved before review")
+        draft.settle("1 pinch saffron")
+        XCTAssertNil(draft.save(), "The milk's amount still to check")
+        let milkRow = try XCTUnwrap(draft.unchecked)
+        draft.update(milkRow.id, to: try NutritionStore.preview(milk, grams: 250), food: milk.snapshot)
+        let saved = try XCTUnwrap(draft.save())
+        XCTAssertEqual(saved.sourceURL, "https://recipes.example/porridge", "Kept to credit the page")
+        XCTAssertEqual(saved.servingCount, 2)
+        XCTAssertEqual(store.food(saved.id)?.sourceURL, "https://recipes.example/porridge")
+    }
+
+    func testImportingIntoANamedRecipeKeepsItsNameAndAddsAfterItsIngredients() throws {
+        let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
+        let draft = RecipeDraft(store: store, unit: .kilograms)
+        draft.name = "My porridge"
+        XCTAssertTrue(draft.add(oats))
+        draft.apply(RecipeImport(name: "Their porridge", ingredients: [RecipeImport.Ingredient(ingredient: RecipeIngredient(food: milk.snapshot, grams: 200))]))
+        XCTAssertEqual(draft.name, "My porridge")
+        XCTAssertEqual(draft.rows.map(\.ingredient.food.name), ["Synthetic oats", "Synthetic milk"])
+    }
+
+    func testAPastedLinkIsFoundAloneOrInAMessage() {
+        XCTAssertEqual(RecipeImportView.webLink(in: " https://recipes.example/chili?x=1 "), "https://recipes.example/chili?x=1")
+        XCTAssertEqual(RecipeImportView.webLink(in: "recipes.example/chili"), "https://recipes.example/chili")
+        XCTAssertEqual(RecipeImportView.webLink(in: "Try this one: https://recipes.example/chili, it's great"), "https://recipes.example/chili")
+        XCTAssertNil(RecipeImportView.webLink(in: "ftp://recipes.example/chili"))
+        XCTAssertNil(RecipeImportView.webLink(in: "chili"))
+        XCTAssertNil(RecipeImportView.webLink(in: ""))
+    }
+
+    func testASharedRecipeSummarySaysWhatItIsAndHowToOpenIt() throws {
+        var recipe = ExerlyCore.Food.recipe(name: "Synthetic porridge", ingredients: [RecipeIngredient(food: oats.snapshot, grams: 80)],
+                                            servingCount: 2, preparation: "Simmer.")
+        recipe.sourceURL = "https://recipes.example/porridge"
+        let summary = RecipeShareItem.summary(recipe, unit: .kilograms)
+        XCTAssertTrue(summary.hasPrefix("Synthetic porridge\nMakes 2 servings, each 152 kcal, 5.2 g protein"), summary)
+        XCTAssertTrue(summary.contains("\u{2022} Synthetic oats, 80 g"), summary)
+        XCTAssertTrue(summary.contains("Preparation\nSimmer.") && summary.contains("Source: https://recipes.example/porridge"), summary)
+        XCTAssertTrue(summary.hasSuffix("Open the attached .exerlyrecipe file in Exerly to add a copy to your recipes."))
+    }
 }

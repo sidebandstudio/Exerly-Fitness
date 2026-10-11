@@ -74,7 +74,7 @@ struct NutritionFoodPicker: View {
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
          pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
-         confirmsAmounts: Bool = false, entered: Int = 0) {
+         confirmsAmounts: Bool = false, initialQuery: String = "", entered: Int = 0) {
         self.workspace = workspace
         self.entered = entered
         self.api = api
@@ -94,6 +94,9 @@ struct NutritionFoodPicker: View {
         _showingBarcode = State(initialValue: startsWithBarcode)
         _pickedCount = State(initialValue: pickedCount)
         _addedIDs = State(initialValue: pickedFoodIDs)
+        // A search to start from, such as an imported recipe's line no food
+        // matched; `refresh` runs it when the screen appears.
+        _query = State(initialValue: initialQuery)
         _search = StateObject(wrappedValue: NutritionSearchModel(api: api))
     }
 

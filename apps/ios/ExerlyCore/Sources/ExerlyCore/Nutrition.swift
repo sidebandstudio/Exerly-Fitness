@@ -98,6 +98,8 @@ public struct Food: Sendable, Codable, Hashable, Identifiable {
     public var servingCount: Double?
     /// How a recipe is made.
     public var preparation: String?
+    /// The web page a recipe was imported from, kept to credit it.
+    public var sourceURL: String?
     public var favorite: Bool
     public var createdAt: Date
     public var archivedAt: Date?

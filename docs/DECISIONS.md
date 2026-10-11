@@ -1043,6 +1043,53 @@ nothing. The system scrolls only the text field above the keypad, so once
 the keypad is up the field scrolls its whole row, and the presets under it,
 into view, in every portion sheet. The caption now focuses the field.
 
+## 2026-10-10: Recipe import from a link, and recipes shared as files
+
+Import reads only a page's schema.org `Recipe` JSON-LD, which most recipe
+sites publish for search engines; a page without it gets "This page has no
+recipe data" rather than a guess. The server fetches the page, since it is
+one hardened fetcher: http and https on ports 80 and 443; every address the
+host resolves to must be public (private, loopback, link-local with
+169.254.169.254, carrier-grade NAT, multicast, reserved, and IPv6 forms that
+carry IPv4), checked by the connection's own DNS lookup so a rebinding
+answer can't slip past, and again for each of at most three redirects; 2 MB
+of decoded body and 8 s in all; no cookies or credentials; User-Agent
+`ExerlyRecipeImport/1.0`. App sessions only, 30 an hour per account;
+personal tokens get 403, so the agent API doesn't grow. The simulator
+fixture serves synthetic pages from its own loopback address, allowed only
+while `NODE_ENV=test` and `EXERLY_TEST_FIXTURE` are set, which nothing
+deployed sets; a test checks both and that only the fixture makes the
+allowance.
+
+Lines are read on the device with the typed-amount parser, extended for
+recipe pages: a weight in parentheses ("1 (15 oz) can" is a 425 g can; "2
+cups (250 g)" is 250 g), ranges (the first number, marked to check), "1-1/2",
+the fraction slash and more Unicode fractions, notes after a comma, "or" and
+"plus", and preparation words. Each line matches a food of the person's own
+with the same words, else the bundled USDA table through `/v1/foods/match`,
+one request that spends no Open Food Facts searches. That match is stricter
+than search: every word must be in the food's name and its first part made
+of them, because "salt" found a salted granola bar and "flour" a flour
+tortilla. The table lacks salt, flour and most spices, so those lines are
+listed as not matched, with Search (starting from the line's amount and
+food) and Skip; Save refuses until each is settled and scrolls back to them.
+On three live recipe pages, checked once from devbox1, 16 of 47 lines
+matched, all correctly; the rest were mostly spices, salt, oils, stock cubes
+and branded cans. Matches from the person's own foods grow with use. A guessed amount (no
+amount, a range, a unit the food can't take) uses the existing "Check the
+amount" mark. The source URL is kept on the recipe and shown as a link.
+
+Sharing sends a `.exerlyrecipe` JSON file (an exported UTType conforming to
+public.json, opened by Exerly) with a plain-text summary as the message. The
+file holds the name, yield, preparation, source and each ingredient's
+snapshot; no ID, dates, favorite, brand or barcode. Opening it, or choosing
+it in Import, opens the editor on a new copy whose totals are worked out
+again from the ingredients. A file needs no server or link service and works
+through AirDrop, Messages or Files. Not built: sharing a link from Safari's
+share sheet, which needs a share extension and an App Group to hand the URL
+over (still unregistered); people paste it, one tap with the system's Paste
+button.
+
 ## 2026-10-11: One trend weight, and only one figure called "this week"
 
 Code-blind run 6 saw 160.0 lb and −0.5 lb this week on Today, 159.8 lb and

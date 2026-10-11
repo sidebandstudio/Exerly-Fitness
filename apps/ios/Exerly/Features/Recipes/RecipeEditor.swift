@@ -3,66 +3,98 @@ import SwiftUI
 
 /// Builds or edits a recipe: ingredients from the same search the diary
 /// uses, an optional cooked weight, servings and a note, with live totals.
+/// A recipe imported from a web page or a shared file opens here to review.
 /// Saving never changes entries already logged; they keep their snapshot.
 struct RecipeEditor: View {
     let workspace: TrainingWorkspace
     let api: AccountAPI
     let timeZone: TimeZone
     let onSaved: (ExerlyCore.Food) -> Void
+    private let editingID: String?
+    private let startsImporting: Bool
     @StateObject private var draft: RecipeDraft
     @StateObject private var actions: NutritionDiaryActions
     @State private var choosing = false
+    @State private var importing = false
+    /// An imported line no food matched, being searched for.
+    @State private var resolving: UnmatchedLine?
+    /// Counts Saves refused for lines not matched yet.
+    @State private var showingUnmatched = 0
     @State private var editingRow: RecipeDraft.Row?
     @State private var discarding = false
     @State private var editMode = EditMode.inactive
     @FocusState private var nameFocused: Bool
     @AccessibilityFocusState private var errorsFocused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
 
+    private struct UnmatchedLine: Identifiable {
+        let id = UUID()
+        let text: String
+    }
+
+    /// `startsImporting` opens the import sheet over a new recipe; cancelling
+    /// it leaves the recipe to build by hand.
     init(workspace: TrainingWorkspace, api: AccountAPI, timeZone: TimeZone, unit: MassUnit, editing: ExerlyCore.Food? = nil,
-         start: ExerlyCore.Food? = nil, onSaved: @escaping (ExerlyCore.Food) -> Void = { _ in }) {
+         start: ExerlyCore.Food? = nil, imported: RecipeImport? = nil, startsImporting: Bool = false,
+         onSaved: @escaping (ExerlyCore.Food) -> Void = { _ in }) {
         self.workspace = workspace
         self.api = api
         self.timeZone = timeZone
         self.onSaved = onSaved
-        _draft = StateObject(wrappedValue: RecipeDraft(store: workspace.nutrition, unit: unit, editing: editing, start: start))
+        editingID = editing?.id
+        self.startsImporting = startsImporting
+        _draft = StateObject(wrappedValue: RecipeDraft(store: workspace.nutrition, unit: unit, editing: editing, start: start,
+                                                       imported: imported))
         _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
     }
 
     var body: some View {
         NavigationStack {
-            ExList {
-                Section {
-                    TextField("Recipe name", text: $draft.name, prompt: Text("Name this recipe").foregroundColor(.exTextSecondary), axis: .vertical)
-                        .font(.exH2).focused($nameFocused).submitLabel(.done)
-                        .accessibilityIdentifier("recipe.name")
-                }
-                if let recipe = draft.preview, !draft.rows.isEmpty {
-                    Section { RecipeTotals(recipe: recipe, unit: draft.unit).listRowBackground(Color.exPrimary.opacity(0.07)) }
-                }
-                ingredients
-                Section {
-                    ExQuantityControl(title: "Servings it makes", text: $draft.servings.text, step: 1, presets: [1, 2, 4, 6],
-                                      identifier: "recipe.servings")
-                    NutritionNumberInput(title: "Cooked weight (\(draft.unit == .pounds ? "oz" : "g"))", text: $draft.cookedWeight.text,
-                                         identifier: "recipe.cookedWeight", placeholder: "Optional")
-                } header: { Text("Yield") } footer: { Text(yieldNote) }
-                Section("Preparation") {
-                    TextField("Preparation", text: $draft.preparation, prompt: Text("Steps, pan size, cooking time").foregroundColor(.exTextSecondary),
-                              axis: .vertical)
-                        .lineLimit(3...10).accessibilityIdentifier("recipe.preparation")
-                }
-                if !draft.isNew {
-                    Text("Changes apply from now on. Entries already logged keep their nutrition.")
-                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).listRowBackground(Color.clear)
-                }
-                if !draft.errors.isEmpty {
+            ScrollViewReader { proxy in
+                ExList {
                     Section {
-                        ForEach(draft.errors, id: \.self) {
-                            Text($0).foregroundStyle(Color.exError).accessibilityFocused($errorsFocused).accessibilityIdentifier("recipe.error")
+                        TextField("Recipe name", text: $draft.name, prompt: Text("Name this recipe").foregroundColor(.exTextSecondary), axis: .vertical)
+                            .font(.exH2).focused($nameFocused).submitLabel(.done)
+                            .accessibilityIdentifier("recipe.name")
+                    }
+                    if !draft.unmatched.isEmpty { unmatchedLines }
+                    if let recipe = draft.preview, !draft.rows.isEmpty {
+                        Section { RecipeTotals(recipe: recipe, unit: draft.unit).listRowBackground(Color.exPrimary.opacity(0.07)) }
+                    }
+                    ingredients
+                    Section {
+                        ExQuantityControl(title: "Servings it makes", text: $draft.servings.text, step: 1, presets: [1, 2, 4, 6],
+                                          identifier: "recipe.servings")
+                        NutritionNumberInput(title: "Cooked weight (\(draft.unit == .pounds ? "oz" : "g"))", text: $draft.cookedWeight.text,
+                                             identifier: "recipe.cookedWeight", placeholder: "Optional")
+                    } header: { Text("Yield") } footer: { Text(yieldNote) }
+                    Section {
+                        TextField("Preparation", text: $draft.preparation, prompt: Text("Steps, pan size, cooking time").foregroundColor(.exTextSecondary),
+                                  axis: .vertical)
+                            .lineLimit(3...10).accessibilityIdentifier("recipe.preparation")
+                    } header: { Text("Preparation") } footer: {
+                        if let source = draft.sourceURL.flatMap(URL.init(string:)) { RecipeSourceLink(url: source) }
+                    }
+                    if let id = editingID, let saved = workspace.nutrition.food(id) {
+                        Section {
+                            RecipeShareLink(recipe: saved, unit: draft.unit)
+                        } footer: { Text("Sends the saved recipe as a file another Exerly user can import, with a summary to read.") }
+                    }
+                    if !draft.isNew {
+                        Text("Changes apply from now on. Entries already logged keep their nutrition.")
+                            .font(.exCaption).foregroundStyle(Color.exTextSecondary).listRowBackground(Color.clear)
+                    }
+                    if !draft.errors.isEmpty && draft.unmatched.isEmpty {
+                        Section {
+                            ForEach(draft.errors, id: \.self) {
+                                Text($0).foregroundStyle(Color.exError).accessibilityFocused($errorsFocused).accessibilityIdentifier("recipe.error")
+                            }
                         }
                     }
                 }
+                // A refused Save shows the lines still to settle, at the top.
+                .onChange(of: showingUnmatched) { withAnimation { proxy.scrollTo("unmatched", anchor: .top) } }
             }
             .environment(\.editMode, $editMode)
             .scrollDismissesKeyboard(.interactively)
@@ -80,6 +112,8 @@ struct RecipeEditor: View {
                             onSaved(food)
                             Task { await workspace.synchronize() }
                             dismiss()
+                        } else if !draft.unmatched.isEmpty {
+                            showingUnmatched += 1
                         } else if let row = draft.unchecked { editingRow = row }
                     }.fontWeight(.semibold).disabled(!draft.canSave).accessibilityIdentifier("recipe.save")
                 }
@@ -89,14 +123,19 @@ struct RecipeEditor: View {
             .task {
                 guard draft.isNew, draft.name.isEmpty else { return }
                 try? await Task.sleep(for: .milliseconds(450))
-                nameFocused = true
+                if startsImporting { importing = true } else { nameFocused = true }
             }
-            .sheet(isPresented: $choosing) {
-                NutritionFoodPicker(workspace: workspace, api: api, date: LocalDate(.now, in: timeZone), meal: "Recipe",
-                                    timeZone: timeZone, unit: draft.unit, actions: actions, onLogged: {},
-                                    pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map(\.ingredient.food.foodID)),
-                                    onPick: { draft.add($0, amount: $1) ? draft.rows.count : nil }, pickError: { draft.errors.first },
-                                    pickingInto: "recipe", confirmsAmounts: true)
+            .sheet(isPresented: $choosing) { picker { draft.add($0, amount: $1) } }
+            .sheet(item: $resolving) { line in
+                // The line as typed search reads it, so the food comes in at the line's amount.
+                picker(query: IngredientLine(line.text).query) { food, amount in
+                    guard draft.add(food, amount: amount) else { return false }
+                    draft.settle(line.text)
+                    return true
+                }
+            }
+            .sheet(isPresented: $importing) {
+                RecipeImportView(store: workspace.nutrition, api: api, unit: draft.unit) { draft.apply($0) }
             }
             .sheet(item: $editingRow) { row in
                 FoodPortionStep(store: workspace.nutrition, food: row.food ?? workspace.nutrition.food(row.ingredient.food.foodID)
@@ -114,11 +153,54 @@ struct RecipeEditor: View {
         .interactiveDismissDisabled(draft.hasChanges)
     }
 
+    private func picker(query: String = "", add: @escaping (ExerlyCore.Food, FoodPickAmount) -> Bool) -> some View {
+        NutritionFoodPicker(workspace: workspace, api: api, date: LocalDate(.now, in: timeZone), meal: "Recipe",
+                            timeZone: timeZone, unit: draft.unit, actions: actions, onLogged: {},
+                            pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map(\.ingredient.food.foodID)),
+                            onPick: { add($0, $1) ? draft.rows.count : nil }, pickError: { draft.errors.first },
+                            pickingInto: "recipe", confirmsAmounts: true, initialQuery: query)
+    }
+
+    /// An imported recipe's lines no food matched, first, each to search for or skip.
+    private var unmatchedLines: some View {
+        Section {
+            ForEach(Array(draft.unmatched.enumerated()), id: \.offset) { index, line in
+                VStack(alignment: .leading, spacing: ExSpacing.small) {
+                    Text(line).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).fixedSize(horizontal: false, vertical: true)
+                    let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
+                        : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+                    layout {
+                        Button("Search", systemImage: "magnifyingglass") { hideKeyboard(); resolving = UnmatchedLine(text: line) }
+                            .buttonStyle(ExActionStyle(secondary: true)).accessibilityLabel("Search for \(line)")
+                            .accessibilityIdentifier("recipe.unmatchedSearch.\(index)")
+                        Button("Skip") { withAnimation { draft.settle(line) } }
+                            .buttonStyle(ExActionStyle(secondary: true)).accessibilityLabel("Skip \(line)")
+                            .accessibilityIdentifier("recipe.unmatchedSkip.\(index)")
+                    }
+                }.padding(.vertical, ExSpacing.tight).accessibilityElement(children: .contain)
+            }
+        } header: {
+            Label("Not matched · \(draft.unmatched.count)", systemImage: "exclamationmark.circle.fill")
+                .foregroundStyle(Color.exWarning).textCase(nil)
+                .accessibilityElement(children: .ignore).accessibilityAddTraits(.isHeader)
+                .accessibilityLabel("\(draft.unmatched.count) \(draft.unmatched.count == 1 ? "line" : "lines") not matched")
+                .accessibilityIdentifier("recipe.unmatched")
+        } footer: {
+            VStack(alignment: .leading, spacing: ExSpacing.tight) {
+                ForEach(draft.errors, id: \.self) {
+                    Text($0).foregroundStyle(Color.exError).accessibilityFocused($errorsFocused).accessibilityIdentifier("recipe.error")
+                }
+                Text("No food matched these lines. Search for each, or skip it. Nothing is saved until you tap Save.")
+            }
+        }
+        .id("unmatched")
+    }
+
     private var ingredients: some View {
         Section {
             ForEach(draft.rows) { row in
                 Button { hideKeyboard(); editingRow = row } label: {
-                    RecipeIngredientRow(ingredient: row.ingredient, unit: draft.unit, unchecked: !row.checked)
+                    RecipeIngredientRow(ingredient: row.ingredient, unit: draft.unit, unchecked: !row.checked, line: row.line)
                 }
                     .buttonStyle(.plain).accessibilityIdentifier("recipe.ingredient.\(row.ingredient.food.foodID)")
                     .accessibilityAction(named: "Remove") { draft.remove(row.id) }
@@ -130,6 +212,13 @@ struct RecipeEditor: View {
                     .font(.exBodyMedium).foregroundStyle(Color.exPrimaryText).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("recipe.addIngredients")
+            if draft.isNew && draft.rows.isEmpty && draft.unmatched.isEmpty {
+                Button { hideKeyboard(); importing = true } label: {
+                    Label("Import from a link", systemImage: "link")
+                        .font(.exBodyMedium).foregroundStyle(Color.exPrimaryText).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("recipe.import")
+            }
         } header: {
             HStack {
                 Text(draft.rows.isEmpty ? "Ingredients" : "Ingredients · \(draft.rows.count)")
@@ -221,6 +310,8 @@ struct RecipeIngredientRow: View {
     let unit: MassUnit
     /// At a default amount no one has looked at yet.
     var unchecked = false
+    /// The imported line it came from, to compare with the match.
+    var line: String?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -232,6 +323,9 @@ struct RecipeIngredientRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(ingredient.food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
                 Text(amount).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                if let line {
+                    Text("\u{201C}\(line)\u{201D}").font(.exCaption).foregroundStyle(Color.exTextMuted).lineLimit(2)
+                }
                 if unchecked {
                     Label("Check the amount", systemImage: "exclamationmark.circle.fill")
                         .font(.exCaption.weight(.semibold)).foregroundStyle(Color.exWarning)
@@ -244,7 +338,7 @@ struct RecipeIngredientRow: View {
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(ingredient.food.name), \(amount), \(FoodFormat.kcal(ingredient.nutrients[.energy])) kilocalories"
-                            + (unchecked ? ", amount not checked yet" : ""))
+                            + (unchecked ? ", amount not checked yet" : "") + (line.map { ", from \($0)" } ?? ""))
     }
 }
 
@@ -268,11 +362,39 @@ struct RecipeDetails: View {
                 Text(preparation).font(.exBody).foregroundStyle(Color.exTextPrimary)
             }
         }
+        if let source = recipe.sourceURL.flatMap(URL.init(string:)) { RecipeSourceLink(url: source) }
     }
 
     private var yield: String {
         let servings = recipe.servingCount.map { "Makes \(TrainingFormat.number($0)) \($0 == 1 ? "serving" : "servings")" }
         let cooked = recipe.yieldGrams.map { "\(FoodFormat.weight($0, unit: unit)) cooked" } ?? "weighed raw"
         return [servings, cooked].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// The page an imported recipe came from, credited by its site.
+struct RecipeSourceLink: View {
+    let url: URL
+
+    var body: some View {
+        let site = (url.host() ?? url.absoluteString).replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+        Link(destination: url) { Label("From \(site)", systemImage: "link") }
+            .font(.exCaption).accessibilityHint("Opens the recipe's page").accessibilityIdentifier("recipe.source")
+    }
+}
+
+/// Share for a saved recipe: its file and a summary, through the share sheet.
+struct RecipeShareLink: View {
+    let recipe: ExerlyCore.Food
+    let unit: MassUnit
+
+    var body: some View {
+        ShareLink(item: RecipeShareItem(recipe: recipe), subject: Text(recipe.name),
+                  message: Text(RecipeShareItem.summary(recipe, unit: unit)),
+                  preview: SharePreview(recipe.name, image: Image(systemName: "frying.pan"))) {
+            Label("Share recipe", systemImage: "square.and.arrow.up")
+                .font(.exBodyMedium).foregroundStyle(Color.exPrimaryText).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }.accessibilityIdentifier("recipe.share")
     }
 }

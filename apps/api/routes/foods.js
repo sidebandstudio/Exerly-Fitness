@@ -1,6 +1,6 @@
-// Food search and barcode lookup for ExerlyCore. Results are Foods in the
-// `saved_food` document shape, ready to save or log: generic foods from the
-// bundled USDA table first, then packaged foods from Open Food Facts.
+// Food search, ingredient matching and barcode lookup for ExerlyCore. Results
+// are Foods in the `saved_food` document shape, ready to save or log: generic
+// foods from the bundled USDA table first, then packaged foods from Open Food Facts.
 // Personal tokens can use these too: searching reads no account data.
 
 const express = require('express');
@@ -40,6 +40,27 @@ router.get(
         foods: [...generic, ...packaged].slice(0, limit),
         attribution: attribution.filter(Boolean).join(' '),
       });
+    },
+    { transactional: false }
+  )
+);
+
+// The generic food each of a recipe's ingredient names (see
+// genericFoods.ingredient), or null: one request for a whole imported recipe,
+// from the bundled USDA table only, so it spends none of the shared Open Food
+// Facts budget.
+router.post(
+  '/match',
+  asyncHandler(
+    async (req, res) => {
+      const queries = req.body?.queries;
+      if (!Array.isArray(queries) || queries.length > 100)
+        throw badRequest('queries must be a list of up to 100 food names');
+      const foods = queries.map((query, i) => {
+        const name = v.str(query, `queries[${i}]`, { required: false, max: 100 });
+        return name ? genericFoods.ingredient(name) : null;
+      });
+      res.json({ foods, attribution: genericFoods.ATTRIBUTION });
     },
     { transactional: false }
   )

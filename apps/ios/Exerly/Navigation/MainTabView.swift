@@ -33,6 +33,14 @@ struct MainTabView: View {
     @State private var todayReselections = 0
     /// Scan barcode or Weigh in, for Today to open.
     @State private var todayLink: URL?
+    /// A recipe file someone shared, opened in Exerly, to review and save.
+    @State private var sharedRecipe: SharedRecipe?
+    @State private var sharedRecipeUnreadable = false
+
+    private struct SharedRecipe: Identifiable {
+        let id = UUID()
+        let recipe: RecipeImport
+    }
 
     private var unit: MassUnit { auth.currentUser?.unitSystem == "metric" ? .kilograms : .pounds }
     private var timeZone: TimeZone { TimeZone(identifier: auth.currentUser?.timezone ?? "UTC") ?? .gmt }
@@ -78,6 +86,14 @@ struct MainTabView: View {
         .environment(\.accountTimeZone, timeZone)
         // Widgets, controls and the workout's Live Activity open their screen.
         .task(id: "\(links.pending?.absoluteString ?? "")-\(account.training?.identity.uuidString ?? "")") { follow() }
+        .sheet(item: $sharedRecipe) { shared in
+            if let workspace = account.training, let api = auth.accountAPI {
+                RecipeEditor(workspace: workspace, api: api, timeZone: timeZone, unit: unit, imported: shared.recipe)
+            }
+        }
+        .alert("This recipe file can't be read", isPresented: $sharedRecipeUnreadable) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("It may be damaged, or from a newer version of Exerly.") }
     }
 
     /// The selected tab; a tap on the one already showing reaches here too.
@@ -104,6 +120,10 @@ struct MainTabView: View {
                 Task { await workspace.synchronize() }
             }
             selectedTab = .training
+        case _ where url.isFileURL && url.pathExtension.lowercased() == RecipeFile.fileExtension:
+            // Waits for the account's data, so the copy is saved to it.
+            guard let workspace = account.training, workspace.accountID == auth.currentUser?.id else { return }
+            do { sharedRecipe = SharedRecipe(recipe: try RecipeShareItem.read(url)) } catch { sharedRecipeUnreadable = true }
         case _ where ExerlyLinks.foodID(in: url) != nil:
             selectedTab = .today
             todayLink = url

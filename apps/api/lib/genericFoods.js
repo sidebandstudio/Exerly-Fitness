@@ -131,6 +131,58 @@ function rank(matched) {
   });
 }
 
+/** "potatoe", which `singular` leaves of "potatoes", as "potato". */
+const stem = (word) => (word.length > 4 && word.endsWith('oe') ? word.slice(0, -1) : word);
+// Words that don't make a food different from what a recipe line names.
+const NEUTRAL = new Set([
+  'raw',
+  'nfs',
+  'ns',
+  'plain',
+  'regular',
+  'fresh',
+  'to',
+  'as',
+  'of',
+  'form',
+  'type',
+]);
+// Words that make a food something else than the line names, unless it says them.
+const OTHER = new Set(['meatless', 'imitation', 'substitute', 'replacement', 'vegetarian', 'baby']);
+
+/**
+ * The generic food a recipe's ingredient names, or null. Stricter than
+ * `search`, because a wrong match is worse than none: every word must be in
+ * the food's name, and its first part must be made of them, so "black
+ * beans" finds "Black beans, NFS" but "salt" doesn't find a salted granola
+ * bar, nor "egg" eggplant, nor "bacon" meatless bacon. Foods with the
+ * fewest other words come first, then plain forms, then the shortest.
+ */
+function ingredient(query, { now = new Date() } = {}) {
+  const wanted = words(query).map((word) => stem(singular(word)));
+  if (!wanted.length) return null;
+  let best = null;
+  for (const food of foods) {
+    const names = food.words.map(stem);
+    if (!wanted.every((word) => names.includes(word))) continue;
+    if (!food.parts[0].every((word) => wanted.includes(stem(word)))) continue;
+    if (names.some((word) => OTHER.has(word) && !wanted.includes(word))) continue;
+    const rank = [
+      names.filter((word) => !wanted.includes(word) && !NEUTRAL.has(word)).length,
+      food.plain ? 0 : 1,
+      food.name.length,
+      food.fdcId,
+    ];
+    if (!best || precedes(rank, best.rank)) best = { food, rank };
+  }
+  return best ? toFood(best.food, now) : null;
+}
+
+const precedes = (a, b) => {
+  const i = a.findIndex((value, j) => value !== b[j]);
+  return i >= 0 && a[i] < b[i];
+};
+
 const byFdcID = new Map(foods.map((food) => [food.fdcId, food]));
 
 /** The generic food with this ID ("usda:<fdcId>"), or null. */
@@ -139,4 +191,4 @@ function byID(id, { now = new Date() } = {}) {
   return food ? toFood(food, now) : null;
 }
 
-module.exports = { ATTRIBUTION, byID, search, table };
+module.exports = { ATTRIBUTION, byID, ingredient, search, table };

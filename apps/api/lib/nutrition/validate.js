@@ -170,6 +170,16 @@ function foodProblems(food, id) {
     problems.push('the serving count must be positive');
   if (!absent(food.preparation) && !isString(food.preparation))
     problems.push('preparation must be text');
+  // The page a recipe was imported from, kept for attribution.
+  if (
+    !absent(food.sourceURL) &&
+    !(
+      isString(food.sourceURL) &&
+      food.sourceURL.length <= 2048 &&
+      /^https?:\/\//.test(food.sourceURL)
+    )
+  )
+    problems.push('sourceURL must be an http or https link');
   problems.push(...volumeProblems(food.volume, 'volume'));
   if (!absent(food.ingredients)) {
     if (!Array.isArray(food.ingredients)) problems.push('ingredients must be an array');

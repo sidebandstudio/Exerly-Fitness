@@ -212,6 +212,25 @@ public struct AccountAPI: DocumentAPI {
         return DatabaseFoods(foods: [found.food], attribution: found.attribution)
     }
 
+    /// The recipe a web page's structured data describes, read by the server.
+    /// Match its lines with `matchFoods` and review it as a `RecipeImport`.
+    public func importRecipe(from link: String) async throws -> WebRecipe {
+        let (status, data) = try await send("POST", "/v1/recipes/import", body: try JSONSerialization.data(withJSONObject: ["url": link]))
+        guard status == 200 else { throw Wire.failure(status, try? JSONSerialization.jsonObject(with: data)) }
+        return try ExerlyJSON.decoder.decode(ImportedPage.self, from: data).recipe
+    }
+
+    /// The generic food each name matches, or nil, in the same order. It
+    /// spends none of the server's Open Food Facts budget.
+    public func matchFoods(_ names: [String]) async throws -> [Food?] {
+        let (status, data) = try await send("POST", "/v1/foods/match", body: try JSONSerialization.data(withJSONObject: ["queries": names]))
+        guard status == 200 else { throw Wire.failure(status, try? JSONSerialization.jsonObject(with: data)) }
+        return try ExerlyJSON.decoder.decode(MatchedFoods.self, from: data).foods
+    }
+
+    private struct ImportedPage: Decodable { var recipe: WebRecipe }
+    private struct MatchedFoods: Decodable { var foods: [Food?] }
+
     /// Product barcode formats, as cameras report them.
     public enum BarcodeSymbology: String, Sendable, Hashable, CaseIterable {
         case upcA = "upca", upcE = "upce", ean8, ean13, gtin14, itf14
