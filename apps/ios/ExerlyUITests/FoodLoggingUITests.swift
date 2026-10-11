@@ -41,6 +41,69 @@ final class FoodLoggingUITests: ExerlyUITestCase {
 
     /// The portion sheet has one day and time. Moving the day keeps the time
     /// eaten, and the button names the day it logs to.
+    /// Run 6 long-pressed a recent food to stop it being suggested, then
+    /// swiped it, and both opened its portion. Recent and usual foods have a
+    /// menu on a long press and Hide on a swipe, and the portion sheet's
+    /// "…" has Don't suggest this. Each takes the food off Add food's shelf.
+    func testARecentFoodCanBeHiddenByALongPressASwipeOrItsSheet() async throws {
+        let app = try await signedInWithWeek(prefix: "food-hide")
+        openSearch(app)
+        dismissKeyboard(app)
+        let recent = app.otherElements["nutrition.group.recent"]
+        XCTAssertTrue(recent.waitForExistence(timeout: 10))
+        func row(_ name: String) -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.food.", "\(name),")).firstMatch
+        }
+        let toast = app.descendants(matching: .any).matching(identifier: "nutrition.loggedConfirmation").firstMatch
+
+        // A long press opens a menu, not the portion.
+        let salmon = row("Salmon fillet")
+        reveal(salmon, in: app)
+        salmon.press(forDuration: 1.0)
+        let hide = app.buttons["Don't suggest this"]
+        XCTAssertTrue(hide.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["Details"].exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Log ")).firstMatch.exists)
+        XCTAssertFalse(app.buttons["nutrition.saveEntry"].exists, "No portion sheet")
+        capture(app, "food-hide-menu")
+        hide.tap()
+        XCTAssertTrue(salmon.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(toast.waitForExistence(timeout: 3))
+        XCTAssertTrue(toast.label.contains("Won't suggest Salmon fillet"), toast.label)
+        app.buttons["nutrition.undoLog"].tap()
+        XCTAssertTrue(salmon.waitForExistence(timeout: 5), "Undo puts it back")
+
+        // A swipe uncovers Hide, and doesn't open the portion either. A long swipe hides it at once.
+        let potatoes = row("Roasted potatoes")
+        reveal(potatoes, in: app)
+        let swipeHide = app.buttons["nutrition.swipeHide.\(potatoes.identifier.dropFirst("nutrition.food.".count))"]
+        potatoes.swipeLeft()
+        XCTAssertFalse(app.buttons["nutrition.saveEntry"].waitForExistence(timeout: 1), "No portion sheet")
+        if swipeHide.waitForExistence(timeout: 2) {
+            capture(app, "food-hide-swipe")
+            swipeHide.tap()
+        }
+        XCTAssertTrue(potatoes.waitForNonExistence(timeout: 5), app.debugDescription)
+
+        // From the portion sheet's menu.
+        let chicken = row("Chicken breast, grilled")
+        tap(chicken, in: app)
+        tap(app.buttons["nutrition.entryMore"], in: app)
+        tap(app.buttons["nutrition.entryHideSuggestion"], in: app)
+        XCTAssertTrue(app.buttons["nutrition.saveEntry"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(chicken.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(toast.waitForExistence(timeout: 3))
+
+        // They stay off the shelf next time, and search still finds them.
+        tap(app.buttons["nutrition.closePicker"], in: app)
+        openSearch(app)
+        XCTAssertTrue(recent.waitForExistence(timeout: 10))
+        XCTAssertFalse(potatoes.exists)
+        XCTAssertFalse(chicken.exists)
+        replace(app.searchFields.firstMatch, with: "potatoes", in: app)
+        XCTAssertTrue(potatoes.waitForExistence(timeout: 5), "Search still finds it")
+    }
+
     /// Run 6 tapped "About this food", half under the portion sheet's Log
     /// button on an SE, and logged the food. The content ends where the
     /// button's bar starts, so nothing under it can take a tap.

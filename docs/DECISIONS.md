@@ -1110,3 +1110,24 @@ hard scroll edge Progress used), on Today, Profile and every screen built on
 - Train's workout card lists four exercises, so Preview and Empty workout show.
 - The Apple Health offer sits under the weight chart rather than above it,
   and the chart is 30 points shorter, so its legend shows too.
+
+## 2026-10-11: Hide a suggestion where it's suggested
+
+Run 6 couldn't stop a food being suggested. It long-pressed a food in Add
+food's Recent and got its portion sheet, then swiped one and got the sheet
+again. Only usual foods had the menu, so on a recent food a long press was a
+slow tap on the row's button, and a swipe that ended inside that full-width
+button counted as a tap too. Now every usual and recent food in Add food, and
+every Log again chip on Today, has a menu on a long press: Log (Undo once
+logged), Details and Don't suggest this. Add food's rows also take a swipe
+left, which uncovers Hide; a long swipe hides at once. SwiftUI's
+`swipeActions` work only in a List, and these rows are in the screen's scroll
+view, so the swipe is a sideways-only pan that never starts on a vertical drag
+and, once started, keeps the row's button from taking the touch. The portion
+sheet opened from one of these foods, or from a chip, has Don't suggest this
+in its "…" menu. Each has Undo.
+
+A hidden food now leaves Add food's Recent too. The 2026-10-10 entry kept it
+there, but hiding a recent food that then stays put looks like nothing
+happened. Search, Favorites and My foods still find it, and Food library lists
+it with Suggest again.

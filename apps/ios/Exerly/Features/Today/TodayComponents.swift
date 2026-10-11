@@ -297,7 +297,8 @@ struct TodaySuggestionChip: View {
     var logged = false
     let open: () -> Void
     let log: () -> Void
-    /// "Don't suggest this", from a long press or VoiceOver's actions.
+    /// "Don't suggest this", from a long press, VoiceOver's actions or the
+    /// portion sheet's menu.
     let hide: () -> Void
 
     var body: some View {
@@ -332,7 +333,10 @@ struct TodaySuggestionChip: View {
         .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay { RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5) }
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // As on Add food's usual and recent foods: what the chip does, then Don't suggest this.
         .contextMenu {
+            Button(logged ? "Undo" : "Log \(portion)", systemImage: logged ? "arrow.uturn.backward" : "plus", action: log)
+            Button("Details", systemImage: "info.circle", action: open)
             Button("Don't suggest this", systemImage: "eye.slash", action: hide).accessibilityIdentifier("today.suggestion.hide")
         }
     }

@@ -142,8 +142,11 @@ struct NutritionFoodPicker: View {
                 }
             }
             .sheet(item: $selectedFood, onDismiss: finishSheet) { request in
+                // A suggested or recent food can be hidden from its sheet's menu too.
+                let shelved = (shelf.suggested + shelf.recent).first { $0.id == request.food.id }
                 NutritionEntryEditor(workspace: workspace, food: request.food, date: date, meal: meal,
-                                     timeZone: timeZone, unit: unit, actions: actions, start: request.start) {
+                                     timeZone: timeZone, unit: unit, actions: actions, start: request.start,
+                                     onHide: shelved.map { item in { hide(item) } }) {
                     sheetLogged = (sheetLogged ?? []) + [$0]
                 }
             }
@@ -242,7 +245,7 @@ struct NutritionFoodPicker: View {
                     group(shelf.hasRecipes ? "Usual for \(meal.lowercased())" : suggestedTitle, shelf.suggested, id: "suggested",
                           hideable: true)
                 }
-                if !shelf.recent.isEmpty { group("Recent", shelf.recent, id: "recent") }
+                if !shelf.recent.isEmpty { group("Recent", shelf.recent, id: "recent", hideable: true) }
             }
         case .favorites:
             let favorites = savedItems { $0.favorite }
@@ -366,8 +369,9 @@ struct NutritionFoodPicker: View {
         }
     }
 
-    /// Foods under a heading. Suggested ones (`hideable`) can be hidden from
-    /// suggestions with a long press.
+    /// Foods under a heading. Suggested and recent ones (`hideable`) have a
+    /// menu on a long press and Hide on a swipe left. Run 6 long-pressed and
+    /// swiped a recent food, which had neither, and got its portion sheet.
     private func group(_ title: String, _ items: [FoodPickerItem], id: String, hideable: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: ExSpacing.small) {
             ExEyebrow(title).accessibilityAddTraits(.isHeader)
@@ -381,10 +385,8 @@ struct NutritionFoodPicker: View {
                 if hideable {
                     row(item)
                         .background(Color.exSurface1)
-                        .contextMenu {
-                            Button("Don't suggest this", systemImage: "eye.slash") { hide(item) }
-                                .accessibilityIdentifier("nutrition.hideSuggestion")
-                        }
+                        .contextMenu { menu(item) }
+                        .exSwipeAction("Hide", systemImage: "eye.slash", identifier: "nutrition.swipeHide.\(item.id)") { hide(item) }
                         .accessibilityAction(named: "Don't suggest this") { hide(item) }
                 } else { row(item) }
                 if item.id != items.last?.id { Divider().overlay(Color.exBorder.opacity(0.35)) }
@@ -412,6 +414,23 @@ struct NutritionFoodPicker: View {
                                     selectedFood = PortionRequest(item)
                                 } else { quickLog(item) }
                             })
+    }
+
+    /// What the row's buttons do, then Don't suggest this.
+    @ViewBuilder private func menu(_ item: FoodPickerItem) -> some View {
+        if picking {
+            Button("Add to the \(pickingInto)", systemImage: "plus") { select(item) }
+        } else if justLogged[item.id] != nil {
+            Button("Undo", systemImage: "arrow.uturn.backward") { unlog(item) }
+        } else {
+            Button("Log \(FoodFormat.portion(item.portion, unit: unit))", systemImage: "plus") { quickLog(item) }
+        }
+        Button("Details", systemImage: "info.circle") {
+            hideKeyboard()
+            if picking { ask(PortionRequest(item)) } else { selectedFood = PortionRequest(item) }
+        }
+        Button("Don't suggest this", systemImage: "eye.slash") { hide(item) }
+            .accessibilityIdentifier("nutrition.hideSuggestion")
     }
 
     private func emptyMessage(_ title: String, _ message: String) -> some View {
@@ -466,7 +485,9 @@ struct NutritionFoodPicker: View {
         }
         let shelved = recipes + suggested.filter { item in !recipes.contains { $0.id == item.id } }
         let suggestedIDs = Set(shelved.map(\.id))
-        let recent = store.recentPortions(limit: 30).filter { !suggestedIDs.contains($0.id) }.map(item)
+        // A food the person asked not to be suggested leaves Recent too; search still finds it.
+        let recent = store.recentPortions(limit: 30)
+            .filter { !suggestedIDs.contains($0.id) && !store.isHiddenSuggestion($0.id) }.map(item)
         shelf = FoodShelf(suggested: shelved, recent: recent, hasRecipes: !recipes.isEmpty)
         // Checks stay only for entries still logged on this day.
         justLogged = justLogged.compactMapValues { entries in
@@ -559,7 +580,8 @@ struct NutritionFoodPicker: View {
     private func showInRecent(_ entries: [FoodEntry]) {
         let listed = Set((shelf.suggested + shelf.recent).map(\.id))
         let logged = Set(entries.map(\.food.foodID))
-        let added = store.recentPortions(limit: 30).filter { logged.contains($0.id) && !listed.contains($0.id) }.map(item)
+        let added = store.recentPortions(limit: 30)
+            .filter { logged.contains($0.id) && !listed.contains($0.id) && !store.isHiddenSuggestion($0.id) }.map(item)
         shelf.recent.insert(contentsOf: added, at: 0)
     }
 
@@ -594,17 +616,19 @@ struct NutritionFoodPicker: View {
         }
     }
 
-    /// "Don't suggest this": the row goes, and Undo brings it back.
+    /// "Don't suggest this": the row goes from usual foods or Recent, and
+    /// Undo brings it back where it was.
     private func hide(_ item: FoodPickerItem) {
-        guard let index = shelf.suggested.firstIndex(where: { $0.id == item.id }) else { return }
+        let usual = shelf.suggested.firstIndex { $0.id == item.id }
+        guard let index = usual ?? shelf.recent.firstIndex(where: { $0.id == item.id }) else { return }
         logError = nil
         do {
             try store.hideSuggestion(item.portion.food)
             let title = "Won't suggest \(item.portion.food.name)"
             withAnimation(.snappy) {
-                shelf.suggested.remove(at: index)
+                if usual == nil { shelf.recent.remove(at: index) } else { shelf.suggested.remove(at: index) }
                 confirmation = LoggedConfirmation(entries: [], title: title, detail: "Food library can suggest it again",
-                                                  hidden: (item, index))
+                                                  hidden: (item, index, usual == nil))
             }
             UIAccessibility.post(notification: .announcement, argument: title)
             Task { await workspace.synchronize() }
@@ -617,8 +641,12 @@ struct NutritionFoodPicker: View {
             if store.isHiddenSuggestion(hidden.item.id) { try? store.restoreSuggestion(hidden.item.id) }
             withAnimation(.snappy) {
                 confirmation = nil
-                if !shelf.suggested.contains(where: { $0.id == hidden.item.id }) {
-                    shelf.suggested.insert(hidden.item, at: min(hidden.index, shelf.suggested.count))
+                if !(shelf.suggested + shelf.recent).contains(where: { $0.id == hidden.item.id }) {
+                    if hidden.recent {
+                        shelf.recent.insert(hidden.item, at: min(hidden.index, shelf.recent.count))
+                    } else {
+                        shelf.suggested.insert(hidden.item, at: min(hidden.index, shelf.suggested.count))
+                    }
                 }
             }
             Task { await workspace.synchronize() }
@@ -797,7 +825,7 @@ private struct LoggedConfirmation: Identifiable {
     let title: String
     let detail: String
     /// A suggestion just hidden, and where it was, for Undo.
-    var hidden: (item: FoodPickerItem, index: Int)?
+    var hidden: (item: FoodPickerItem, index: Int, recent: Bool)?
 }
 
 /// As a sheet the search field stays under the title, which stays while

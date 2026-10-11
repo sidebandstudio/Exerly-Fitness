@@ -811,7 +811,8 @@ struct TodayView: View {
         case .log(let suggestion):
             NutritionEntryEditor(workspace: workspace,
                                  food: store.food(suggestion.food.foodID) ?? suggestion.food.foodForLogging(serving: suggestion.serving),
-                                 date: date, meal: currentMeal, timeZone: timeZone, unit: unit, actions: actions) { _ in }
+                                 date: date, meal: currentMeal, timeZone: timeZone, unit: unit, actions: actions,
+                                 onHide: { hide(suggestion) }) { _ in }
         case .notes: NutritionDayNotesView(workspace: workspace, date: date, timeZone: timeZone)
         case .copy(let meal): NutritionCopyView(workspace: workspace, source: date, meal: meal, timeZone: timeZone)
         case .recipe(let meal):
