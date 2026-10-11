@@ -199,9 +199,9 @@ extension Food {
     /// else its first serving (a recipe's serving without one) unless that
     /// is a measure such as "1 cup", which a count can't mean.
     public var countServing: Serving? {
-        let named = Set(FoodSearch.words(name).map(Self.singular))
+        let named = Set(FoodSearch.words(name).map(FoodSearch.singular))
         let noun = { (serving: Serving) in
-            serving.name.lowercased().split(separator: " ").dropFirst().first.map { Self.singular(String($0)) }
+            serving.name.lowercased().split(separator: " ").dropFirst().first.map { FoodSearch.singular(String($0)) }
         }
         if let serving = servings.first(where: { noun($0).map(named.contains) == true }) { return serving }
         if let serving = servings.first(where: { ["whole", "medium", "each", "piece", "item"].contains(noun($0) ?? "") }) {
@@ -219,7 +219,7 @@ extension Food {
     /// "can" finds "1 can (15 oz)" or "1 can", "large" "1 large breast". One
     /// whose name starts with the word comes first.
     private func serving(named word: String) -> Serving? {
-        let words = { (serving: Serving) in FoodSearch.words(serving.name).map(Self.singular) }
+        let words = { (serving: Serving) in FoodSearch.words(serving.name).map(FoodSearch.singular) }
         let synonyms: Set<String> = word == "can" || word == "tin" ? ["can", "tin"]
             : TypedAmount.packages.contains(word) ? TypedAmount.packages.subtracting(["can", "tin"]) : [word]
         let matching = (servings + recipePortions).filter { !synonyms.isDisjoint(with: words($0)) }
@@ -244,12 +244,5 @@ extension Food {
     private static func isMeasure(_ serving: String, _ measure: String, exactly: Bool = false) -> Bool {
         let name = serving.lowercased()
         return name == "1 \(measure)" || !exactly && (name.hasPrefix("1 \(measure),") || name.hasPrefix("1 \(measure) ("))
-    }
-
-    private static func singular(_ word: String) -> String {
-        if word.count > 3 && word.hasSuffix("ies") { return String(word.dropLast(3)) + "y" }
-        if word.count > 3 && word.hasSuffix("oes") { return String(word.dropLast(2)) }
-        if word.count > 3 && word.hasSuffix("s") && !word.hasSuffix("ss") { return String(word.dropLast()) }
-        return word
     }
 }

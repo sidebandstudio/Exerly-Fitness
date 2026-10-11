@@ -527,7 +527,7 @@ struct NutritionFoodPicker: View {
     private var localMatches: [FoodPickerItem] {
         var seen = Set<String>()
         let foods = (store.recentPortions(limit: 200).map(item) + savedItems { _ in true }).filter { seen.insert($0.id).inserted }
-        return FoodSearch.matching(foods, query: searchText) { "\($0.portion.food.name) \($0.portion.food.brand ?? "")" }
+        return FoodSearch.matching(foods, query: searchText) { [$0.portion.food.name, $0.portion.food.brand].compactMap { $0 }.joined(separator: ", ") }
             .prefix(12).map { $0 }
     }
 

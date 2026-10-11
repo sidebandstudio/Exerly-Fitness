@@ -1139,3 +1139,24 @@ scrolled past its week strip. Entered from another tab, Log food clears its
 search and picks the meal for now, and Today returns to its top, keeping the
 day it shows, as Profile already did. Re-tapping Today still also goes back to
 today.
+
+## 2026-10-11: A plain food before dishes named with it
+
+In code-blind run 6, "1 slice toast" listed Shrimp toast and French toast
+first under Food database. Generic foods rank by how directly the query
+names them (design 023), and no FNDDS food is called "Toast": toast is
+"Bread, white, toasted". A part of a name in the query's "-ed" form now
+names it as the word does, the way "Fish, salmon" names salmon, so toasted
+breads come before Shrimp, French and Melba toast, whose names add words. Of
+99 common searches only "toast" and "roast" changed in their first five.
+Among toasted breads the order is still by length (rye, soy, rice, white),
+since FNDDS has no popularity. Two other fixes were tried and dropped:
+matching "NFS", which design 023 calls plain but the code never matches,
+and counting "NS as to" as plain. They put "Chicken, meatless, NFS" first
+for chicken and a frozen spaghetti dinner first for spaghetti.
+
+The person's own foods rank by the same rule (`FoodSearch.names`): those
+the query names ("Eggs, scrambled" for eggs) first, then history before
+saved foods as before. Their own "Whole wheat toast" doesn't name plain
+toast, so it keeps its place by history, and it is listed above the
+database anyway.
