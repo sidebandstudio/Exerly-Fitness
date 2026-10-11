@@ -261,6 +261,23 @@ enum NutritionFormat {
     }
 
     /// DatePicker needs a Date; keep its calendar day in the account's time zone.
+    /// The same time of day on another day, so moving an entry's day keeps when it was eaten.
+    static func sameTime(_ instant: Date, on day: LocalDate, timeZone: TimeZone) -> Date {
+        guard LocalDate(instant, in: timeZone) != day else { return instant }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var parts = calendar.dateComponents([.hour, .minute, .second, .nanosecond], from: instant)
+        (parts.year, parts.month, parts.day) = (day.year, day.month, day.day)
+        return calendar.date(from: parts)?.roundedToMilliseconds ?? instant
+    }
+
+    /// Hour and minute on the account's clock.
+    static func clock(_ instant: Date, timeZone: TimeZone) -> [Int] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return [calendar.component(.hour, from: instant), calendar.component(.minute, from: instant)]
+    }
+
     static func pickerDate(_ date: LocalDate, timeZone: TimeZone) -> Date {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone

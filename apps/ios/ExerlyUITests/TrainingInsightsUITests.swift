@@ -33,7 +33,28 @@ final class TrainingInsightsUITests: ExerlyUITestCase {
         // Each session's best is its 5 reps at 2 RIR (7 to failure): 185, 195 and 205 lb a week
         // apart fit a straight trend ending at 205 × 36/30, 246 lb.
         XCTAssertTrue(estimate.label.contains("246 pounds"), estimate.label)
-        XCTAssertTrue(app.descendants(matching: .any)["liftDetail.stats"].exists)
+        // The trend's estimate and the best set's e1RM say which is which.
+        XCTAssertTrue(estimate.label.contains("Trend estimate · best set e1RM "), estimate.label)
+        let stats = app.descendants(matching: .any)["liftDetail.stats"]
+        XCTAssertTrue(stats.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Best e1RM, ")).firstMatch.exists)
+    }
+
+    /// Train's recent workouts say what this week adds up to, as Progress counts it.
+    func testTrainShowsThisWeeksTotal() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "insights-week", units: "imperial")
+        try await seedSession(name: "Synthetic push", daysAgo: 0, exercises: [
+            ("barbell-bench-press", [(5, 185, 2), (5, 185, 2), (5, 185, 1)]),
+        ], token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        tap(app.buttons["Train"], in: app)
+        let week = app.staticTexts["training.thisWeek"]
+        reveal(week, in: app)
+        XCTAssertTrue(week.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertEqual(week.label, "This week: 1 workout · 3 sets")
+        capture(app, "training-this-week")
     }
 
     /// An account with no workouts says what will appear, not empty charts.

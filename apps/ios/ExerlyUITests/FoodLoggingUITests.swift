@@ -39,6 +39,82 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(pears.count, 2, "The undone entry is gone and the second one stays")
     }
 
+    /// The portion sheet has one day and time. Moving the day keeps the time
+    /// eaten, and the button names the day it logs to.
+    func testMovingTheDayKeepsTheTimeAndTheButtonNamesTheDay() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "food-day")
+        let seeded = try await seedNutritionEntry(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openSearch(app)
+        tap(app.buttons["nutrition.food.\(seeded.foodID)"], in: app)
+        let save = app.buttons["nutrition.saveEntry"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        XCTAssertFalse(save.label.contains(" on "), "Today goes unsaid: \(save.label)")
+        let eaten = app.datePickers["nutrition.eatenAt"]
+        reveal(eaten, in: app)
+        XCTAssertFalse(app.datePickers["nutrition.entryDate"].exists, "No separate diary date")
+        // Its two halves: the day ("Oct 10, 2026") and the time ("6:28 PM").
+        let clock = eaten.buttons.matching(NSPredicate(format: "label CONTAINS ':'")).firstMatch
+        let calendarDay = eaten.buttons.matching(NSPredicate(format: "label CONTAINS ', 20'")).firstMatch
+        let time = clock.label
+        capture(app, "food-day-today")
+
+        // Tomorrow, or yesterday at the end of a month, so it's in the calendar shown.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = Self.newYork
+        let now = Date()
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+        let day = calendar.component(.month, from: tomorrow) == calendar.component(.month, from: now)
+            ? tomorrow : calendar.date(byAdding: .day, value: -1, to: now)!
+        var name = Date.FormatStyle(locale: Locale(identifier: "en_US")).weekday(.wide).month(.wide).day()
+        name.timeZone = Self.newYork
+        calendarDay.tap()
+        let choice = app.buttons[day.formatted(name)]
+        XCTAssertTrue(choice.waitForExistence(timeout: 5), app.debugDescription)
+        choice.tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+        XCTAssertEqual(clock.label, time, "Same time of day, on the new day")
+        var short = Date.FormatStyle(locale: Locale(identifier: "en_US")).month(.abbreviated).day().year()
+        short.timeZone = Self.newYork
+        XCTAssertEqual(calendarDay.label, day.formatted(short))
+        XCTAssertTrue(save.label.hasSuffix(" on \(day.formatted(name))"), save.label)
+        capture(app, "food-day-moved")
+        tap(save, in: app)
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = Self.newYork
+        formatter.dateFormat = "yyyy-MM-dd"
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var logged: [String: Any]?
+        for _ in 0..<40 where logged == nil {
+            logged = try await entries(token: person.token).first { $0["id"] as? String != seeded.id }
+            if logged == nil { try await Task.sleep(for: .milliseconds(500)) }
+        }
+        let entry = try XCTUnwrap(logged, "The entry reached the server")
+        XCTAssertEqual(entry["date"] as? String, formatter.string(from: day))
+        let at = try XCTUnwrap((entry["loggedAt"] as? String).flatMap(iso.date(from:)))
+        XCTAssertEqual(formatter.string(from: at), formatter.string(from: day), "Eaten on the day it counts for")
+    }
+
+    /// The account's food entries, from the change feed.
+    private func entries(token: String) async throws -> [[String: Any]] {
+        var latest: [String: [String: Any]?] = [:]
+        var cursor = 0
+        while true {
+            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
+            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == "food_entry" {
+                if let id = change["id"] as? String { latest[id] = change["payload"] as? [String: Any] }
+            }
+            cursor = page["cursor"] as? Int ?? cursor
+            guard page["has_more"] as? Bool == true else { break }
+        }
+        return Array(latest.compactMapValues { $0 }.values)
+    }
+
     /// An amount typed with the food is what one tap logs: the row says so
     /// before the tap, and the search clears for the next food.
     func testAnAmountTypedInTheSearchTabLogsInTwoTaps() async throws {

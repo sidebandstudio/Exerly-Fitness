@@ -820,6 +820,125 @@ run `OpenFoodIntent`, which opens the portion sheet over Today (at the last
 portion, else the first serving): 2 taps after typing. A portion just logged
 is safe to repeat without looking; a first serving is a guess worth seeing.
 
+## 2026-10-10: Reminders get their own screen
+
+Code-blind run 5 took 17 actions to set a 7:30 AM weigh-in reminder: free-text
+24-hour times in the Preferences sheet, an "Enable reminders on this iPhone"
+button that stayed grey until the sheet was reopened, and a result that only
+said "1 reminder scheduled".
+
+- **Where.** Profile has a Reminders row beside Units and Appearance. Its
+  screen has a switch for each kind in the order of a day (weigh-in, meals,
+  workouts, sleep). The whole row turns a switch on, its title included; the
+  same style now serves the workout-day switches in the details sheet.
+- **Times.** A switch that's on shows its time in a native time picker, in the
+  person's locale (12-hour in the US). Meals have one picker per time, a remove
+  button each and "Add a meal time", up to the API's ten; workouts show the day
+  chips their reminder needs. Times are still saved as "HH:mm" in
+  `reminderTimes`, so the API and other clients are unchanged.
+- **Defaults.** A reminder turned on without a time starts at 7:00 for a
+  weigh-in, 17:30 for workouts and 22:00 for sleep. Meals start at the person's
+  usual breakfast, lunch and dinner (`NutritionStore.usualTime`, to the nearest
+  5 minutes), which is 8:00, 12:30 and 18:30 before there's a habit.
+- **No separate enable step.** Each change saves to the account as it's made,
+  one save at a time; a change made during a save goes in the next one, and a
+  conflict keeps this person's edits for the fields they touched. Turning a
+  reminder on also turns on delivery on this iPhone, asking iOS for permission
+  the first time. "Remind me on this iPhone" stays as a switch, so one device
+  can be kept quiet.
+- **What's scheduled, in words.** The screen lists what iOS holds
+  (`NotificationService.scheduled`): "Weigh-in · every day at 7:30 AM",
+  "Workout · Mon and Thu at 5:30 PM". Profile's row shows the first line.
+- **Names match.** Reminders left the sheet that "Details & reminders" opened
+  under the title "Preferences". Both the row and the sheet are now "Your
+  details".
+
+A 7:30 AM weigh-in from Profile is 5 actions: Reminders, Weigh-in, the time,
+one turn of the minutes wheel, and closing the picker, plus Allow the first
+time.
+
+## 2026-10-10: One day and time for an entry
+
+The portion sheet had a diary date and a separate "Eaten at"; moving the diary
+date to Sunday left the meal eaten on Saturday at 7:30 AM. The portion sheet and
+Log a meal now have one "Eaten" day-and-time control. The day chosen is the
+diary day, and moving it keeps the time of day; a time no one set still follows
+the meal on the new day. An entry saved with its time on another day (a late
+snack an import counted for the day before) shows on its diary day and keeps its
+exact time unless someone changes it. Logging to another day names it on the
+button: "Log to Breakfast · Sun" within a week, else "Log to Breakfast · Oct 3".
+
+## 2026-10-10: Delete sits in the entry sheet's toolbar
+
+Delete entry was three swipes down, under the full nutrient panel. It's now a
+trash button in the sheet's toolbar beside the favorite star, still behind the
+confirmation, which names the day in words ("from Dinner on Sun, Oct 11",
+"today", "yesterday") instead of "2026-10-10". Today's rows get no swipe action:
+Today is a scroll view, not a list, and its meal list is being reworked for
+multi-select.
+
+## 2026-10-10: Reminder times turn in 5-minute steps
+
+With the minute wheel in 1-minute steps, setting 7:30 from 7:00 took two or
+three drags in the re-drive (7:10, then 7:22). Reminders don't need the minute,
+so their pickers are the same system compact time picker with a 5-minute
+interval, which SwiftUI's DatePicker can't set; :30 is six steps away. A time
+saved off the step (07:03 from another client) keeps 1-minute steps, so the
+picker never shows a different time from the one scheduled.
+
+## 2026-10-10: Nutrient goals and Reminders under Your plan, with goal search
+
+Nutrient goals was two screens into Your plan, and sodium was several screens
+down its list. Profile now has a "Goals and reminders" group right under the
+plan card: Nutrient goals ("Daily values · 2 on Today") and Reminders, which
+moves up from Preferences so both are on screen without scrolling. The goals
+list has a search field: typing part of a name shows only the matches, so "sod"
+finds sodium without scrolling. Search was chosen over a jump index by group
+because people look for a nutrient by its name, not its group.
+
+## 2026-10-10: A recipe saved in the library can be logged now
+
+A recipe saved from the food library used to leave the person in the list with
+no way to eat it now; from food search it already goes straight to its portion.
+In the library a card now says it was saved and offers "Log it now", which opens
+the portion sheet at one serving, then says what was logged. The list shows a
+recipe with servings by the serving ("297 kcal / serving"), as its page and
+portion sheet do; other foods stay per 100 g.
+
+## 2026-10-10: A lift's two estimates say which is which
+
+The bench page's headline said 142 lb while its line said "best 141 lb" and the
+Stats tile "Est. 1RM 141 lb". Both are right: the headline is the trend's value
+at the last session, steadier than one session, and 141 is the best set's own
+e1RM. They keep their maths and gain labels: "Trend estimate · best set e1RM
+141 lb on Thu, Oct 8", and the tile is "Best e1RM". Changing the headline to the
+best set would make Progress's list jump with every heavy or light day.
+
+## 2026-10-10: Weekly bars are labelled under themselves
+
+The weekly training chart labelled week boundaries, so dates sat between bars
+and the last label named the week after the chart. Each label now sits centred
+under its bar, every week for four weeks and fewer as the span grows, counted
+back from this week so the current one is always labelled. Train's Recent list
+starts with this week's total, "This week: 2 workouts · 31 sets", counted as
+Progress counts its weeks.
+
+## 2026-10-10: Re-tapping Profile already returns to its top
+
+Run 5 read step 20 as Profile ignoring a re-tap, but that step switched back
+from Today, which keeps a tab's place as iOS tabs do; the re-tap after it went
+straight back to Profile's first screen. iOS pops Profile's stack and scrolls it
+to the top itself, so a test now covers that instead of new code. Unlike
+Today's, Profile's large title stays small after that scroll. Two attempts at an
+extra animated scroll after iOS's own didn't bring it back, so it's left.
+
+## 2026-10-10: A hard edge under Progress's sections
+
+Text scrolling under Progress's Body, Nutrition, Training and Photos picker
+showed through it blurred. The tabs' scroll views now use the hard top edge
+effect, which backs the bar with the page's colour, as their bottom edges
+already did.
+
 ## 2026-10-10: Duplicate a custom food
 
 Food library's actions offer Duplicate food for custom and imported foods,

@@ -80,6 +80,19 @@ final class NutritionPlatePresentationTests: XCTestCase {
         XCTAssertFalse(draft.add(food), "A saved draft cannot append an unsaved row")
     }
 
+    func testMovingAMealsDayKeepsItsTime() throws {
+        let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let morning = Date(timeIntervalSince1970: 1_791_637_260) // 9:01 AM in New York, Saturday
+        let draft = NutritionPlateDraft(store: store, date: try XCTUnwrap(LocalDate("2026-10-10")), meal: "Breakfast",
+                                        now: morning, timeZone: zone)
+        XCTAssertTrue(draft.add(ExerlyCore.Food(name: "Synthetic toast", per100g: NutrientAmounts([.energy: 250]))))
+        draft.eatenAt = morning.addingTimeInterval(-86_400)
+        let saved = try XCTUnwrap(draft.save())
+        XCTAssertEqual(saved.first?.date, LocalDate("2026-10-09"))
+        XCTAssertEqual(saved.first?.loggedAt, morning.addingTimeInterval(-86_400))
+    }
+
     func testRepeatedNamedPortionWithoutARecordedQuantityUsesItsExactWeight() throws {
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
         let date = try XCTUnwrap(LocalDate("2026-10-07"))

@@ -39,6 +39,31 @@ final class NutrientGoalsUITests: ExerlyUITestCase {
         XCTAssertEqual((plan["nutrientGoals"] as? [String: [String: Double]])?["fiber"], ["floor": 30])
     }
 
+    /// Profile has Nutrient goals beside Your plan, and the list's search finds
+    /// sodium without scrolling past the vitamins.
+    func testNutrientGoalsFromProfileAndSearch() async throws {
+        let (app, _) = try await signedInWithNutrients(prefix: "goals-profile", pinned: ["fiber"])
+        XCTAssertNotNil(targetEnergy(app))
+        tapCount = 0
+        tap(app.buttons["Profile"], in: app)
+        let row = app.buttons["profile.nutrientGoals"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertEqual(row.value as? String, "Daily values · 1 on Today")
+        capture(app, "goals-profile-row")
+        tap(row, in: app)
+        XCTAssertTrue(app.navigationBars["Nutrient goals"].waitForExistence(timeout: 10))
+        let search = app.textFields["goals.search"]
+        tap(search, in: app)
+        search.typeText("sod")
+        let sodium = app.buttons["goals.nutrient.sodium"]
+        XCTAssertTrue(sodium.waitForExistence(timeout: 5) && sodium.isHittable, "Sodium shows without scrolling")
+        XCTAssertFalse(app.buttons["goals.nutrient.vitaminC"].exists, "Only matches while searching")
+        capture(app, "goals-search-sodium")
+        tap(sodium, in: app)
+        XCTAssertTrue(app.buttons["goalEditor.save"].waitForExistence(timeout: 5))
+        XCTAssertEqual(tapCount, 4, "Profile, Nutrient goals, search, Sodium; the name is typed")
+    }
+
     /// From Today: the ring, Nutrient goals, two pins and back. Each pinned
     /// nutrient shows its day against its goal and the foods its total is from.
     func testPinningFiberAndSodiumShowsThemOnToday() async throws {

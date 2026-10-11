@@ -2333,6 +2333,7 @@ final class ProductionTests: XCTestCase {
         service.accept(saved)
         await service.waitForSchedule()
         XCTAssertEqual(service.scheduledCount, 1)
+        XCTAssertEqual(service.scheduled.map(\.title), ["Sleep reminder"], "What iOS holds, for Reminders to list")
         await service.setDeviceEnabled(false)
         XCTAssertEqual(service.scheduledCount, 0)
         let retained = await scheduler.pendingIDs()

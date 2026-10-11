@@ -149,7 +149,8 @@ final class ProfileOnboardingUITests: ExerlyUITestCase {
         let weight = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR label == %@", "Trend weight", "Weight")).firstMatch
         XCTAssertTrue(weight.waitForExistence(timeout: 10))
         XCTAssertTrue((weight.value as? String ?? "").contains("kilograms"), weight.value as? String ?? "")
-        for identifier in ["profile.targets", "profile.foods", "profile.agents", "profile.sync", "profile.account", "profile.logout"] {
+        for identifier in ["profile.targets", "profile.nutrientGoals", "profile.foods", "profile.agents", "profile.reminders",
+                           "profile.details", "profile.sync", "profile.account", "profile.logout"] {
             reveal(app.buttons[identifier], in: app)
             XCTAssertTrue(app.buttons[identifier].exists, identifier)
         }
@@ -169,6 +170,31 @@ final class ProfileOnboardingUITests: ExerlyUITestCase {
         XCTAssertEqual((saved["values"] as? [String: Any])?["unitSystem"] as? String, "imperial")
         tap(app.descendants(matching: .any)["profile.units"].buttons["Metric"], in: app)
         await fulfillment(of: [expectation(for: NSPredicate(format: "value CONTAINS %@", "kilograms"), evaluatedWith: weight)], timeout: 15)
+    }
+
+    /// A tap on Profile while it shows goes back to its first screen, and a
+    /// second to its top. Run 5's stray screen came from switching back from
+    /// Today, which keeps a tab's place, as iOS tabs do.
+    func testRetappingProfileReturnsToItsTop() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "profile-retap", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        let profile = app.tabBars.buttons["Profile"]
+        tap(profile, in: app)
+        tap(app.buttons["profile.targets"], in: app)
+        XCTAssertTrue(app.scrollViews["targets.screen"].waitForExistence(timeout: 10))
+        profile.tap()
+        let edit = app.buttons["profile.preferences"]
+        let hittable = NSPredicate(format: "hittable == true")
+        await fulfillment(of: [expectation(for: hittable, evaluatedWith: edit)], timeout: 10)
+        XCTAssertFalse(app.scrollViews["targets.screen"].exists, "Back at Profile's first screen")
+        app.swipeUp()
+        app.swipeUp()
+        XCTAssertFalse(edit.isHittable)
+        profile.tap()
+        await fulfillment(of: [expectation(for: hittable, evaluatedWith: edit)], timeout: 10)
+        capture(app, "profile-retap-top")
     }
 
     func testSignInAndSignUpLinkToEachOther() throws {

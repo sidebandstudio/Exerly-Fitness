@@ -36,7 +36,7 @@ struct ProfileIdentityCard: View {
                         .frame(minHeight: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(TodayPressStyle())
-                .accessibilityLabel("Edit profile and preferences")
+                .accessibilityLabel("Edit your details")
                 .accessibilityIdentifier("profile.preferences")
             }
             ProfileBodyStats(workspace: workspace, user: user, unit: unit, timeZone: timeZone)

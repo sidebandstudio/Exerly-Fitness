@@ -62,14 +62,12 @@ struct NutritionPlateView: View {
                             .accessibilityIdentifier("nutrition.plateMeal")
                     }
                     ExCard {
+                        // One day and time, as on a food's portion sheet.
                         if typeSize.isAccessibilitySize {
-                            Text("Diary date").font(.exLabel).foregroundStyle(Color.exTextSecondary)
-                            DatePicker("Diary date", selection: diaryDate, displayedComponents: .date).labelsHidden()
-                            Text("Eaten at").font(.exLabel).foregroundStyle(Color.exTextSecondary)
-                            DatePicker("Eaten at", selection: $draft.loggedAt, displayedComponents: [.date, .hourAndMinute]).labelsHidden()
+                            Text("Eaten").font(.exLabel).foregroundStyle(Color.exTextSecondary)
+                            DatePicker("Eaten", selection: $draft.eatenAt, displayedComponents: [.date, .hourAndMinute]).labelsHidden()
                         } else {
-                            DatePicker("Diary date", selection: diaryDate, displayedComponents: .date)
-                            DatePicker("Eaten at", selection: $draft.loggedAt, displayedComponents: [.date, .hourAndMinute])
+                            DatePicker("Eaten", selection: $draft.eatenAt, displayedComponents: [.date, .hourAndMinute])
                         }
                         Text("Nothing is added to your diary until you log this meal.")
                             .font(.exCaption).foregroundStyle(Color.exTextSecondary)
@@ -130,10 +128,6 @@ struct NutritionPlateView: View {
 
     private var meals: [String] {
         NutritionStore.defaultMeals.contains(draft.meal) ? NutritionStore.defaultMeals : NutritionStore.defaultMeals + [draft.meal]
-    }
-
-    private var diaryDate: Binding<Date> {
-        Binding(get: { NutritionFormat.pickerDate(draft.date, timeZone: timeZone) }, set: { draft.date = LocalDate($0, in: timeZone) })
     }
 
     private func foodRow(_ row: NutritionPlateDraft.Row) -> some View {

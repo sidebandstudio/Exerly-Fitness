@@ -8,7 +8,10 @@ import XCTest
 /// Actions: {"action":"tap","label":"Search"} (add "index" for duplicates),
 /// {"action":"longPress","label":"..."}, {"action":"tapAt","x":100,"y":200},
 /// {"action":"type","text":"banana"}, {"action":"swipe","direction":"up"},
-/// {"action":"wait","seconds":2}, {"action":"done"}.
+/// {"action":"drag","from":[300,500],"to":[300,420]} (a finger's drag, such
+/// as turning one wheel of a time picker; add "slow":true to hold at the end,
+/// so a wheel stops where the finger does), {"action":"wait","seconds":2},
+/// {"action":"done"}.
 /// Run with apps/ios/scripts/drive.sh.
 final class DriverUITests: ExerlyUITestCase {
     func testDrive() async throws {
@@ -87,6 +90,19 @@ final class DriverUITests: ExerlyUITestCase {
             }
             Thread.sleep(forTimeInterval: 0.6)
             return "Swiped \(command["direction"] as? String ?? "")."
+        case "drag":
+            guard let from = command["from"] as? [Double], let to = command["to"] as? [Double], from.count == 2, to.count == 2 else {
+                return "drag needs from and to as [x, y] in points"
+            }
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: from[0], dy: from[1])), end = origin.withOffset(CGVector(dx: to[0], dy: to[1]))
+            if command["slow"] as? Bool == true {
+                start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
+            } else {
+                start.press(forDuration: 0.1, thenDragTo: end)
+            }
+            Thread.sleep(forTimeInterval: 0.8)
+            return "Dragged from \(Int(from[0])), \(Int(from[1])) to \(Int(to[0])), \(Int(to[1]))."
         case "wait":
             Thread.sleep(forTimeInterval: min(command["seconds"] as? Double ?? 1, 10))
             return "Waited."

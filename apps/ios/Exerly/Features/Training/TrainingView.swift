@@ -177,6 +177,8 @@ struct TrainingView: View {
                         .frame(minHeight: 44)
                         .accessibilityIdentifier("training.history")
                 }
+                Text(thisWeek).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    .accessibilityIdentifier("training.thisWeek")
                 TrainingGroupedRows {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                         if index > 0 { Divider().overlay(Color.exBorder.opacity(0.4)).padding(.leading, ExSpacing.content) }
@@ -188,6 +190,15 @@ struct TrainingView: View {
                 }
             }
         }
+    }
+
+    /// "This week: 2 workouts · 31 sets", counted as Progress counts its weeks.
+    private var thisWeek: String {
+        let today = LocalDate(Date(), in: timeZone)
+        let week = TrainingInsights.weeks(store.history, from: today, through: today,
+                                          firstWeekday: TrainingInsightsModel.firstWeekday).last
+        guard let week, week.sessions > 0 else { return "This week: no workouts yet" }
+        return "This week: \(InsightFormat.workouts(week.sessions)) · \(InsightFormat.sets(week.sets)) sets"
     }
 
     // MARK: Tools
