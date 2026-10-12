@@ -312,7 +312,12 @@ final class PreferencesStore: ObservableObject {
         }
     }
     func save() async {
-        guard !isLoading, !isSaving, isReadable, conflict == nil, isOwned, var current = draft else { return }
+        // A refresh still loading made this return without saving, so an edit
+        // made right after opening a screen stayed on the device unsent.
+        while isLoading {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
+        guard !isSaving, isReadable, conflict == nil, isOwned, var current = draft else { return }
         isSaving = true
         error = nil
         defer { isSaving = false }

@@ -123,10 +123,15 @@ private struct PreferencesEditor: View {
     /// attention: an error, a conflict to review, or a reply still owed. Edits
     /// that can't be sent now stay in the draft on this device.
     private func saveAndClose() async {
+        // save() does nothing while the sheet is still loading, which closed it
+        // with the change unsaved (Done tapped soon after opening). Wait first.
+        while store.isLoading || store.isSaving {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
         let canSave = store.isReadable && store.conflict == nil && store.draft != nil
         if canSave, store.hasEdits || store.draft?.pending != nil {
             await store.save()
-            guard store.error == nil, store.conflict == nil, store.draft?.pending == nil else { return }
+            guard store.error == nil, store.conflict == nil, store.draft?.pending == nil, !store.hasEdits else { return }
         }
         dismiss()
     }

@@ -25,6 +25,9 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - iOS 26's clear keyboard Done bar took taps meant for fields drawn behind it
     (Calories in Edit food on a 17 Pro); the keyboard area is now filled, and a
     nutrient's caption focuses its field.
+  - Found by the full suite: a preference changed while its screen was still
+    refreshing (Done tapped right after opening Your details, or a reminder switch
+    flipped at once) was dropped; a day with food in one hour lost By time's hour.
 
 ## Current outcome
 

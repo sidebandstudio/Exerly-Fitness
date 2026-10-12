@@ -2166,6 +2166,33 @@ final class ProductionTests: XCTestCase {
         XCTAssertNotEqual(otherEnvironment.storageKey, reopened.storageKey)
     }
 
+    /// Done tapped while a reopened screen still refreshes used to close it
+    /// with the change unsent; the save now waits for the refresh.
+    func testAPreferenceSavedWhileTheScreenIsStillLoadingIsSent() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var patches = 0
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            patches += 1
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            remote = self.preferencesDocument(revision: 2, values: body.changes)
+            return (200, try JSONEncoder().encode(remote))
+        }
+        await PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true }).load()
+        // Reopened as a screen is: the saved draft shows while it refreshes.
+        let store = PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true })
+        let loading = Task { await store.load() }
+        for _ in 0..<50 where !store.isLoading { await Task.yield() }
+        XCTAssertTrue(store.isLoading)
+        store.edit("name", value: "Quick Taylor")
+        await store.save()
+        await loading.value
+        XCTAssertEqual(patches, 1, "Sent once the refresh finished, not dropped")
+        XCTAssertFalse(store.hasEdits)
+        XCTAssertEqual(store.draft?.base.revision, 2)
+    }
+
     func testPreferencesLostAcknowledgementReplaysAfterReopeningAndDoesNotUndoLaterDeviceChanges() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         var remote = preferencesDocument()
