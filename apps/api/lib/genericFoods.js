@@ -150,13 +150,20 @@ const NEUTRAL = new Set([
 // Words that make a food something else than the line names, unless it says them.
 const OTHER = new Set(['meatless', 'imitation', 'substitute', 'replacement', 'vegetarian', 'baby']);
 
+// Parts a recipe line leaves unsaid: how a generic food started ("from
+// dried") and "no added fat", which a recipe means since it lists its own fat.
+const UNSAID = /^(?:from (?:dried|canned|fresh|frozen)|no added fat)$/;
+
 /**
  * The generic food a recipe's ingredient names, or null. Stricter than
  * `search`, because a wrong match is worse than none: every word must be in
  * the food's name, and its first part must be made of them, so "black
- * beans" finds "Black beans, NFS" but "salt" doesn't find a salted granola
- * bar, nor "egg" eggplant, nor "bacon" meatless bacon. Foods with the
- * fewest other words come first, then plain forms, then the shortest.
+ * beans" finds black beans but "salt" doesn't find a salted granola bar,
+ * nor "egg" eggplant, nor "bacon" meatless bacon. Foods with the fewest
+ * other words come first (not counting `UNSAID` parts), then those with no
+ * added fat (USDA's "NFS" beans carry the fat-added values), then plain
+ * forms, then the shortest. "canned", which a can's line adds, is dropped
+ * when nothing canned matches: "coconut milk canned" finds coconut milk.
  */
 function ingredient(query, { now = new Date() } = {}) {
   const wanted = words(query).map((word) => stem(singular(word)));
@@ -167,13 +174,26 @@ function ingredient(query, { now = new Date() } = {}) {
     if (!wanted.every((word) => names.includes(word))) continue;
     if (!food.parts[0].every((word) => wanted.includes(stem(word)))) continue;
     if (names.some((word) => OTHER.has(word) && !wanted.includes(word))) continue;
+    const said = food.parts
+      .filter((part) => !UNSAID.test(part.join(' ')))
+      .flat()
+      .map(stem);
     const rank = [
-      names.filter((word) => !wanted.includes(word) && !NEUTRAL.has(word)).length,
+      said.filter((word) => !wanted.includes(word) && !NEUTRAL.has(word)).length,
+      food.parts.some((part) => part.join(' ') === 'no added fat') ? 0 : 1,
       food.plain ? 0 : 1,
       food.name.length,
       food.fdcId,
     ];
     if (!best || precedes(rank, best.rank)) best = { food, rank };
+  }
+  if (!best && wanted.includes('canned') && wanted.length > 1) {
+    return ingredient(
+      words(query)
+        .filter((word) => word.toLowerCase() !== 'canned')
+        .join(' '),
+      { now }
+    );
   }
   return best ? toFood(best.food, now) : null;
 }

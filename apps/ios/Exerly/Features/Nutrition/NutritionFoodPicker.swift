@@ -36,6 +36,9 @@ struct NutritionFoodPicker: View {
     /// unless it was typed with the food. Recipes ask: an ingredient's amount
     /// is rarely what one serving of it was.
     let confirmsAmounts: Bool
+    /// Closes once a food is picked, for a search that finds one food: an
+    /// imported recipe's line goes back to the recipe, not to search (run 7).
+    let closesAfterPick: Bool
     /// Returns to the search tab from another one: it starts again, with an
     /// empty search and the meal for now. Run 6 came back to the last search.
     let entered: Int
@@ -50,6 +53,8 @@ struct NutritionFoodPicker: View {
     @State private var asking: PortionRequest?
     @State private var askedFood: ExerlyCore.Food?
     @State private var askOutcome: AskOutcome?
+    /// Picked from the portion step with `closesAfterPick`: closes once that step has.
+    @State private var closing = false
     @State private var createdFood: ExerlyCore.Food?
     @State private var creating = false
     @State private var creatingRecipe = false
@@ -79,7 +84,7 @@ struct NutritionFoodPicker: View {
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
          onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)? = nil, pickedScans: @escaping () -> Set<UUID> = { [] },
          pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
-         confirmsAmounts: Bool = false, initialQuery: String = "", entered: Int = 0) {
+         confirmsAmounts: Bool = false, closesAfterPick: Bool = false, initialQuery: String = "", entered: Int = 0) {
         self.workspace = workspace
         self.entered = entered
         self.api = api
@@ -95,6 +100,7 @@ struct NutritionFoodPicker: View {
         self.presentation = presentation
         self.pickingInto = pickingInto
         self.confirmsAmounts = confirmsAmounts
+        self.closesAfterPick = closesAfterPick
         // A sheet opened to search starts typing; one opened to scan doesn't.
         focusesSearch = presentation == .sheet && !startsWithBarcode
         _meal = State(initialValue: presentation == .tab ? workspace.nutrition.suggestedMeal(at: .now, timeZone: timeZone) : meal)
@@ -707,10 +713,14 @@ struct NutritionFoodPicker: View {
         }
     }
 
+    /// A food just made comes in at the amount typed with the search, as a
+    /// found one would: "3 oz tempeh", then Enter a food manually, is 3 oz.
     private func openCreatedFood() {
         guard let createdFood else { return }
         self.createdFood = nil
-        select(createdFood)
+        guard FoodSearch.amount(in: query).amount != nil, let portion = store.quickPortion(for: createdFood, unit: unit),
+              let item = atTypedAmount([FoodPickerItem(portion: portion, food: createdFood)]).first else { return select(createdFood) }
+        if picking { select(item) } else { selectedFood = PortionRequest(item) }
     }
 
     /// A food with an amount the person logs it at joins in one tap; any
@@ -757,6 +767,7 @@ struct NutritionFoodPicker: View {
         guard let food = askedFood else { return }
         askedFood = nil
         if askOutcome == nil { pick(food, .unchecked) }
+        if closing { return dismiss() }
         if askOutcome != .cancelled {
             query = ""
             searchFocused = true
@@ -778,6 +789,8 @@ struct NutritionFoodPicker: View {
             addedIDs.insert(food.id)
             selectionError = nil
             UISelectionFeedbackGenerator().selectionChanged()
+            // From the portion step, once it has closed (`finishAsking`).
+            if closesAfterPick { if asking == nil { dismiss() } else { closing = true } }
             return true
         }
         selectionError = pickError() ?? "This food could not be added. Review its saved label and try again."

@@ -395,6 +395,9 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
   try {
     const queries = [
       'black beans',
+      'black beans canned',
+      'coconut milk canned',
+      'quinoa',
       'egg',
       'butter',
       'potatoes',
@@ -411,7 +414,12 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
     assert.deepEqual(
       res.body.foods.map((food) => food?.name ?? null),
       [
-        'Black beans, NFS',
+        // A recipe lists its own fat: not "Black beans, NFS", which has the fat-added values.
+        'Black beans, from dried, no added fat',
+        // A can's line asks for canned, and falls back to the plain name without one.
+        'Black beans, from canned, no added fat',
+        'Coconut milk',
+        'Quinoa, no added fat',
         'Egg, whole, raw',
         'Butter, NFS',
         'Potato, NFS',

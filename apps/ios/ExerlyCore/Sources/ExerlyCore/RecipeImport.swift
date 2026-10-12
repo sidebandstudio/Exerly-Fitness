@@ -43,6 +43,21 @@ public struct IngredientLine: Sendable, Hashable {
     /// The amount and food as food search would read them typed: "1 can
     /// black beans", without the size or notes.
     public var query: String
+    /// True when the line drains the food ("drained and rinsed"), so less of
+    /// a can goes in than its label's weight.
+    public var drained: Bool
+
+    /// A drained can's share of its label weight: beans, chickpeas, corn and
+    /// tomatoes keep about 60 % once their liquid is poured off.
+    public static let drainedShare = 0.6
+
+    /// The name to match a database food by: the food, and "canned" for a can
+    /// or tin of it, so "1 can black beans" finds canned beans, not cooked dried ones.
+    public var match: String {
+        guard case .serving(let word)? = amount?.unit, ["can", "tin"].contains(word),
+              !FoodSearch.words(food).contains(where: { $0.lowercased() == "canned" }) else { return food }
+        return "\(food) canned"
+    }
 
     /// Words that say how a food is prepared or how much is roughly meant,
     /// not which food it is. Not "minced", which in "minced beef" is the food.
@@ -103,6 +118,8 @@ public struct IngredientLine: Sendable, Hashable {
         food = words.joined(separator: " ")
         self.range = range && amount != nil
         query = reading.query
+        let lowered = text.lowercased()
+        drained = lowered.contains("drained") && !lowered.contains("undrained") && !lowered.contains("not drained")
     }
 
     /// The amount and food in `text`, without words for how it's prepared.
@@ -123,17 +140,21 @@ public struct IngredientLine: Sendable, Hashable {
     }
 
     /// This line's amount of `food`, and whether it's exactly what the line
-    /// says: a weight in parentheses always is; otherwise as `Food.portion`
-    /// reads a typed amount, and never for a range. Nil without an amount,
-    /// or one that means nothing for the food.
+    /// says: a weight in parentheses always is, unless the line drains it
+    /// (`drainedShare` of it, to check); otherwise as `Food.portion` reads a
+    /// typed amount, and never for a range. Nil without an amount, or one
+    /// that means nothing for the food.
     public func portion(of food: Food) -> (amount: LoggedAmount, exact: Bool)? {
         if let size, let grams = size.grams {
             switch amount?.unit {
             case nil, .serving?:
                 var word = "each"
                 if case .serving(let named)? = amount?.unit { word = named }
-                let serving = Serving("1 \(word) (\(size.label))", grams: grams)
-                return (try? NutritionStore.preview(food, serving: serving, quantity: amount?.quantity ?? 1)).map { ($0, true) }
+                let drains = drained && TypedAmount.packages.contains(word)
+                let left = TypedAmount((size.quantity * Self.drainedShare * 10).rounded() / 10, size.unit)
+                let serving = drains ? Serving("1 \(word), drained (\(left.label))", grams: left.grams ?? grams)
+                    : Serving("1 \(word) (\(size.label))", grams: grams)
+                return (try? NutritionStore.preview(food, serving: serving, quantity: amount?.quantity ?? 1)).map { ($0, !drains) }
             default:
                 return (try? NutritionStore.preview(food, grams: grams)).map { ($0, true) }
             }
@@ -144,6 +165,14 @@ public struct IngredientLine: Sendable, Hashable {
 }
 
 extension TypedAmount {
+    /// Whether it's a volume: millilitres to cups.
+    var isVolume: Bool {
+        switch unit {
+        case .milliliters?, .liters?, .fluidOunces?, .cups?, .tablespoons?, .teaspoons?: true
+        default: false
+        }
+    }
+
     /// Its weight in grams, for a weight.
     var grams: Double? {
         switch unit {
@@ -180,12 +209,18 @@ public struct RecipeImport: Sendable, Hashable {
         /// False when the amount is a guess to check: the line gave none, a
         /// range, or one that doesn't fit the food.
         public var exact: Bool
+        /// True when the line gives a volume the food has no density for:
+        /// its amount only holds the place of a weight the person enters,
+        /// and counts for nothing until then.
+        public var needsWeight: Bool
 
-        public init(ingredient: RecipeIngredient, food: Food? = nil, line: String? = nil, exact: Bool = true) {
+        public init(ingredient: RecipeIngredient, food: Food? = nil, line: String? = nil, exact: Bool = true,
+                    needsWeight: Bool = false) {
             self.ingredient = ingredient
             self.food = food
             self.line = line
             self.exact = exact
+            self.needsWeight = needsWeight
         }
     }
 
@@ -212,7 +247,8 @@ public struct RecipeImport: Sendable, Hashable {
     /// `page`'s lines matched to foods: one of the person's own with the
     /// same name, else `database`'s for that line (one per line, nil for
     /// none). A line whose amount can't be read, or doesn't fit the food,
-    /// comes in at the food's default amount, to check.
+    /// comes in at the food's default amount, to check; a volume without a
+    /// density, as needing a weight.
     public init(page: WebRecipe, own: [Food], database: [Food?], unit: MassUnit) {
         var ingredients: [Ingredient] = []
         var unmatched: [String] = []
@@ -225,9 +261,11 @@ public struct RecipeImport: Sendable, Hashable {
                 continue
             }
             var exact = true
+            var needsWeight = false
             var amount = line.portion(of: food).map { exact = $0.exact; return $0.amount }
             if amount == nil {
                 exact = false
+                needsWeight = line.amount?.isVolume == true
                 let (serving, quantity) = NutritionStore.defaultPortion(food, unit: unit)
                 amount = try? NutritionStore.preview(food, grams: serving == nil ? quantity : nil, serving: serving,
                                                      quantity: serving == nil ? nil : quantity)
@@ -235,7 +273,7 @@ public struct RecipeImport: Sendable, Hashable {
             guard let amount else { unmatched.append(text); continue }
             ingredients.append(Ingredient(ingredient: RecipeIngredient(food: food.snapshot, grams: amount.grams, serving: amount.serving,
                                                                        quantity: amount.quantity),
-                                          food: food, line: text, exact: exact))
+                                          food: food, line: text, exact: exact, needsWeight: needsWeight))
         }
         self.init(name: page.name, ingredients: ingredients, unmatched: unmatched, servingCount: page.servings,
                   preparation: page.instructions, sourceURL: page.url)

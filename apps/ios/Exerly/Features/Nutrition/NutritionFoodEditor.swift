@@ -29,6 +29,8 @@ struct NutritionFoodEditor: View {
                     ExCard {
                         ExEyebrow("Food label", color: .exPrimaryText)
                         TextField("Food name", text: $draft.name, prompt: Text("Food name").foregroundColor(.exTextSecondary), axis: .vertical).font(.exH2)
+                            // A field that grows reads only its text once filled, without this.
+                            .accessibilityLabel("Food name")
                             .accessibilityIdentifier("nutrition.foodName")
                         TextField("Brand", text: $draft.brand, prompt: Text("Brand").foregroundColor(.exTextSecondary), axis: .vertical)
                             .accessibilityLabel("Brand, optional")

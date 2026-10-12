@@ -233,9 +233,10 @@ extension Food {
             ?? matching.first { words($0).dropFirst().first.map(synonyms.contains) == true } ?? matching.first
     }
 
-    /// Grams in a millilitre: the label's density, or one from a measure it
-    /// names, such as a cup of milk weighing 244 g.
-    var gramsPerMilliliter: Double? {
+    /// Grams in a millilitre: the label's density, one from a measure it
+    /// names, such as a cup of milk weighing 244 g, or else the typical
+    /// density of what its name says it is (see `typicalDensity`).
+    public var gramsPerMilliliter: Double? {
         if let volume { return volume.density }
         let measures = [("cup", 8.0), ("fl oz", 1), ("tbsp", 0.5), ("tsp", 1.0 / 6)]
         for (name, fluidOunces) in measures {
@@ -243,14 +244,43 @@ extension Food {
                 return serving.grams / USUnits.milliliters(fluidOunces: fluidOunces)
             }
         }
-        return nil
+        return Self.typicalDensity(name: name)
+    }
+
+    /// Spoons and cups for a liquid, by its density, that it doesn't name
+    /// as servings already: "1 tbsp", "1 tsp", "1 cup". A liquid is labelled
+    /// by volume or named as one (see `typicalDensity`); other foods get none,
+    /// since a cup of a solid depends on how it's cut.
+    public var kitchenMeasures: [Serving] {
+        guard volume != nil || Self.typicalDensity(name: name) != nil, let density = gramsPerMilliliter else { return [] }
+        // The same millilitres as `portion(_:)`, so a typed "2 tbsp" is this serving.
+        let fluidOunce = USUnits.millilitersPerFluidOunce
+        return [("tbsp", fluidOunce / 2), ("tsp", fluidOunce / 6), ("cup", fluidOunce * 8)].compactMap { measure, milliliters in
+            servings.contains { Self.isMeasure($0.name, measure) } ? nil : Serving("1 \(measure)", grams: milliliters * density)
+        }
+    }
+
+    /// Grams in a millilitre of a food its name says is an oil (0.91) or a
+    /// water-like liquid (1.0): water, broth, stock, vinegar, milk or juice,
+    /// by the last word before any comma. Nil for anything else, and for
+    /// dried, powdered or concentrated forms or a food "in" or "with" one.
+    static func typicalDensity(name: String) -> Double? {
+        let words = FoodSearch.words(name.split(separator: ",").first.map(String.init) ?? "").map { $0.lowercased() }
+        let all = Set(FoodSearch.words(name).map { $0.lowercased() })
+        let forms: Set<String> = ["dry", "dried", "powder", "powdered", "condensed", "evaporated", "concentrate", "in", "with"]
+        guard let last = words.last, all.isDisjoint(with: forms) else { return nil }
+        if last == "oil" { return 0.91 }
+        return ["water", "broth", "stock", "vinegar", "milk", "juice"].contains(last) ? 1 : nil
     }
 
     /// Whether a serving is one of a measure: "1 cup", or "1 cup, diced"
-    /// unless `exactly`.
+    /// unless `exactly`. USDA spells measures out: "1 tablespoon" is a tbsp.
     private static func isMeasure(_ serving: String, _ measure: String, exactly: Bool = false) -> Bool {
         let name = serving.lowercased()
-        return name == "1 \(measure)" || !exactly && (name.hasPrefix("1 \(measure),") || name.hasPrefix("1 \(measure) ("))
+        let spellings = ["tbsp": ["tbsp", "tablespoon"], "tsp": ["tsp", "teaspoon"], "fl oz": ["fl oz", "fluid ounce"]][measure] ?? [measure]
+        return spellings.contains { measure in
+            name == "1 \(measure)" || !exactly && (name.hasPrefix("1 \(measure),") || name.hasPrefix("1 \(measure) ("))
+        }
     }
 }
 

@@ -17,7 +17,9 @@ final class NutritionPresentationTests: XCTestCase {
         let entry = try XCTUnwrap(draft.save())
         let reopened = NutritionEntryDraft(store: store, food: entry.food.foodForLogging(serving: entry.serving),
                                           date: date, meal: "Lunch", editing: entry)
-        XCTAssertEqual(reopened.publishedServings, [scoop])
+        // Its label's scoop, then a liquid's spoons and cups; never the synthetic fl oz.
+        XCTAssertEqual(reopened.publishedServings, [scoop] + food.kitchenMeasures)
+        XCTAssertEqual(food.kitchenMeasures.map(\.name), ["1 tbsp", "1 tsp", "1 cup"])
         XCTAssertEqual(reopened.measure, .fluidOunces)
         XCTAssertEqual(try reopened.preview().grams, entry.grams)
         XCTAssertFalse(reopened.selectPortion(try XCTUnwrap(entry.serving)))

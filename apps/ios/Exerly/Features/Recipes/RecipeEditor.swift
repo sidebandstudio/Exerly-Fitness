@@ -56,6 +56,8 @@ struct RecipeEditor: View {
                     Section {
                         TextField("Recipe name", text: $draft.name, prompt: Text("Name this recipe").foregroundColor(.exTextSecondary), axis: .vertical)
                             .font(.exH2).focused($nameFocused).submitLabel(.done)
+                            // A field that grows reads only its text once filled, without this.
+                            .accessibilityLabel("Recipe name")
                             .accessibilityIdentifier("recipe.name")
                     }
                     if !draft.unmatched.isEmpty { unmatchedLines }
@@ -128,7 +130,7 @@ struct RecipeEditor: View {
             .sheet(isPresented: $choosing) { picker { draft.add($0, amount: $1) } }
             .sheet(item: $resolving) { line in
                 // The line as typed search reads it, so the food comes in at the line's amount.
-                picker(query: IngredientLine(line.text).query) { food, amount in
+                picker(query: IngredientLine(line.text).query, closesAfterPick: true) { food, amount in
                     guard draft.add(food, amount: amount) else { return false }
                     draft.settle(line.text)
                     return true
@@ -153,12 +155,12 @@ struct RecipeEditor: View {
         .interactiveDismissDisabled(draft.hasChanges)
     }
 
-    private func picker(query: String = "", add: @escaping (ExerlyCore.Food, FoodPickAmount) -> Bool) -> some View {
+    private func picker(query: String = "", closesAfterPick: Bool = false, add: @escaping (ExerlyCore.Food, FoodPickAmount) -> Bool) -> some View {
         NutritionFoodPicker(workspace: workspace, api: api, date: LocalDate(.now, in: timeZone), meal: "Recipe",
                             timeZone: timeZone, unit: draft.unit, actions: actions, onLogged: {},
                             pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map(\.ingredient.food.foodID)),
                             onPick: { add($0, $1) ? draft.rows.count : nil }, pickError: { draft.errors.first },
-                            pickingInto: "recipe", confirmsAmounts: true, initialQuery: query)
+                            pickingInto: "recipe", confirmsAmounts: true, closesAfterPick: closesAfterPick, initialQuery: query)
     }
 
     /// An imported recipe's lines no food matched, first, each to search for or skip.
@@ -200,7 +202,8 @@ struct RecipeEditor: View {
         Section {
             ForEach(draft.rows) { row in
                 Button { hideKeyboard(); editingRow = row } label: {
-                    RecipeIngredientRow(ingredient: row.ingredient, unit: draft.unit, unchecked: !row.checked, line: row.line)
+                    RecipeIngredientRow(ingredient: row.ingredient, unit: draft.unit, unchecked: !row.checked, needsWeight: row.needsWeight,
+                                        line: row.line)
                 }
                     .buttonStyle(.plain).accessibilityIdentifier("recipe.ingredient.\(row.ingredient.food.foodID)")
                     .accessibilityAction(named: "Remove") { draft.remove(row.id) }
@@ -238,7 +241,7 @@ struct RecipeEditor: View {
     private var yieldNote: String {
         var note = "Weigh the pot after cooking to log by weight."
         guard !draft.rows.isEmpty else { return note }
-        let raw = draft.rows.reduce(0) { $0 + $1.ingredient.grams }
+        let raw = draft.rows.filter { !$0.needsWeight }.reduce(0) { $0 + $1.ingredient.grams }
         note += " Blank uses the ingredients' \(FoodFormat.weight(raw, unit: draft.unit))."
         if let recipe = draft.preview, let serving = recipe.recipeServing {
             note += " Each serving is \(FoodFormat.weight(serving.grams, unit: draft.unit)), \(FoodFormat.kcal(recipe.perRecipeServing?[.energy])) kcal."
@@ -310,13 +313,17 @@ struct RecipeIngredientRow: View {
     let unit: MassUnit
     /// At a default amount no one has looked at yet.
     var unchecked = false
+    /// A volume with no weight yet: the amount is only a placeholder.
+    var needsWeight = false
     /// The imported line it came from, to compare with the match.
     var line: String?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let amount = FoodFormat.amount(grams: ingredient.grams, serving: ingredient.serving, quantity: ingredient.quantity,
-                                       food: ingredient.food.foodForLogging(), unit: unit)
+        let amount = needsWeight ? "No weight yet"
+            : FoodFormat.amount(grams: ingredient.grams, serving: ingredient.serving, quantity: ingredient.quantity,
+                                food: ingredient.food.foodForLogging(), unit: unit)
+        let energy = needsWeight ? "–" : FoodFormat.kcal(ingredient.nutrients[.energy])
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
             : AnyLayout(HStackLayout(spacing: ExSpacing.item))
         layout {
@@ -327,18 +334,18 @@ struct RecipeIngredientRow: View {
                     Text("\u{201C}\(line)\u{201D}").font(.exCaption).foregroundStyle(Color.exTextMuted).lineLimit(2)
                 }
                 if unchecked {
-                    Label("Check the amount", systemImage: "exclamationmark.circle.fill")
+                    Label(needsWeight ? "Enter its weight" : "Check the amount", systemImage: "exclamationmark.circle.fill")
                         .font(.exCaption.weight(.semibold)).foregroundStyle(Color.exWarning)
                 }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
-            Text("\(FoodFormat.kcal(ingredient.nutrients[.energy])) kcal").font(.exLabel).monospacedDigit()
+            Text("\(energy) kcal").font(.exLabel).monospacedDigit()
                 .foregroundStyle(Color.exTextSecondary)
         }
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(ingredient.food.name), \(amount), \(FoodFormat.kcal(ingredient.nutrients[.energy])) kilocalories"
-                            + (unchecked ? ", amount not checked yet" : "") + (line.map { ", from \($0)" } ?? ""))
+        .accessibilityLabel("\(ingredient.food.name), \(amount)" + (needsWeight ? ", weight needed, left out of the totals"
+                            : ", \(energy) kilocalories" + (unchecked ? ", amount not checked yet" : "")) + (line.map { ", from \($0)" } ?? ""))
     }
 }
 

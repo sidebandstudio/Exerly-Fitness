@@ -1936,3 +1936,44 @@ deficit, and Progress showed "On track" beside "at or past your goal".
 - Faster and Slower step from the amount as shown (0.1 lb or 0.01 kg). The
   trend in a plan's basis is rounded to 0.01 kg, so 0.5 % of 72.57 kg is
   0.7999 lb; stepping from it kept "0.8 lb" for a tap.
+
+## 2026-10-12: Spoons weigh by density, cans match canned food, and a drained can is an estimate
+
+Run 7's "2 tbsp olive oil" matched the person's own olive oil, which names no
+serving, couldn't convert a tablespoon, and came in at the 4 oz default
+(about 1,000 kcal). "1 (15 oz) can black beans, drained and rinsed" matched
+"Black beans, NFS", whose values are USDA's cooked-from-dried with fat added
+(181 kcal/100 g): 770 kcal.
+
+- A food's grams per millilitre come from its label, a measure it names (USDA
+  spells them out: "1 tablespoon" now counts), or else its name: an oil is
+  0.91 g/ml and water, broth, stock, vinegar, milk or juice 1.0, not when
+  dried, powdered, concentrated or "in"/"with" one. Other foods have no
+  density, and a volume of one comes in marked "Enter its weight": its
+  placeholder amount counts for nothing and Save asks for a weight. No weight
+  is guessed.
+- Liquids offer 1 tbsp, 1 tsp and 1 cup beside grams and ounces in the
+  ingredient and portion sheets, by the same density. Solids don't: a cup of
+  a solid depends on how it's cut, and USDA names its own cups.
+- Matching a recipe line: a can or tin asks for canned food, falling back to
+  the plain name when nothing canned matches. "from dried", "from canned" and
+  "no added fat" don't count as extra words, and no-added-fat forms win ties,
+  since a recipe lists its own fat. Black beans are now "from dried, no added
+  fat" (131 kcal/100 g); a can, "from canned, no added fat" (134).
+- A drained can is 60 % of its label weight, typical for beans, chickpeas,
+  corn and tomatoes, named "1 can, drained (9 oz)" and marked to check:
+  342 kcal for the black beans. USDA's canned beans are the drained solids,
+  so 425 g of them overstated the can by two thirds. The brief's 380 kcal
+  assumed 90 kcal/100 g for the whole can; the bundled table has no
+  solids-and-liquid entry.
+
+## 2026-10-12: Next on the number keypad, and a found line goes back to its recipe
+
+- The keypad has Next when a field follows on the same sheet or page (below,
+  or to the right in a grid). Run 7 hid the keypad and tapped each of a new
+  food's numbers in turn.
+- A food made with "Enter a food manually" from a search with an amount
+  ("3 oz tempeh") comes in at that amount, as a found food does, not at the
+  4 oz default.
+- Searching for an imported recipe's unmatched line closes once a food is
+  added: one line, one food, back to the recipe.

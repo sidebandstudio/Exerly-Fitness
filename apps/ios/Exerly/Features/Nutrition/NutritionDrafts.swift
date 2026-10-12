@@ -283,7 +283,7 @@ final class NutritionEntryDraft: ObservableObject {
 
     var publishedServings: [Serving] {
         guard snapshot.unweighed != true else { return [] }
-        return (food.servings + food.recipePortions).reduce(into: []) { result, serving in
+        return (food.servings + food.recipePortions + food.kitchenMeasures).reduce(into: []) { result, serving in
             // Reopened entries also carry a synthetic oz/ml/fl oz serving.
             // Those are measures, not portions supplied by the food label.
             guard case .serving = NutritionPortionMeasure.saved(serving, food: food) else { return }
@@ -318,7 +318,7 @@ final class NutritionEntryDraft: ObservableObject {
     var canAddServing: Bool {
         guard snapshot.unweighed != true, let saved = store.food(food.id), saved.archivedAt == nil,
               [.custom, .imported].contains(saved.source), saved.ingredients == nil else { return false }
-        return publishedServings.isEmpty
+        return publishedServings.allSatisfy(food.kitchenMeasures.contains)
     }
 
     /// Saves a serving such as "1 slice" (a name without a count gets "1 ")

@@ -62,8 +62,7 @@ struct ExNumericTextField: UIViewRepresentable {
             // A preset, a step or a new measure replaced the number being edited.
             if field.isFirstResponder { Coordinator.selectAll(field) }
         }
-        field.attributedPlaceholder = NSAttributedString(string: placeholder.isEmpty ? title : placeholder,
-                                                         attributes: [.foregroundColor: UIColor(Color.exTextSecondary)])
+        field.attributedPlaceholder = field.isFirstResponder ? nil : placeholderText
         field.accessibilityLabel = title
         field.accessibilityIdentifier = identifier
         field.textAlignment = centered ? .center : .left
@@ -74,6 +73,11 @@ struct ExNumericTextField: UIViewRepresentable {
         let descriptor = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
         field.font = UIFont(descriptor: descriptor, size: 0)
         context.coordinator.host?.rootView = keypad(for: field, coordinator: context.coordinator)
+    }
+
+    /// Hidden while typing: the caret sat on top of a "–" placeholder (run 7).
+    var placeholderText: NSAttributedString {
+        NSAttributedString(string: placeholder.isEmpty ? title : placeholder, attributes: [.foregroundColor: UIColor(Color.exTextSecondary)])
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
@@ -93,7 +97,11 @@ struct ExNumericTextField: UIViewRepresentable {
             }
             field.deleteBackward()
             coordinator?.changed(field)
-        }, done: { [weak field] in field?.resignFirstResponder() })
+        }, done: { [weak field] in field?.resignFirstResponder() },
+           next: coordinator.hasNext ? { [weak field] in
+               guard let field else { return }
+               if let next = Coordinator.field(after: field) { next.becomeFirstResponder() } else { field.resignFirstResponder() }
+           } : nil)
             .environment(\.colorScheme, colorScheme))
     }
 
@@ -101,6 +109,8 @@ struct ExNumericTextField: UIViewRepresentable {
         var parent: ExNumericTextField
         var host: UIHostingController<AnyView>?
         var focusRequest: Int
+        /// Whether a field follows this one on its screen, for the keypad's Next.
+        var hasNext = false
 
         init(_ parent: ExNumericTextField) {
             self.parent = parent
@@ -109,7 +119,14 @@ struct ExNumericTextField: UIViewRepresentable {
 
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
 
+        func textFieldDidEndEditing(_ field: UITextField) { field.attributedPlaceholder = parent.placeholderText }
+
         func textFieldDidBeginEditing(_ field: UITextField) {
+            field.attributedPlaceholder = nil
+            if hasNext != (Self.field(after: field) != nil) {
+                hasNext.toggle()
+                host?.rootView = parent.keypad(for: field, coordinator: self)
+            }
             // After the tap that focused the field has placed its caret.
             DispatchQueue.main.async { Self.selectAll(field) }
             // The system shows only the field itself above the keypad; once
@@ -125,6 +142,33 @@ struct ExNumericTextField: UIViewRepresentable {
                 rect.size.height += below
                 scroll.scrollRectToVisible(rect, animated: true)
             }
+        }
+
+        /// The next field on the same screen (the sheet or page on top), below
+        /// this one or beside it to the right: run 7 had to hide the keypad and
+        /// tap each of a new food's numbers in turn.
+        static func field(after field: UITextField) -> UITextField? {
+            guard let window = field.window else { return nil }
+            var top = window.rootViewController
+            while let presented = top?.presentedViewController, !presented.isBeingDismissed { top = presented }
+            guard let screen = top?.view, field.isDescendant(of: screen) else { return nil }
+            var fields: [UITextField] = []
+            func collect(_ view: UIView) {
+                if let text = view as? UITextField, text !== field, text.isEnabled, !text.isHidden, text.alpha > 0.01 { fields.append(text) }
+                view.subviews.forEach(collect)
+            }
+            collect(screen)
+            let mine = field.convert(field.bounds, to: window)
+            var best: (field: UITextField, frame: CGRect)?
+            for other in fields {
+                let frame = other.convert(other.bounds, to: window)
+                let below = frame.minY > mine.maxY - 4
+                let beside = abs(frame.midY - mine.midY) < 8 && frame.minX > mine.minX
+                guard below || beside else { continue }
+                if let current = best?.frame, (current.minY, current.minX) <= (frame.minY, frame.minX) { continue }
+                best = (other, frame)
+            }
+            return best?.field
         }
 
         static func selectAll(_ field: UITextField) {
@@ -154,6 +198,8 @@ struct ExNumericKeypad: View {
     let insert: (String) -> Void
     let delete: () -> Void
     let done: () -> Void
+    /// Moves to the next field, when there is one.
+    var next: (() -> Void)?
 
     private var decimal: String { Locale.current.decimalSeparator ?? "." }
 
@@ -163,6 +209,12 @@ struct ExNumericKeypad: View {
                 Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(Color.exTextSecondary)
                     .lineLimit(1).accessibilityHidden(true)
                 Spacer()
+                if let next {
+                    Button("Next", action: next).font(.system(size: 16, weight: .semibold))
+                        .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
+                        .buttonStyle(.plain).foregroundStyle(Color.exPrimaryText)
+                        .accessibilityHint("Moves to the next field").accessibilityIdentifier("exerly.keypadNext")
+                }
                 // Not "Done": a sheet's own Done or Save, which applies the number, is the only one.
                 Button(action: done) {
                     Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 18, weight: .semibold))

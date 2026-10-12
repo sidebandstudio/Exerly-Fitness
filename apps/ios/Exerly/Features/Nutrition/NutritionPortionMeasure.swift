@@ -73,7 +73,8 @@ enum NutritionPortionMeasure: Hashable {
     static func available(for food: ExerlyCore.Food, unit: MassUnit) -> [Self] {
         var choices: [Self] = unit == .pounds ? [.ounces, .grams] : [.grams, .ounces]
         if food.volume != nil { choices += unit == .pounds ? [.fluidOunces, .milliliters] : [.milliliters, .fluidOunces] }
-        for serving in food.servings + food.recipePortions {
+        // A liquid's spoons and cups, by its density, where it names none.
+        for serving in food.servings + food.recipePortions + food.kitchenMeasures {
             let measure = saved(serving, food: food)
             if !choices.contains(measure) { choices.append(measure) }
         }
