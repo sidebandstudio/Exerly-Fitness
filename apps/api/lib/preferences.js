@@ -18,6 +18,8 @@ const profileFields = [
   'wakeTime',
   'reminders',
   'reminderTimes',
+  'nutritionDisplay',
+  'waterGoalMl',
 ];
 const accountFields = [
   'name',
@@ -76,6 +78,11 @@ function validate(changes) {
     else if (key === 'sleepGoalHours')
       result[key] = v.num(value, key, { min: 1, max: 16, required: false });
     else if (['bedtime', 'wakeTime'].includes(key)) result[key] = clock(value, key);
+    // Whether Today leads with what's left of each target or what's been eaten.
+    else if (key === 'nutritionDisplay')
+      result[key] = v.oneOf(value, key, ['remaining', 'consumed'], { required: false });
+    else if (key === 'waterGoalMl')
+      result[key] = v.int(value, key, { min: 250, max: 10000, required: false });
     else if (key === 'reminders') {
       if (
         !object(value) ||
@@ -159,6 +166,7 @@ async function apply(user, raw, { baseRevision, legacy = false } = {}) {
   const goals = {};
   if (own(changes, 'workoutDaysPerWeek')) goals.weekly_workouts = changes.workoutDaysPerWeek;
   if (own(changes, 'sleepGoalHours')) goals.sleep_hours = changes.sleepGoalHours;
+  if (own(changes, 'waterGoalMl')) goals.water_ml = changes.waterGoalMl;
   if (Object.keys(goals).length)
     await store.upsert('goals', { email: user.email }, { ...goals, updated_at: new Date() });
   return envelope(await requireUser(user.email));

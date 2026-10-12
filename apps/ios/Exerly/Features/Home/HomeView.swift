@@ -852,7 +852,10 @@ enum WaterDisplay {
     }
 
     static func milliliters(_ text: String, imperial: Bool) -> Int? {
-        guard let value = TrainingInput.number(text) else { return nil }
+        TrainingInput.number(text).flatMap { milliliters($0, imperial: imperial) }
+    }
+
+    static func milliliters(_ value: Double, imperial: Bool) -> Int? {
         if imperial {
             guard (0.1...169).contains(value) else { return nil }
             return USUnits.wholeMilliliters(fluidOunces: value)

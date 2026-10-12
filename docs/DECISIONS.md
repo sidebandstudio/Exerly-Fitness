@@ -1278,3 +1278,48 @@ Outcome 3's body rows (PARITY S06, S07, S09, S10), each on Progress → Body or 
   Deleting the account removes the folder. A UI test launch supplies
   synthetic images in place of the system photo picker, which XCTest can't
   fill.
+
+## 2026-10-11: Today's diary depth: left or eaten, water, day status, By time, habits
+
+PARITY N06, N18, N19, N20 and N33.
+
+- Whether Today's ring and macros lead with what's left or what's eaten is
+  a preference, `nutritionDisplay` (remaining or consumed), in Your details
+  under Food log, saved through /api/preferences like the others and sent on
+  the user, so Today follows it as it follows units. An overage is always
+  signed: "+120 over" on the ring, the macros and Log food's confirmation.
+- Water stays in its existing model: a day's total in millilitres on the
+  API, queued offline by SyncEngine. The dashboard, agent tools and Daily
+  health already read it, and a second store would drift from it. Removing
+  is a negative change that stops at zero, as the API does, and Undo queues
+  the opposite change. A glass is 250 ml or 8 fl oz; a bottle 500 ml or
+  16.9 fl oz.
+- The water goal is a preference, `waterGoalMl`, copied to goals.water_ml
+  as the sleep goal is. Saving it through POST /api/goals would accept a
+  new targets version. The goal counts water logged as water. Water in
+  food, from the foods that report it, is shown apart and only added to the
+  total: few foods report water (MacroFactor's help rates complete water
+  tracking "very low"), so counting it would move the goal by which foods
+  were logged, and it is never counted twice.
+- "Log water" joins the Shortcuts. It opens SyncEngine's store for the
+  signed-in account when the app was launched in the background for it.
+  That makes ten App Shortcuts, iOS's limit.
+- A day marked complete with nothing logged is unknown, not a zero, in the
+  energy balance and its JavaScript port, as it already was in averages.
+  Only a fast is a known zero. A day marked partial with nothing logged
+  counts as partial, not as not logged. Check-ins say how many of their
+  fully logged days were fasts and how many partial days were left out.
+- By time groups a day's food by the clock hour it was eaten in the
+  account's time zone. The hour clocks repeat in autumn shows twice, with
+  its zone; food logged on another day or moved here is listed last.
+  Moving an entry's day keeps its time of day, now in ExerlyCore with DST
+  tests: a skipped time moves on by the gap, a repeated one is the first.
+- Today's date button opens a month calendar of habits instead of the
+  system date picker: complete, food logged, partial, fasted, not logged,
+  and weigh-ins, each with its own shape. A tap opens the day. No streaks.
+- Today's cards (quick actions, calories and macros, training, weight,
+  water, meals) can be hidden and reordered in Customize Today. The layout
+  is kept on the device for each account, not synced: it's a layout, it
+  applies at once offline, and it needs no API. The day's status, note and
+  Customize are in a menu beside the date button, and a status shows under
+  the date.

@@ -37,6 +37,7 @@ enum PreferenceFields {
         ("equipment", "Available equipment"),
         ("workoutDaysPerWeek", "Weekly workout goal"), ("workoutDays", "Workout days"),
         ("sleepGoalHours", "Sleep goal (hours)"),
+        ("nutritionDisplay", "Today leads with"), ("waterGoalMl", "Daily water goal"),
         ("reminders.meals", "Meal reminders"), ("reminders.workouts", "Workout reminders"), ("reminders.sleep", "Sleep reminders"),
         ("reminders.weighIn", "Weigh-in reminders"),
         ("reminderTimes.meals", "Meal reminder times"), ("reminderTimes.workout", "Workout reminder time"),
@@ -44,7 +45,7 @@ enum PreferenceFields {
     ]
     static let days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     static let lists = ["allergies", "equipment", "workoutDays", "reminderTimes.meals"]
-    static let numbers = ["age", "workoutDaysPerWeek", "sleepGoalHours"]
+    static let numbers = ["age", "workoutDaysPerWeek", "sleepGoalHours", "waterGoalMl"]
     static func label(_ key: String) -> String { definitions.first { $0.key == key }?.label ?? key.capitalized }
 
     static func numberText(_ number: Double) -> String {

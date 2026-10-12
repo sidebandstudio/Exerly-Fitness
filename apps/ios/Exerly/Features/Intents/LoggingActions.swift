@@ -1,5 +1,6 @@
 import ExerlyCore
 import Foundation
+import SwiftData
 import WidgetKit
 
 /// Why a logging intent couldn't run, in words that can be read aloud.
@@ -239,6 +240,39 @@ enum LoggingActions {
         }
         let protein = FoodFormat.grams(progress.protein.consumed)
         text += progress.protein.target.map { " Protein \(protein) of \(FoodFormat.grams($0)) g." } ?? " Protein \(protein) g."
+        return text
+    }
+
+    // MARK: Water
+
+    /// Today's water row: a glass, or an amount in the person's units, added
+    /// to today through the row's queue, so it syncs as the row's does. The
+    /// queue is opened for the signed-in account when no screen has.
+    static func logWater(_ amount: Double?, sync: SyncEngine? = nil, container: ModelContainer? = nil,
+                         token: String? = KeychainService.shared.getToken(), defaults: UserDefaults = .standard) async throws -> String {
+        guard let token, let accountID = APIClient.accountID(in: token) else { throw LoggingIntentError.signedOut }
+        let sync = sync ?? .shared
+        let container = container ?? SyncEngine.launchContainer
+        let user = defaults.data(forKey: APIClient.accountCacheKey(token)).flatMap { try? JSONDecoder().decode(UserDTO.self, from: $0) }
+        if !sync.isConfigured(for: accountID) {
+            guard let container else { throw LoggingIntentError.unavailable }
+            sync.configure(container: container, accountID: accountID, timeZone: user?.timezone)
+        }
+        let imperial = user?.unitSystem != "metric"
+        var milliliters = WaterServing.glass.milliliters(imperial: imperial)
+        if let amount {
+            guard let typed = WaterDisplay.milliliters(amount, imperial: imperial) else {
+                throw LoggingIntentError.invalid(imperial ? "Enter 0.1 to 169 fl oz." : "Enter a whole number from 1 to 5,000 ml.")
+            }
+            milliliters = typed
+        }
+        let today = sync.today
+        let current = (try? await sync.diary(for: today, cachedOnly: true))?.water ?? WaterDayDTO(entry_date: today.rawValue, ml: 0, revision: 0)
+        do { try sync.addWater(current, milliliters: milliliters) } catch { throw LoggingIntentError.invalid("Nothing was saved. Open Exerly and try again.") }
+        let total = (try? await sync.diary(for: today, cachedOnly: true))?.waterMl ?? current.ml + milliliters
+        let words = { (ml: Int) in WaterDisplay.amount(ml, imperial: imperial) }
+        var text = "Logged \(words(milliliters)) of water. \(words(total)) today"
+        if let goal = user?.waterGoalMl { text += total >= goal ? ", your goal reached." : ", \(words(goal - total)) to go." } else { text += "." }
         return text
     }
 

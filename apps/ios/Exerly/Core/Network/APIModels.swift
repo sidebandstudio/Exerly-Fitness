@@ -126,6 +126,13 @@ struct UserDTO: Codable, Identifiable {
     let dailyAiCreditsUsed: Int?
     let hourlyAiCreditsUsed: Int?
     let preferencesRevision: Int?
+    /// "consumed" when Today leads with what's eaten; else it leads with what's left.
+    let nutritionDisplay: String?
+    /// The daily water goal, in millilitres.
+    let waterGoalMl: Int?
+
+    /// Today's calories and macros lead with what's eaten, not what's left.
+    var leadsWithEaten: Bool { nutritionDisplay == "consumed" }
 
     init(
         id: String? = nil,
@@ -145,7 +152,9 @@ struct UserDTO: Codable, Identifiable {
         aiCreditsRemaining: Int? = nil,
         dailyAiCreditsUsed: Int? = nil,
         hourlyAiCreditsUsed: Int? = nil,
-        preferencesRevision: Int? = nil
+        preferencesRevision: Int? = nil,
+        nutritionDisplay: String? = nil,
+        waterGoalMl: Int? = nil
     ) {
         self.id = id
         self.email = email
@@ -165,6 +174,8 @@ struct UserDTO: Codable, Identifiable {
         self.dailyAiCreditsUsed = dailyAiCreditsUsed
         self.hourlyAiCreditsUsed = hourlyAiCreditsUsed
         self.preferencesRevision = preferencesRevision
+        self.nutritionDisplay = nutritionDisplay
+        self.waterGoalMl = waterGoalMl
     }
 
     enum CodingKeys: String, CodingKey {
@@ -184,6 +195,7 @@ struct UserDTO: Codable, Identifiable {
         case legacyDailyAiCreditsUsed = "aiDailyCreditsUsed"
         case hourlyAiCreditsUsed
         case preferencesRevision
+        case nutritionDisplay, waterGoalMl
     }
 
     func encode(to encoder: Encoder) throws {
@@ -206,6 +218,8 @@ struct UserDTO: Codable, Identifiable {
         try c.encodeIfPresent(dailyAiCreditsUsed, forKey: .dailyAiCreditsUsed)
         try c.encodeIfPresent(hourlyAiCreditsUsed, forKey: .hourlyAiCreditsUsed)
         try c.encodeIfPresent(preferencesRevision, forKey: .preferencesRevision)
+        try c.encodeIfPresent(nutritionDisplay, forKey: .nutritionDisplay)
+        try c.encodeIfPresent(waterGoalMl, forKey: .waterGoalMl)
     }
 
     init(from decoder: Decoder) throws {
@@ -228,7 +242,9 @@ struct UserDTO: Codable, Identifiable {
             aiCreditsRemaining: container.decodeInt(forKeys: [.aiCreditsRemaining]),
             dailyAiCreditsUsed: container.decodeInt(forKeys: [.dailyAiCreditsUsed, .legacyDailyAiCreditsUsed]),
             hourlyAiCreditsUsed: container.decodeInt(forKeys: [.hourlyAiCreditsUsed]),
-            preferencesRevision: container.decodeInt(forKeys: [.preferencesRevision])
+            preferencesRevision: container.decodeInt(forKeys: [.preferencesRevision]),
+            nutritionDisplay: container.decodeString(forKeys: [.nutritionDisplay]),
+            waterGoalMl: container.decodeInt(forKeys: [.waterGoalMl])
         )
     }
 }

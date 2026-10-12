@@ -1,0 +1,265 @@
+import ExerlyCore
+import SwiftUI
+
+/// What one tap on Today's water row adds, in the person's units.
+enum WaterServing: String, CaseIterable, Identifiable {
+    case glass, bottle
+
+    var id: String { rawValue }
+    var title: String { self == .glass ? "Glass" : "Bottle" }
+
+    func milliliters(imperial: Bool) -> Int {
+        switch self {
+        case .glass: imperial ? USUnits.wholeMilliliters(fluidOunces: 8) : 250
+        case .bottle: imperial ? USUnits.wholeMilliliters(fluidOunces: 16.9) : 500
+        }
+    }
+}
+
+/// Water on Today: the day's drinks against the daily goal, a glass or a
+/// bottle in one tap, and any other amount, added or removed, from the
+/// sheet. Water in the day's food shows beside it and is never added to it.
+struct TodayWaterCard: View {
+    let date: LocalDate
+    let store: NutritionStore
+    let imperial: Bool
+    /// Millilitres a day, from Your details.
+    let goal: Int?
+    /// A change queued, in millilitres, for Today's toast and Undo.
+    let changed: (Int) -> Void
+    let failed: (String) -> Void
+    @EnvironmentObject private var sync: SyncEngine
+    @State private var water: WaterDayDTO?
+    @State private var editing = false
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var current: WaterDayDTO { water ?? WaterDayDTO(entry_date: date.description, ml: 0, revision: 0) }
+
+    var body: some View {
+        let day = store.water(on: date, drinks: Double(current.ml), goal: goal.map(Double.init))
+        ExCard {
+            Button { editing = true } label: {
+                header(day)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Water")
+                    .accessibilityValue(Self.spoken(day, imperial: imperial))
+            }
+            .buttonStyle(TodayPressStyle())
+            .accessibilityHint("Opens water, to add another amount or remove some")
+            .accessibilityIdentifier("today.water")
+            if let goal = day.goal { ExProgressBar(value: day.drinks, total: goal, color: .exSecondary) }
+            let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
+                : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+            layout {
+                ForEach(WaterServing.allCases) { serving in
+                    let ml = serving.milliliters(imperial: imperial)
+                    chip("+ \(serving.title)", detail: WaterDisplay.amount(ml, imperial: imperial)) { add(ml) }
+                        .accessibilityLabel("Add a \(serving.title.lowercased()) of water, \(WaterDisplay.amount(ml, imperial: imperial))")
+                        .accessibilityIdentifier("today.water.\(serving.rawValue)")
+                }
+                chip("Other", detail: "Add or remove") { editing = true }
+                    .accessibilityLabel("Add or remove another amount of water")
+                    .accessibilityIdentifier("today.water.other")
+            }
+            if day.food >= 1 {
+                Text("Plus \(Self.amount(day.food, imperial: imperial)) in logged food and drinks, not counted toward your goal")
+                    .font(.exSmall).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("today.water.food")
+            }
+            if current.sync_state == "pending", sync.isOffline {
+                Label("Saved on this iPhone. It syncs when you're online.", systemImage: "icloud.and.arrow.up")
+                    .font(.exSmall).foregroundStyle(Color.exTextMuted)
+            }
+        }
+        .task(id: "\(date)-\(sync.changeToken)") { await load() }
+        .sheet(isPresented: $editing) {
+            TodayWaterSheet(date: date, water: current, store: store, imperial: imperial, goal: goal) { change in
+                apply(change)
+            }
+        }
+    }
+
+    private func header(_ day: WaterDay) -> some View {
+        let figure = Text(Self.amount(day.drinks, imperial: imperial, unit: false)).font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
+        let rest = Text(day.goal.map { " / \(Self.amount($0, imperial: imperial))" } ?? " \(WaterDisplay.unit(imperial: imperial))")
+            .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+        return HStack(spacing: ExSpacing.item) {
+            if !typeSize.isAccessibilitySize {
+                Image(systemName: "drop.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.exSecondary)
+                    .frame(width: 36, height: 36).background(Color.exSecondary.opacity(0.14), in: Circle()).accessibilityHidden(true)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
+                    Spacer(minLength: ExSpacing.small)
+                    Text("\(figure)\(rest)").monospacedDigit().lineLimit(1)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
+                    Text("\(figure)\(rest)").monospacedDigit()
+                }
+            }
+            Image(systemName: "chevron.right").font(.exCaption.weight(.semibold)).foregroundStyle(Color.exTextMuted).accessibilityHidden(true)
+        }
+        .frame(minHeight: 44).contentShape(Rectangle())
+    }
+
+    private func chip(_ title: String, detail: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text(title).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                Text(detail).font(.exSmall).foregroundStyle(Color.exTextSecondary).monospacedDigit()
+            }
+            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, minHeight: 48).padding(.horizontal, 4)
+            .background(Color.exPrimary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(TodayPressStyle())
+    }
+
+    private func load() async {
+        guard let day = CalendarDay(rawValue: date.description) else { return }
+        if let cached = try? await sync.diary(for: day, cachedOnly: true).water, cached.entry_date == date.description { water = cached }
+        if let fresh = try? await sync.diary(for: day).water, fresh.entry_date == date.description { water = fresh }
+    }
+
+    private func add(_ milliliters: Int) {
+        do {
+            apply(try sync.addWater(current, milliliters: milliliters))
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } catch { failed(error.localizedDescription) }
+    }
+
+    /// Shows a change at once; the next load confirms it.
+    private func apply(_ change: Int) {
+        withAnimation(.snappy) {
+            water = WaterDayDTO(entry_date: date.description, ml: max(0, current.ml + change), revision: current.revision, sync_state: "pending")
+        }
+        changed(change)
+    }
+
+    /// "1,250 ml", or "42.3 fl oz"; the number alone without `unit`.
+    static func amount(_ milliliters: Double, imperial: Bool, unit: Bool = true) -> String {
+        let value = imperial ? USUnits.fluidOunces(milliliters: milliliters) : milliliters
+        let number = value.formatted(.number.precision(.fractionLength(0...(imperial ? 1 : 0))))
+        return unit ? "\(number) \(WaterDisplay.unit(imperial: imperial))" : number
+    }
+
+    static func spoken(_ day: WaterDay, imperial: Bool) -> String {
+        var parts = ["\(amount(day.drinks, imperial: imperial)) logged"]
+        if let goal = day.goal, let remaining = day.remaining {
+            parts.append(remaining > 0 ? "\(amount(remaining, imperial: imperial)) to go of \(amount(goal, imperial: imperial))"
+                : "goal of \(amount(goal, imperial: imperial)) reached")
+        }
+        if day.food >= 1 { parts.append("plus \(amount(day.food, imperial: imperial)) in food, not counted toward the goal") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// Another amount of water, added or removed, and the day's totals: water
+/// logged, water in food and other drinks, and both together.
+struct TodayWaterSheet: View {
+    let date: LocalDate
+    let water: WaterDayDTO
+    let store: NutritionStore
+    let imperial: Bool
+    let goal: Int?
+    let changed: (Int) -> Void
+    @EnvironmentObject private var sync: SyncEngine
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var removing = false
+    @State private var amount: String
+    @State private var error: String?
+    @State private var settingGoal = false
+
+    init(date: LocalDate, water: WaterDayDTO, store: NutritionStore, imperial: Bool, goal: Int?, changed: @escaping (Int) -> Void) {
+        self.date = date
+        self.water = water
+        self.store = store
+        self.imperial = imperial
+        self.goal = goal
+        self.changed = changed
+        _amount = State(initialValue: imperial ? "8" : "250")
+    }
+
+    var body: some View {
+        let day = store.water(on: date, drinks: Double(water.ml), goal: goal.map(Double.init))
+        let unit = WaterDisplay.unit(imperial: imperial)
+        NavigationStack {
+            ExScreen {
+                ExCard(accent: true) {
+                    ExSegmentedControl(values: [false, true], selection: $removing) { $0 ? "Remove" : "Add" }
+                        .accessibilityIdentifier("water.mode")
+                    ExQuantityControl(title: "Amount (\(unit))", text: $amount, step: imperial ? 1 : 50,
+                                      presets: imperial ? [8, 16.9, 24] : [250, 500, 750], unit: unit,
+                                      identifier: "water.amount", integer: !imperial)
+                        .onChange(of: amount) { _, _ in error = nil }
+                }
+                if let error { Text(error).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("water.error") }
+                ExCard {
+                    ExEyebrow("Totals", color: .exPrimaryText)
+                    total("Water you logged", TodayWaterCard.amount(day.drinks, imperial: imperial), id: "drinks")
+                    total("In logged food and drinks", TodayWaterCard.amount(day.food, imperial: imperial), id: "food",
+                          detail: day.entries == 0 ? "Nothing logged yet"
+                            : "Reported by \(day.reporting) of \(day.entries) \(day.entries == 1 ? "entry" : "entries")")
+                    TargetsDivider()
+                    total("Total", TodayWaterCard.amount(day.total, imperial: imperial), id: "total", strong: true)
+                    Text("Few foods report their water, so your goal counts the water you log here. Water in food is added to the total only.")
+                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+                ExCard {
+                    let goalText = goal.map { "\(TodayWaterCard.amount(Double($0), imperial: imperial)) a day" } ?? "No daily goal"
+                    let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small))
+                        : AnyLayout(HStackLayout(spacing: ExSpacing.item))
+                    layout {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Daily goal").font(.exLabel).foregroundStyle(Color.exTextSecondary)
+                            Text(goalText).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                        }
+                        if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                        Button(goal == nil ? "Set a goal" : "Change") { settingGoal = true }
+                            .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
+                            .accessibilityHint("Opens Your details")
+                            .accessibilityIdentifier("water.goal")
+                    }
+                }
+            }
+            .navigationTitle("Water").navigationSubtitle(NutritionFormat.day(date, timeZone: .gmt))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(removing ? "Remove" : "Add") { save() }.fontWeight(.semibold).accessibilityIdentifier("water.save")
+                }
+            }
+        }
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+        .sheet(isPresented: $settingGoal) { EditProfileView(section: .foodLog) }
+    }
+
+    private func total(_ title: String, _ value: String, id: String, detail: String? = nil, strong: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(strong ? .exBodyMedium : .exBody).foregroundStyle(Color.exTextPrimary)
+                if let detail { Text(detail).font(.exSmall).foregroundStyle(Color.exTextMuted) }
+            }
+            Spacer(minLength: ExSpacing.small)
+            Text(value).font(strong ? .exStatSmall : .exBody).monospacedDigit().foregroundStyle(Color.exTextPrimary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("water.total.\(id)")
+    }
+
+    private func save() {
+        guard let milliliters = WaterDisplay.milliliters(amount, imperial: imperial) else {
+            error = imperial ? "Enter an amount from 0.1 to 169 fl oz." : "Enter a whole number from 1 to 5,000 ml."
+            return
+        }
+        do {
+            changed(try sync.addWater(water, milliliters: removing ? -milliliters : milliliters))
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+}
