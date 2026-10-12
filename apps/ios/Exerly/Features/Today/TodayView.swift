@@ -871,10 +871,8 @@ struct TodayView: View {
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }.buttonStyle(.plain).accessibilityLabel("Edit note, \(day.notes)")
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: ExSpacing.small) { footerLinks }
-                VStack(alignment: .leading, spacing: 0) { footerLinks }
-            }
+            // A line each where they don't fit side by side.
+            ExFlowLayout(spacing: ExSpacing.small) { footerLinks }
             HealthActivityLine(accountID: workspace.accountID, date: date, timeZone: timeZone)
             if let engine = workspace.sync, case .offline = engine.state {
                 Label("Saved on this device · Offline", systemImage: "wifi.slash").font(.exCaption).foregroundStyle(Color.exTextSecondary)
@@ -890,6 +888,8 @@ struct TodayView: View {
         if !store.entries(on: date).isEmpty {
             footerLink("Copy day", icon: "doc.on.doc", id: "nutrition.copyDay") { destination = .copy(nil) }
         }
+        // Also in the day menu, where at the largest text sizes it's below the fold.
+        footerLink("Customize", icon: "slider.horizontal.3", id: "today.customize") { destination = .customize }
         if let calendarDate = CalendarDay(rawValue: date.description) {
             NavigationLink {
                 HomeView(refreshToken: 0, initialDate: calendarDate, healthOnly: true)

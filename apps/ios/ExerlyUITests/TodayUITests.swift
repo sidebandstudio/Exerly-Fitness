@@ -413,7 +413,10 @@ final class TodayUITests: ExerlyUITestCase {
         let app = try await signedInWithWeek(prefix: "today-customize")
         XCTAssertNotNil(targetEnergy(app))
         XCTAssertTrue(app.buttons["today.quickAdd"].exists)
-        openCustomize(in: app)
+        // From the day menu; after the relaunch, from the link under the meals.
+        tap(app.buttons["today.dayMenu"], in: app)
+        tap(app.buttons["today.dayMenu.customize"], in: app)
+        XCTAssertTrue(app.navigationBars["Customize Today"].waitForExistence(timeout: 5))
         let quick = app.switches["today.customize.show.quickActions"]
         XCTAssertEqual(quick.value as? String, "1")
         tap(quick, in: app)
@@ -493,9 +496,9 @@ final class TodayUITests: ExerlyUITestCase {
         capture(app, "diary-12-eaten-top")
     }
 
+    /// Opens Customize Today from the link under the day's meals.
     private func openCustomize(in app: XCUIApplication) {
-        tap(app.buttons["today.dayMenu"], in: app)
-        tap(app.buttons["today.dayMenu.customize"], in: app)
+        tap(app.buttons["today.customize"], in: app)
         XCTAssertTrue(app.navigationBars["Customize Today"].waitForExistence(timeout: 5))
     }
 
