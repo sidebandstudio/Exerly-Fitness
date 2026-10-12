@@ -2811,40 +2811,55 @@ final class ProductionUITests: ExerlyUITestCase {
         tap(app.buttons["Log In"], in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Add measurement"], in: app)
-        tap(app.buttons["measurement.type"], in: app)
-        tap(app.buttons["Waist"], in: app)
-        replace(app.textFields["Value (cm)"], with: "82.55", in: app)
+        let log = app.buttons["body.measurements.log"]
+        reveal(log, in: app)
+        tap(log, in: app)
+        replace(app.textFields["measurementEntry.waist"], with: "82.5", in: app)
         dismissKeyboard(app)
-        tap(app.buttons["Save"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "82.55")
+        tap(app.buttons["measurementEntry.save"], in: app)
+        let reading = app.buttons["measurement.reading.\(Self.day(0).date)"]
+        let value = app.textFields["measurementEdit.value"]
+        // Progress → Body → Waist → today's reading opens it to edit.
+        func openWaist() {
+            let waist = app.buttons["body.measurement.waist"]
+            reveal(waist, in: app)
+            tap(waist, in: app)
+            tap(reading, in: app)
+            XCTAssertTrue(value.waitForExistence(timeout: 5))
+        }
+        openWaist()
+        XCTAssertEqual(value.value as? String, "82.5")
         try await control(["offline": true])
-        replace(app.textFields["Value (cm)"], with: "81.25", in: app)
+        replace(value, with: "81.2", in: app)
         dismissKeyboard(app)
-        tap(app.buttons["Save"], in: app)
+        tap(app.buttons["measurementEdit.save"], in: app)
         capture(app, "measurement-offline-edit")
         app.terminate()
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
+        openWaist()
+        XCTAssertEqual(value.value as? String, "81.2")
         tap(app.buttons["Cancel"], in: app)
         try await control([:])
         app.terminate()
         app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
-        let synced = try await request("GET", "/api/measurements", token: token)
-        let records = try XCTUnwrap(synced["entries"] as? [[String: Any]])
+        openWaist()
+        XCTAssertEqual(value.value as? String, "81.2")
+        var records: [[String: Any]] = []
+        for _ in 0..<40 {
+            let synced = try await request("GET", "/api/measurements", token: token)
+            records = synced["entries"] as? [[String: Any]] ?? []
+            if records.first?["value"] as? Double == 81.2 { break }
+            try await Task.sleep(for: .milliseconds(250))
+        }
         XCTAssertEqual(records.count, 1)
-        XCTAssertEqual(records.first?["value"] as? Double, 81.25)
+        XCTAssertEqual(records.first?["value"] as? Double, 81.2)
         let id = try XCTUnwrap(records.first?["id"] as? String)
-        tap(app.buttons["Delete measurement"], in: app)
+        tap(app.buttons["measurementEdit.delete"], in: app)
         var removed = false
         for _ in 0..<15 {
             let result = try await request("GET", "/api/measurements", token: token)
@@ -2852,16 +2867,21 @@ final class ProductionUITests: ExerlyUITestCase {
             try await Task.sleep(for: .milliseconds(200))
         }
         XCTAssertTrue(removed, "The deletion must reach the API before exercising undo")
-        tap(app.buttons["Undo"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
+        // A toast floats above the tab bar, where `reveal` would scroll instead of tapping.
+        let undo = app.buttons["measurement.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        undo.tap()
+        XCTAssertTrue(reading.waitForExistence(timeout: 10), "Undo brings the reading back")
+        tap(reading, in: app)
+        XCTAssertTrue(value.waitForExistence(timeout: 5))
+        XCTAssertEqual(value.value as? String, "81.2")
         tap(app.buttons["Cancel"], in: app)
         capture(app, "measurement-synchronized-undo")
         let exported = try await request("GET", "/api/export", token: token)
         let exportedMeasurements = try XCTUnwrap(exported["measurements"] as? [[String: Any]])
         XCTAssertEqual(exportedMeasurements.count, 1)
         XCTAssertEqual(exportedMeasurements.first?["id"] as? String, id)
-        XCTAssertEqual(exportedMeasurements.first?["value"] as? Double, 81.25)
+        XCTAssertEqual(exportedMeasurements.first?["value"] as? Double, 81.2)
     }
 
     func testUSWaterDefaultsAndConvertedAmountsSurviveOfflineSync() async throws {

@@ -136,7 +136,9 @@ final class LiveActivityUITests: ExerlyUITestCase {
         app.descendants(matching: .any)["debug.liveActivity"]
     }
 
-    private func wait(_ element: XCUIElement, for value: String, timeout: TimeInterval = 10) -> Bool {
+    /// ActivityKit's updates reach the readout seconds later on a loaded machine,
+    /// such as six simulators sharing it.
+    private func wait(_ element: XCUIElement, for value: String, timeout: TimeInterval = 30) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }

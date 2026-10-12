@@ -288,7 +288,16 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         Thread.sleep(forTimeInterval: 3)
         capture(spotlight, "notify-spotlight-usual-logged")
         springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        spotlight.buttons["Clear text"].tap()
+        // That tap can close Spotlight itself rather than its panel; open it again if so.
+        let clear = spotlight.buttons["Clear text"]
+        if clear.waitForExistence(timeout: 3) {
+            clear.tap()
+        } else {
+            springboard.swipeDown()
+            if !field.waitForExistence(timeout: 5) { springboard.otherElements["spotlight-pill"].firstMatch.tap() }
+            XCTAssertTrue(field.waitForExistence(timeout: 8), spotlight.debugDescription)
+            if clear.exists { clear.tap() }
+        }
         field.typeText("cottage cheese")
         let saved = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 45), spotlight.debugDescription)
