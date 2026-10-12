@@ -1323,3 +1323,12 @@ PARITY N06, N18, N19, N20 and N33.
   applies at once offline, and it needs no API. The day's status, note and
   Customize are in a menu beside the date button, and a status shows under
   the date.
+
+## 2026-10-12: Today's diary tests run outside CI's tap-budget check
+
+CI's iOS job runs the unit tests and `TodayUITests`, the tap budgets, within 60
+minutes. The diary work added six slow tests to that class (water, leading with
+what's eaten, a fasted day in the calendar, By time, a customized Today, and its
+screenshots), which pushed the job past its limit. They now live in
+`TodayDiaryUITests`, which the full local suite runs before every landing, and
+`TodayUITests` holds the tap budgets again.
