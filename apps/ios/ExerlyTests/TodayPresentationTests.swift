@@ -21,6 +21,21 @@ final class TodayPresentationTests: XCTestCase {
         XCTAssertNotEqual(TodayLayout.key(accountID: "a"), TodayLayout.key(accountID: "b"), "Each account keeps its own")
     }
 
+    /// Run 7 came back to Today from 16 minutes in Profile and found the
+    /// day it had looked at before, "Yesterday".
+    func testComingBackLongAfterOrOnANewDayShowsToday() {
+        let today = LocalDate("2026-10-12")!, yesterday = LocalDate("2026-10-11")!
+        let now = Date(timeIntervalSince1970: 1_791_800_000)
+        func back(after seconds: TimeInterval?, openedOn: LocalDate = today) -> LocalDate {
+            TodayReturn.day(shown: yesterday, today: today, openedOn: openedOn, leftAt: seconds.map { now.addingTimeInterval(-$0) }, now: now)
+        }
+        XCTAssertEqual(back(after: 20), yesterday, "A quick look at another tab keeps the day")
+        XCTAssertEqual(back(after: nil), yesterday)
+        XCTAssertEqual(back(after: 16 * 60), today, "Back long after: today")
+        XCTAssertEqual(back(after: TodayReturn.staleAfter + 1), today)
+        XCTAssertEqual(back(after: 20, openedOn: yesterday), today, "Past midnight, even a moment later")
+    }
+
     func testWaterReadsDrinksFirstAndFoodApart() {
         let day = WaterDay(drinks: 1250, food: 190, reporting: 1, entries: 3, goal: 2000)
         XCTAssertEqual(TodayWaterCard.spoken(day, imperial: false),

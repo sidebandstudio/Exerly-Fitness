@@ -53,6 +53,66 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         try await waitForWater(263, token: person.token)
     }
 
+    /// Run 7 looked for "lead with what's eaten" in Customize Today before
+    /// finding it in Your details. It's at the top of Customize, saved as it's
+    /// chosen, and the account's preference changes with it.
+    func testCustomizeTodayChoosesWhatCaloriesAndMacrosShow() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "today-customize-eaten", units: "imperial")
+        try await seedWeek(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 20))
+        tapCount = 0
+        tap(app.buttons["today.dayMenu"], in: app)
+        tap(app.buttons["today.dayMenu.customize"], in: app)
+        XCTAssertTrue(app.buttons["What's left"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["What's left"].isSelected)
+        tap(app.buttons["What you've eaten"], in: app)
+        capture(app, "customize-display")
+        try await waitForPreference("nutritionDisplay", "consumed", token: person.token)
+        tap(app.buttons["today.customize.done"], in: app)
+        XCTAssertEqual(tapCount, 4, "Day options, Customize Today, What you've eaten, Done")
+        XCTAssertTrue(app.staticTexts["kcal eaten"].waitForExistence(timeout: 15))
+        tap(app.buttons["today.dayMenu"], in: app)
+        tap(app.buttons["today.dayMenu.customize"], in: app)
+        XCTAssertTrue(app.buttons["What you've eaten"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["What you've eaten"].isSelected, "Reopened on the saved choice")
+        tap(app.buttons["What's left"], in: app)
+        tap(app.buttons["today.customize.done"], in: app)
+        XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 15))
+        try await waitForPreference("nutritionDisplay", "remaining", token: person.token)
+    }
+
+    /// Run 7 found the water goal only by expanding the sheet, then in Your
+    /// details, and could leave only by Cancel. The goal is set in the sheet,
+    /// any amount, saved as it changes; leaving is Done, and the confirm reads
+    /// Log, not a second Add.
+    func testTheWaterGoalIsSetInTheWaterSheet() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "today-water-goal", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        let row = app.buttons["today.water"]
+        reveal(row, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        tap(app.buttons["today.water.other"], in: app)
+        let close = app.buttons["water.close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5))
+        XCTAssertEqual(close.label, "Cancel")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == 'Add'")).count, 1, "Add is the choice only")
+        XCTAssertEqual(app.navigationBars.buttons["water.save"].label, "Log the amount added")
+        let goal = app.textFields["water.goal"]
+        reveal(goal, in: app)
+        XCTAssertTrue(goal.exists, app.debugDescription)
+        replace(goal, with: "90", in: app)
+        XCTAssertEqual(close.label, "Done", "Nothing to cancel: the goal is saved")
+        capture(app, "water-goal-sheet")
+        try await waitForPreference("waterGoalMl", 2662, token: person.token)
+        tap(close, in: app)
+        await fulfillment(of: [expectation(for: NSPredicate(format: "value CONTAINS %@", "to go of 90 fl oz"), evaluatedWith: row)], timeout: 15)
+    }
+
     /// Two taps mark today a fast; the calendar shows it, with the days before it.
     func testMarkingADayFastedShowsInTheCalendar() async throws {
         let app = try await signedInWithWeek(prefix: "today-fasted")
@@ -222,5 +282,16 @@ final class TodayDiaryUITests: ExerlyUITestCase {
             try await Task.sleep(for: .milliseconds(500))
         }
         XCTFail("The server has \(total) ml of water, not \(milliliters)")
+    }
+
+    /// Waits for the account's preference `key` to be `value` on the server.
+    private func waitForPreference<Value: Equatable>(_ key: String, _ value: Value, token: String) async throws {
+        var found: Any?
+        for _ in 0..<40 {
+            found = (try await request("GET", "/api/preferences", token: token)["values"] as? [String: Any])?[key]
+            if found as? Value == value { return }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTFail("The server's \(key) is \(String(describing: found)), not \(value)")
     }
 }

@@ -157,8 +157,8 @@ struct TodayWaterCard: View {
     }
 }
 
-/// Another amount of water, added or removed, and the day's totals: water
-/// logged, water in food and other drinks, and both together.
+/// Another amount of water, added or removed, the daily goal, and the day's
+/// totals: water logged, water in food and other drinks, and both together.
 struct TodayWaterSheet: View {
     let date: LocalDate
     let water: WaterDayDTO
@@ -167,12 +167,13 @@ struct TodayWaterSheet: View {
     let goal: Int?
     let changed: (Int) -> Void
     @EnvironmentObject private var sync: SyncEngine
+    @EnvironmentObject private var auth: AuthViewModel
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var removing = false
     @State private var amount: String
     @State private var error: String?
-    @State private var settingGoal = false
+    /// The goal saves as it changes, so leaving is Done rather than Cancel.
+    @State private var goalChanged = false
 
     init(date: LocalDate, water: WaterDayDTO, store: NutritionStore, imperial: Bool, goal: Int?, changed: @escaping (Int) -> Void) {
         self.date = date
@@ -198,6 +199,10 @@ struct TodayWaterSheet: View {
                         .onChange(of: amount) { _, _ in error = nil }
                 }
                 if let error { Text(error).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("water.error") }
+                if let accountID = auth.currentUser?.id {
+                    TodayWaterGoal(goal: goal, imperial: imperial, changed: $goalChanged, accountID: accountID, auth: auth)
+                        .id("\(auth.sessionID):\(accountID)")
+                }
                 ExCard {
                     ExEyebrow("Totals", color: .exPrimaryText)
                     total("Water you logged", TodayWaterCard.amount(day.drinks, imperial: imperial), id: "drinks")
@@ -209,34 +214,23 @@ struct TodayWaterSheet: View {
                     Text("Few foods report their water, so your goal counts the water you log here. Water in food is added to the total only.")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 }
-                ExCard {
-                    let goalText = goal.map { "\(TodayWaterCard.amount(Double($0), imperial: imperial)) a day" } ?? "No daily goal"
-                    let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small))
-                        : AnyLayout(HStackLayout(spacing: ExSpacing.item))
-                    layout {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Daily goal").font(.exLabel).foregroundStyle(Color.exTextSecondary)
-                            Text(goalText).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
-                        }
-                        if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
-                        Button(goal == nil ? "Set a goal" : "Change") { settingGoal = true }
-                            .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
-                            .accessibilityHint("Opens Your details")
-                            .accessibilityIdentifier("water.goal")
-                    }
-                }
             }
             .navigationTitle("Water").navigationSubtitle(NutritionFormat.day(date, timeZone: .gmt))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(goalChanged ? "Done" : "Cancel") { dismiss() }.accessibilityIdentifier("water.close")
+                }
+                // "Log", not a second "Add" beside the Add and Remove choice.
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(removing ? "Remove" : "Add") { save() }.fontWeight(.semibold).accessibilityIdentifier("water.save")
+                    Button("Log") { save() }.fontWeight(.semibold)
+                        .accessibilityLabel(removing ? "Log the amount removed" : "Log the amount added")
+                        .accessibilityIdentifier("water.save")
                 }
             }
         }
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
-        .sheet(isPresented: $settingGoal) { EditProfileView(section: .foodLog) }
+        // Whole, so the goal is in view without expanding the sheet.
+        .presentationDetents([.large])
     }
 
     private func total(_ title: String, _ value: String, id: String, detail: String? = nil, strong: Bool = false) -> some View {
@@ -261,5 +255,81 @@ struct TodayWaterSheet: View {
             changed(try sync.addWater(water, milliliters: removing ? -milliliters : milliliters))
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// The daily water goal, set in the water sheet and saved as it changes: the
+/// account's preference, which Your details shows too. Any amount from 250 ml
+/// (about 8.5 fl oz) to 10 l; − and + move by a glass.
+private struct TodayWaterGoal: View {
+    let imperial: Bool
+    @Binding var changed: Bool
+    @StateObject private var store: PreferencesStore
+    @State private var text: String
+    @State private var invalid = false
+    @State private var saving: Task<Void, Never>?
+
+    init(goal: Int?, imperial: Bool, changed: Binding<Bool>, accountID: String, auth: AuthViewModel) {
+        self.imperial = imperial
+        _changed = changed
+        _store = StateObject(wrappedValue: .signedIn(accountID: accountID, auth: auth))
+        _text = State(initialValue: goal.map { Self.text($0, imperial: imperial) } ?? "")
+    }
+
+    private var unit: String { WaterDisplay.unit(imperial: imperial) }
+    private var start: String { imperial ? "64" : "2000" }
+
+    var body: some View {
+        ExCard {
+            ExQuantityControl(title: "Daily goal (\(unit))", text: $text, step: imperial ? 8 : 250,
+                              presets: imperial ? [64, 80, 100] : [2000, 2500, 3000], unit: unit, identifier: "water.goal",
+                              integer: !imperial, placeholder: start)
+            Group {
+                if invalid {
+                    Text(imperial ? "Enter a goal from 9 to 338 fl oz." : "Enter a goal from 250 to 10,000 ml.").foregroundStyle(Color.exError)
+                } else if let error = store.error {
+                    Text(error).foregroundStyle(Color.exError)
+                } else if text.isEmpty {
+                    Text("No daily goal. Type one, or tap + to start from \(start) \(unit).").foregroundStyle(Color.exTextSecondary)
+                } else {
+                    Text("Saved as you change it. Your details shows it too.").foregroundStyle(Color.exTextSecondary)
+                }
+            }
+            .font(.exCaption).fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("water.goal.note")
+            if !text.isEmpty {
+                Button("No goal") { text = "" }
+                    .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
+                    .accessibilityIdentifier("water.goal.clear")
+            }
+        }
+        .onChange(of: text) { _, text in schedule(text) }
+    }
+
+    /// Saves a moment after the last change, so typing "100" sends 100, not 1 and 10.
+    private func schedule(_ text: String) {
+        saving?.cancel()
+        let typed = text.trimmingCharacters(in: .whitespaces)
+        let milliliters = typed.isEmpty ? nil : Self.milliliters(typed, imperial: imperial)
+        invalid = !typed.isEmpty && milliliters == nil
+        guard !invalid else { return }
+        changed = true
+        let store = store
+        saving = Task {
+            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+            await store.saveNow(["waterGoalMl": milliliters.map(String.init) ?? ""])
+        }
+    }
+
+    static func text(_ milliliters: Int, imperial: Bool) -> String {
+        let value = imperial ? USUnits.fluidOunces(milliliters: Double(milliliters)) : Double(milliliters)
+        return value.formatted(.number.grouping(.never).precision(.fractionLength(0...1)))
+    }
+
+    /// A goal the account accepts, 250 to 10,000 ml, in whole millilitres.
+    static func milliliters(_ text: String, imperial: Bool) -> Int? {
+        guard let value = TrainingInput.number(text), value > 0 else { return nil }
+        let milliliters = imperial ? USUnits.wholeMilliliters(fluidOunces: value) : Int(value.rounded())
+        return (250...10_000).contains(milliliters) ? milliliters : nil
     }
 }

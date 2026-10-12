@@ -1977,3 +1977,28 @@ serving, couldn't convert a tablespoon, and came in at the 4 oz default
   4 oz default.
 - Searching for an imported recipe's unmatched line closes once a food is
   added: one line, one food, back to the recipe.
+
+## 2026-10-12: Preferences set where they're used, saved as they change
+
+Run 7 looked for "lead with what's eaten" on the calorie ring and in Customize
+Today before finding it in Profile → Your details, and reached the water goal
+only through the expanded water sheet, which then opened Your details.
+
+- Customize Today starts with "Calories and macros show: What's left / What
+  you've eaten", and the water sheet has a Daily goal field (any amount the
+  account accepts, 250 ml to 10 l, with − and + by a glass and three
+  presets). Both save the account's preference at once, as a reminder switch
+  does (`PreferencesStore.saveNow`), so it stays the single source and Your
+  details shows the same value. The latest choice wins; one still sending is
+  re-sent first.
+- The water sheet opens whole, so the goal is in view. Its confirm reads
+  "Log" (beside the Add / Remove choice it read "Add" twice), and once the
+  goal has changed, Cancel reads Done.
+
+## 2026-10-12: Today gives way to today after a long time away
+
+Run 7 picked yesterday to see By time, spent 16 minutes importing a recipe in
+Profile, and came back to "Yesterday". Coming back from another tab or the
+background keeps the day shown for up to 3 minutes, so a quick look at Log
+food doesn't lose it; after that, or on a new day, Today shows today. Re-tapping
+Today still goes to today at once.

@@ -1,18 +1,12 @@
 import ExerlyCore
 import SwiftUI
 
-/// A part of Your details another screen can open it at.
-enum PreferencesSection: String {
-    case foodLog
-}
-
 struct EditProfileView: View {
-    var section: PreferencesSection?
     @EnvironmentObject private var authVM: AuthViewModel
     var body: some View {
         NavigationStack {
             if let accountID = authVM.currentUser?.id {
-                PreferencesEditor(accountID: accountID, auth: authVM, section: section)
+                PreferencesEditor(accountID: accountID, auth: authVM)
                     .id("\(authVM.sessionID):\(accountID)")
             }
         }
@@ -30,10 +24,8 @@ private struct PreferencesEditor: View {
     @State private var editTask: Task<Void, Never>?
     @State private var feetText = ""
     @State private var inchesText = ""
-    let section: PreferencesSection?
 
-    init(accountID: String, auth: AuthViewModel, section: PreferencesSection? = nil) {
-        self.section = section
+    init(accountID: String, auth: AuthViewModel) {
         let sessionID = auth.sessionID
         _store = StateObject(wrappedValue: PreferencesStore(
             accountID: accountID,
@@ -80,9 +72,6 @@ private struct PreferencesEditor: View {
             }
             .onChange(of: store.conflict?.revision) { _, revision in
                 if revision != nil { focusedField = nil; proxy.scrollTo("preferences-status", anchor: .top) }
-            }
-            .onChange(of: store.draft != nil, initial: true) { _, ready in
-                if ready, let section { proxy.scrollTo(section.rawValue, anchor: .top) }
             }
         }
         .tint(.exPrimaryText)
@@ -225,7 +214,6 @@ private struct PreferencesEditor: View {
             }
             .accessibilityIdentifier("preferences.nutritionDisplay")
             .frame(minHeight: 44)
-            .id(PreferencesSection.foodLog.rawValue)
             Picker(PreferenceFields.label("waterGoalMl"), selection: binding("waterGoalMl")) {
                 Text("No goal").tag("")
                 ForEach(waterGoals, id: \.self) { ml in Text(WaterDisplay.amount(ml, imperial: imperial)).tag(String(ml)) }

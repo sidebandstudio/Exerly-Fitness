@@ -110,7 +110,8 @@ struct TodayTimelineView: View {
                     .foregroundStyle(chosen ? Color.exActionFill : Color.exTextMuted).accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.food.name).font(.exBody).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+                // Two lines: the gutter leaves the name less room than Meals does (run 7's "Ground turkey, 93% lean,…").
+                Text(entry.food.name).font(.exBody).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 Text(detail.joined(separator: " · ")).font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

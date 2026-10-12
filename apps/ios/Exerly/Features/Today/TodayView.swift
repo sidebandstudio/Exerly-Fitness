@@ -59,6 +59,8 @@ struct TodayView: View {
     @State private var date: LocalDate
     @State private var scroll = ScrollPosition(edge: .top)
     @State private var openedOn: LocalDate
+    /// When Today was last left for another tab or the background.
+    @State private var leftAt: Date?
     @State private var destination: Destination?
     /// Targets push, as they do from Profile.
     @State private var showsTargets = false
@@ -263,22 +265,32 @@ struct TodayView: View {
             date = today
             withAnimation(.snappy) { scroll.scrollTo(edge: .top) }
         }
-        .onChange(of: entered) { withAnimation(.snappy) { scroll.scrollTo(edge: .top) } }
+        .onChange(of: entered) {
+            comeBack()
+            withAnimation(.snappy) { scroll.scrollTo(edge: .top) }
+        }
+        .onDisappear { leftAt = .now }
         .task(id: link) { openLink() }
         .task(id: planKey) { plan = isToday ? workspace.nextWorkout(bodyweight: bodyweight, unit: unit) : nil }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { backgrounded = true }
-            guard phase == .active else { return }
-            // After midnight, a screen left on the old today moves to the new one.
-            if openedOn != today {
-                if date == openedOn { date = today }
-                openedOn = today
+            if phase == .background {
+                backgrounded = true
+                leftAt = leftAt ?? .now
             }
+            guard phase == .active else { return }
+            comeBack()
             if backgrounded {
                 backgrounded = false
                 refreshSuggestions()
             }
         }
+    }
+
+    /// After midnight, or a long while away, a day chosen earlier gives way to today.
+    private func comeBack() {
+        date = TodayReturn.day(shown: date, today: today, openedOn: openedOn, leftAt: leftAt)
+        openedOn = today
+        leftAt = nil
     }
 
     private func openLink() {
@@ -1129,5 +1141,19 @@ struct TodayMealCard: View {
         var style = Date.FormatStyle.dateTime.weekday(.wide)
         style.timeZone = timeZone
         return NutritionFormat.pickerDate(day, timeZone: timeZone).formatted(style)
+    }
+}
+
+/// The day Today shows when the person comes back to it from another tab or
+/// the background. A day chosen a moment ago stays (a quick look at Log food
+/// shouldn't lose yesterday), but not across a date change or a long time
+/// away: run 7 came back from 16 minutes in Profile to "Yesterday".
+enum TodayReturn {
+    static let staleAfter: TimeInterval = 3 * 60
+
+    static func day(shown: LocalDate, today: LocalDate, openedOn: LocalDate, leftAt: Date?, now: Date = .now) -> LocalDate {
+        if openedOn != today { return today }
+        if let leftAt, now.timeIntervalSince(leftAt) > staleAfter { return today }
+        return shown
     }
 }

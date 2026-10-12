@@ -74,16 +74,22 @@ struct TodayLayout: Equatable {
     static func key(accountID: String) -> String { "today.layout.v1.\(accountID)" }
 }
 
-/// Show, hide and reorder Today's cards. The day's status, note and links
-/// stay at the bottom, and the day strip at the top.
+/// Show, hide and reorder Today's cards, and choose whether calories and
+/// macros lead with what's left or what's eaten. The day's status, note and
+/// links stay at the bottom, and the day strip at the top.
 struct TodayCustomizeView: View {
     @Binding var layout: TodayLayout
+    @EnvironmentObject private var auth: AuthViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         NavigationStack {
             List {
+                // Where run 7 looked for it first, rather than only in Your details.
+                if let accountID = auth.currentUser?.id {
+                    TodayDisplayChoice(accountID: accountID, auth: auth).id("\(auth.sessionID):\(accountID)")
+                }
                 Section {
                     ForEach(layout.order) { card in row(card) }
                 } footer: {
@@ -151,5 +157,43 @@ struct TodayCustomizeView: View {
         .disabled(disabled)
         .accessibilityLabel(label)
         .accessibilityIdentifier("today.customize.\(offset < 0 ? "up" : "down").\(card.rawValue)")
+    }
+}
+
+/// Whether Today's calories and macros lead with what's left or what's
+/// eaten: the account's preference, which Your details also shows, saved the
+/// moment it's chosen like the rest of Customize.
+private struct TodayDisplayChoice: View {
+    @StateObject private var store: PreferencesStore
+    @State private var eaten: Bool
+    @State private var saving: Task<Void, Never>?
+
+    init(accountID: String, auth: AuthViewModel) {
+        _store = StateObject(wrappedValue: .signedIn(accountID: accountID, auth: auth))
+        _eaten = State(initialValue: auth.currentUser?.leadsWithEaten ?? false)
+    }
+
+    var body: some View {
+        Section {
+            ExSegmentedControl(values: [false, true], selection: Binding(get: { eaten }, set: choose)) {
+                $0 ? "What you've eaten" : "What's left"
+            }
+            .accessibilityIdentifier("today.customize.display")
+            if let error = store.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
+                    .accessibilityIdentifier("today.customize.displayError")
+            }
+        } header: {
+            Text("Calories and macros show")
+        }
+    }
+
+    private func choose(_ value: Bool) {
+        guard value != eaten else { return }
+        eaten = value
+        // The latest choice wins: an earlier one still sending is cancelled and re-sent before it.
+        saving?.cancel()
+        let store = store
+        saving = Task { await store.saveNow(["nutritionDisplay": value ? "consumed" : "remaining"]) }
     }
 }
