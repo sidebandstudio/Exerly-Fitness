@@ -25,21 +25,24 @@ final class TargetsUITests: ExerlyUITestCase {
         // Mifflin–St Jeor: 10 × 72.25 + 6.25 × 167.5 − 5 × 34 − 161 = 1438 kcal × 1.375.
         XCTAssertTrue((preview.value as? String ?? "").hasPrefix("1,978 kilocalories a day"), preview.value as? String ?? "")
         tap(app.buttons["Lose"], in: app)
+        // Round amounts a week: 0.75 kg is over 1 % of 72.25 kg, so two presets.
+        XCTAssertEqual(app.buttons["planEditor.rate.0"].label, "0.25 kilograms a week")
+        XCTAssertFalse(app.buttons["planEditor.rate.2"].exists)
         tap(app.buttons["planEditor.rate.1"], in: app)
-        XCTAssertEqual(app.buttons["planEditor.rate.1"].label, "0.36 kilograms a week")
+        XCTAssertEqual(app.buttons["planEditor.rate.1"].label, "0.50 kilograms a week")
         tap(app.buttons["planEditor.save"], in: app)
 
         let energy = app.descendants(matching: .any)["targets.today.energy"]
         XCTAssertTrue(energy.waitForExistence(timeout: 10))
-        // 1978 − 0.005 × 72.25 × 7700 / 7 = 1580.6 kcal; whole days share the week's 11,064.
-        XCTAssertTrue(["1,580 kilocalories", "1,581 kilocalories"].contains(energy.value as? String ?? ""), energy.value as? String ?? "")
+        // 1978 − 0.5 × 7700 / 7 = 1428 kcal.
+        XCTAssertEqual(energy.value as? String, "1,428 kilocalories")
         let plans = try await waitForDocuments("nutrition_plan", token: person.token) { $0.contains { $0["mode"] as? String == "coached" } }
         let plan = try XCTUnwrap(plans.first { $0["mode"] as? String == "coached" })
         XCTAssertEqual(plan["startDate"] as? String, Self.day(0).date)
         XCTAssertEqual((plan["goal"] as? [String: Any])?["direction"] as? String, "lose")
-        XCTAssertEqual((plan["goal"] as? [String: Any])?["weeklyRate"] as? Double, 0.005)
+        XCTAssertEqual((plan["goal"] as? [String: Any])?["weeklyRate"] as? Double, 0.0069204, "0.5 kg of 72.25 kg")
         XCTAssertEqual((plan["basis"] as? [String: Any])?["expenditure"] as? Double, 1978)
-        XCTAssertEqual((plan["targets"] as? [[String: Any]])?.first?["energy"] as? Double, 1581)
+        XCTAssertEqual((plan["targets"] as? [[String: Any]])?.first?["energy"] as? Double, 1428)
     }
 
     /// Targets set up offline are saved on the device, survive a relaunch and
@@ -298,32 +301,5 @@ final class TargetsUITests: ExerlyUITestCase {
         if mode != "manual" { payload["basis"] = ["expenditure": expenditure, "expenditureError": 300, "trendWeight": trend] }
         _ = try await request("PUT", "/v1/documents/nutrition_plan/\(id)", body: ["base_revision": 0, "payload": payload], token: token)
         return id
-    }
-
-    /// The account's live documents of a kind, from the change feed.
-    private func documents(_ kind: String, token: String) async throws -> [[String: Any]] {
-        var latest: [String: [String: Any]?] = [:]
-        var cursor = 0
-        while true {
-            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
-            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == kind {
-                guard let id = change["id"] as? String else { continue }
-                latest[id] = change["payload"] as? [String: Any]
-            }
-            cursor = page["cursor"] as? Int ?? cursor
-            guard page["has_more"] as? Bool == true else { break }
-        }
-        return Array(latest.compactMapValues { $0 }.values)
-    }
-
-    private func waitForDocuments(_ kind: String, token: String, timeout: Int = 40,
-                                  _ matches: @escaping ([[String: Any]]) -> Bool) async throws -> [[String: Any]] {
-        for _ in 0..<timeout {
-            let found = try await documents(kind, token: token)
-            if matches(found) { return found }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        XCTFail("The server's \(kind) documents never matched")
-        return []
     }
 }

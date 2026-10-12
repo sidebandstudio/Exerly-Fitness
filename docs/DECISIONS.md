@@ -1904,3 +1904,35 @@ Supersedes parts of the entry above, after an independent review.
   "Undo took back your imported measurements but couldn't finish. Tap Undo
   again." A retry adds to that list, so importing again brings back exactly
   those deletions.
+
+## 2026-10-12: A goal weight already reached can't be saved as a loss or a gain
+
+Code-blind run 7 set a 165 lb goal at "lose 1 lb a week" with the trend at
+160 lb. The editor said the trend was already past it, then saved a 415 kcal
+deficit, and Progress showed "On track" beside "at or past your goal".
+
+- ExerlyCore: `NutritionGoal.isReached(trend:)` is true when the trend is at
+  or past the goal weight in the goal's direction. `NutritionTargets.compute`
+  then takes no rate, so a reached goal never cuts or adds calories, including
+  in a check-in's proposal once a loss reaches its goal.
+- The editor doesn't switch direction by itself. A goal weight on the wrong
+  side is as likely a typo (155 meant) as a change of mind, and a silent switch
+  would hide either. It says what's wrong under the goal weight and offers one
+  tap: "Gain to 165 lb" or "Maintain instead". Save stays disabled, with the
+  same reason above it, until the goal can be reached. Over a confirm-on-save
+  alert, this shows the problem where it was made and keeps every choice on
+  screen.
+- Progress shows "Goal reached" instead of a path standing once the trend is
+  at or past the goal weight, so it never says "On track" about a goal it has
+  passed.
+- Add a goal weight opens an empty field with the keypad up and the trend
+  weight as its placeholder, instead of an unexplained 10 % under the trend.
+  − and + start from the placeholder.
+- With a trend weight, rate presets are round amounts in the person's unit:
+  0.5, 1, 1.5 and 2 lb (0.25 to 1 kg) to lose, 0.2 to 0.8 lb (0.1 to 0.4 kg) to
+  gain, on the 0.1 lb the editor shows, keeping those within the 1 % and
+  0.5 % caps. A new direction starts on
+  the preset nearest 0.5 % (0.25 % to gain).
+- Faster and Slower step from the amount as shown (0.1 lb or 0.01 kg). The
+  trend in a plan's basis is rounded to 0.01 kg, so 0.5 % of 72.57 kg is
+  0.7999 lb; stepping from it kept "0.8 lb" for a tap.

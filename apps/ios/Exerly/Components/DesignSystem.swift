@@ -400,6 +400,8 @@ struct ExQuantityControl: View {
     var identifier = ""
     var integer = false
     var focusOnAppear = false
+    /// Shown while the field is empty; − and + then start from it.
+    var placeholder = "0"
     @State private var focusRequest = 0
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -451,7 +453,7 @@ struct ExQuantityControl: View {
     private var quantityField: some View {
         // The − and + (under the number at the largest sizes) and the presets
         // stay in view above the keypad with the number.
-        ExNumericTextField(title: title, text: $text, placeholder: "0", integer: integer, centered: true, identifier: identifier,
+        ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, centered: true, identifier: identifier,
                            focusOnAppear: focusOnAppear, revealBelow: typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72,
                            focusRequest: focusRequest)
             .frame(minHeight: 52)
@@ -470,7 +472,7 @@ struct ExQuantityControl: View {
             formatter.locale = .current
             formatter.numberStyle = .decimal
             let entered = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let number = entered.isEmpty ? 0 : formatter.number(from: entered)?.doubleValue, number.isFinite else { return }
+            guard let number = formatter.number(from: entered.isEmpty ? placeholder : entered)?.doubleValue, number.isFinite else { return }
             text = max(0, number + amount).formatted(.number.grouping(.never).precision(.fractionLength(0...8)))
         } label: {
             Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 44, height: 44)

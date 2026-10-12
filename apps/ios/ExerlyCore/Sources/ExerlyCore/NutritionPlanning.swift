@@ -19,6 +19,24 @@ public enum NutritionRate {
         }
     }
 
+    /// The preset rates for a trend weight of `trend` kilograms: round amounts
+    /// a week in `unit` (0.5, 1, 1.5 and 2 lb to lose, 0.2 to 0.8 lb to gain;
+    /// 0.25 to 1 kg to lose, 0.1 to 0.4 kg to gain), those within the
+    /// direction's maximum, as shares of bodyweight. Without a trend weight,
+    /// or when none fits, the shares of `presets(for:)`.
+    public static func presets(for direction: NutritionGoal.Direction, trend: Double?, unit: MassUnit) -> [Double] {
+        guard let trend, trend > 0 else { return presets(for: direction) }
+        let amounts: [Double] = switch (direction, unit) {
+        case (.lose, .pounds): [0.5, 1, 1.5, 2]
+        case (.lose, .kilograms): [0.25, 0.5, 0.75, 1]
+        case (.gain, .pounds): [0.2, 0.4, 0.6, 0.8]
+        case (.gain, .kilograms): [0.1, 0.2, 0.3, 0.4]
+        case (.maintain, _): []
+        }
+        let shares = amounts.map { rounded(Mass($0, unit).kilograms / trend) }.filter { $0 <= maximum(for: direction) }
+        return shares.isEmpty ? presets(for: direction) : shares
+    }
+
     /// The rate a direction starts at: 0.5 % to lose, 0.25 % to gain.
     public static func standard(for direction: NutritionGoal.Direction) -> Double {
         switch direction {
@@ -26,6 +44,13 @@ public enum NutritionRate {
         case .gain: 0.0025
         case .maintain: 0
         }
+    }
+
+    /// The preset nearest `standard(for:)`, so a direction starts on a round
+    /// amount in `unit`.
+    public static func standard(for direction: NutritionGoal.Direction, trend: Double?, unit: MassUnit) -> Double {
+        let standard = standard(for: direction)
+        return presets(for: direction, trend: trend, unit: unit).min { abs($0 - standard) < abs($1 - standard) } ?? standard
     }
 
     /// The fastest rate a direction allows.
@@ -50,24 +75,29 @@ public enum NutritionRate {
 
     /// `share` moved by `steps` steps of the weekly amount in `unit`, landing
     /// on a whole step, and kept between one step and the direction's
-    /// maximum. Returned as a share of `trend`. Without a trend weight it
-    /// moves by `shareStep`.
+    /// maximum. It moves from the amount as the editor shows it (to 0.1 lb or
+    /// 0.01 kg), so each step changes what's shown. Returned as a share of
+    /// `trend`. Without a trend weight it moves by `shareStep` from the share
+    /// shown to 0.01 %.
     public static func nudged(_ share: Double, by steps: Int, direction: NutritionGoal.Direction, trend: Double?,
                               unit: MassUnit) -> Double {
         let maximum = maximum(for: direction)
         guard maximum > 0, steps != 0 else { return share }
-        // In steps, with a little tolerance so a rate already on a step stays there.
-        func moved(_ position: Double) -> Double {
-            let position = (position * 1000).rounded() / 1000
+        // In steps from the shown amount, with a little tolerance so one on a step stays there.
+        func moved(_ amount: Double, shown: Double, step: Double) -> Double {
+            let position = ((amount / shown).rounded() * shown / step * 1000).rounded() / 1000
             return max(1, steps > 0 ? position.rounded(.down) + Double(steps) : position.rounded(.up) + Double(steps))
         }
         guard let trend, trend > 0 else {
-            return min((moved(share / shareStep) * shareStep * 100_000).rounded() / 100_000, maximum)
+            return min((moved(share, shown: 0.0001, step: shareStep) * shareStep * 100_000).rounded() / 100_000, maximum)
         }
         let step = step(for: unit)
-        let next = min(Mass(moved(weekly(share, trend: trend, in: unit) / step) * step, unit).kilograms / trend, maximum)
-        return (next * 10_000_000).rounded() / 10_000_000
+        let amount = moved(weekly(share, trend: trend, in: unit), shown: unit == .pounds ? 0.1 : 0.01, step: step) * step
+        return rounded(min(Mass(amount, unit).kilograms / trend, maximum))
     }
+
+    /// A share to seven decimals, so the same amount always gives the same share.
+    static func rounded(_ share: Double) -> Double { (share * 10_000_000).rounded() / 10_000_000 }
 }
 
 // MARK: Weekday budgets
@@ -239,10 +269,15 @@ public struct NutritionPlanDraft: Sendable, Hashable {
 
     /// The version this draft makes from `date` on: computed from `basis`
     /// when coached or collaborative, the typed day when manual. Maintaining
-    /// keeps no rate or goal weight.
+    /// keeps no rate or goal weight. None for a goal weight that `basis`'s
+    /// trend has already reached, which would be saved as a goal it can't
+    /// move toward.
     public func preview(startingOn date: LocalDate, basis: PlanBasis?, id: UUID = UUID(), now: Date = Date()) -> Preview {
         var goal = goal
         if goal.direction == .maintain { goal = NutritionGoal(.maintain) }
+        if let trend = basis?.trendWeight, let problem = goal.reachedProblem(trend: trend) {
+            return Preview(plan: nil, problems: [problem])
+        }
         var plan = NutritionPlan(id: id, startDate: date, createdAt: now.roundedToMilliseconds, goal: goal, mode: mode, diet: diet,
                                  protein: protein, weekdayWeights: weekdayWeights, checkInDay: checkInDay,
                                  allowBelowFloor: allowBelowFloor, nutrientGoals: nutrientGoals,
@@ -293,15 +328,39 @@ extension NutritionGoal {
         return .on(eta, weeks: Int((Double(date.days(until: eta)) / 7).rounded(.up)))
     }
 
-    /// A goal weight to start from: 10 % under the trend to lose, 5 % over to
-    /// gain, the trend to maintain, to a whole `unit`.
-    public func suggestedGoalWeight(trend: Double, unit: MassUnit) -> Mass {
-        let factor: Double = switch direction {
-        case .lose: 0.9
-        case .gain: 1.05
-        case .maintain: 1
+    /// How close to the goal weight counts as at it, in kilograms (about 0.1 lb).
+    public static let atGoal = 0.05
+
+    /// Whether a trend weight of `trend` kilograms is already at or past the
+    /// goal weight in the goal's direction: at or under it to lose, at or over
+    /// it to gain. Targets then hold the trend rather than overshoot. False
+    /// without a goal weight or when maintaining.
+    public func isReached(trend: Double) -> Bool {
+        guard let goal = goalWeight?.kilograms, goal > 0, trend > 0 else { return false }
+        switch direction {
+        case .lose: return trend <= goal
+        case .gain: return trend >= goal
+        case .maintain: return false
         }
-        return Mass(Mass.kg(trend * factor).value(in: unit).rounded(), unit)
+    }
+
+    /// What the goal weight asks for once `isReached`: the other direction for
+    /// a goal weight on the far side of the trend, or maintaining within
+    /// `atGoal` of it. Nil while the goal's own direction leads there.
+    public func redirection(trend: Double) -> Direction? {
+        guard isReached(trend: trend), let goal = goalWeight?.kilograms else { return nil }
+        if abs(trend - goal) < Self.atGoal { return .maintain }
+        return goal > trend ? .gain : .lose
+    }
+
+    /// Why a new version can't aim for a goal weight the trend has reached.
+    func reachedProblem(trend: Double) -> String? {
+        switch redirection(trend: trend) {
+        case .gain: "Your trend weight is already under this goal weight, so losing can't reach it. Switch to Gain, or Maintain."
+        case .lose: "Your trend weight is already over this goal weight, so gaining can't reach it. Switch to Lose, or Maintain."
+        case .maintain: "Your trend weight is already at this goal weight. Choose Maintain, or a new goal weight."
+        case nil: nil
+        }
     }
 }
 

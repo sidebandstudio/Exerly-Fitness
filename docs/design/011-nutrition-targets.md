@@ -41,6 +41,9 @@ never rewrites history.
     and observational evidence, not an RCT).
   - No day goes under 1,200 kcal unless `allowBelowFloor` is set, apart from
     days given no budget at all (planned fasts).
+  - A goal weight the trend is already at or past, in the goal's direction,
+    takes no rate: the budget is expenditure. The editor won't save such a
+    goal; it offers the other direction or maintaining.
 - **Weekdays.** The weekly budget is shared out by relative weights, so the seven
   days sum to it exactly (S03). A weight of 0 is a fasting day.
 - **Protein.** 1.4, 1.8 or 2.2 g/kg a day (Morton et al., 2018, a meta-analysis

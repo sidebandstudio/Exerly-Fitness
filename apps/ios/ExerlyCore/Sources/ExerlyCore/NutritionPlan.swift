@@ -337,7 +337,9 @@ public enum NutritionTargets {
             if problems.isEmpty { problems.append("Targets need an expenditure and a trend weight") }
             throw NutritionStore.StoreError.invalid(problems)
         }
-        let daily = basis.expenditure + plan.goal.signedRate * basis.trendWeight * energyDensity / 7
+        // A goal weight already reached holds the trend: no deficit or surplus toward it.
+        let rate = plan.goal.isReached(trend: basis.trendWeight) ? 0 : plan.goal.signedRate
+        let daily = basis.expenditure + rate * basis.trendWeight * energyDensity / 7
         let energies = shares(of: (daily * 7).rounded(), by: plan.weekdayWeights)
         var reference = basis.trendWeight
         if plan.goal.direction == .lose, let goal = plan.goal.goalWeight?.kilograms { reference = min(reference, goal) }

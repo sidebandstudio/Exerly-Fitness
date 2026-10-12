@@ -32,9 +32,12 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         tap(app.buttons["planEditor.addGoalWeight"], in: app)
         let field = app.textFields["planEditor.goalWeight"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
+        // Empty, with the trend weight as its hint, rather than a figure nobody chose.
+        let editorETA = app.descendants(matching: .any)["planEditor.eta"]
+        XCTAssertTrue(editorETA.label.hasPrefix("Your trend weight is"), editorETA.label)
+        XCTAssertNotEqual(field.value as? String, "160")
         replace(field, with: "170", in: app)
         dismissKeyboard(app)
-        let editorETA = app.descendants(matching: .any)["planEditor.eta"]
         XCTAssertTrue(editorETA.label.hasPrefix("Around"), editorETA.label)
         tap(app.buttons["planEditor.save"], in: app)
         XCTAssertLessThanOrEqual(tapCount, 6, "Edit goal, Add a goal weight, the field, Done, Save")
@@ -59,6 +62,69 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         XCTAssertEqual(field.value as? String, "170")
         tap(app.buttons["planEditor.cancel"], in: app)
+    }
+
+    /// A goal weight the trend is already past isn't saved as a loss toward
+    /// it: Progress says the goal is reached (never "On track"), and the
+    /// editor holds Save until Gain or Maintain is chosen. Rate presets are
+    /// round pounds, and each step changes the amount shown.
+    func testAGoalWeightAlreadyPassedOffersGainOrMaintain() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "body-goal-passed", units: "imperial")
+        try await deleteSetupWeight(token: person.token)
+        try await seedHistory(token: person.token)
+        // A loss toward 190 lb, with the trend near 178 lb.
+        try await seedGoalPlans(token: person.token, goals: [(28, 190)])
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        settle(app)
+        tap(app.buttons["Progress"], in: app)
+        let edit = app.buttons["body.goal.edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 30), app.debugDescription)
+        let standing = app.descendants(matching: .any)["body.goal.standing"]
+        reveal(standing, in: app)
+        XCTAssertTrue(standing.label.hasPrefix("Goal reached"), standing.label)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'On track'")).firstMatch.exists)
+
+        reveal(edit, in: app)
+        tap(edit, in: app)
+        let save = app.buttons["planEditor.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        let eta = app.descendants(matching: .any)["planEditor.eta"]
+        reveal(eta, in: app)
+        XCTAssertTrue(eta.label.hasPrefix("190 lb is above your trend weight"), eta.label)
+        XCTAssertFalse(save.isEnabled, "A loss toward a weight above the trend isn't saved")
+        let preview = app.descendants(matching: .any)["planEditor.preview"]
+        XCTAssertTrue(preview.label.contains("losing can't reach it"), preview.label)
+        capture(app, "body-goal-passed")
+
+        let gain = app.buttons["planEditor.redirect"]
+        XCTAssertEqual(gain.label, "Gain to 190 lb")
+        tap(gain, in: app)
+        XCTAssertTrue(app.buttons["Gain"].isSelected)
+        XCTAssertTrue(save.isEnabled)
+        let rate = app.descendants(matching: .any)["planEditor.rate"]
+        reveal(rate, in: app)
+        XCTAssertEqual(app.buttons["planEditor.rate.0"].label, "0.2 pounds a week")
+        XCTAssertTrue(app.buttons["planEditor.rate.1"].isSelected, "0.4 lb, nearest 0.25 % of 178 lb")
+        var shown = rate.value as? String
+        for _ in 0..<3 {
+            tap(app.buttons["planEditor.rate.faster"], in: app)
+            XCTAssertNotEqual(rate.value as? String, shown, "Each step changes the amount")
+            shown = rate.value as? String
+        }
+        tap(app.buttons["planEditor.rate.1"], in: app)
+        tap(save, in: app)
+
+        let headline = app.descendants(matching: .any)["body.goal.headline"]
+        reveal(headline, in: app)
+        XCTAssertTrue(headline.waitForExistence(timeout: 10))
+        XCTAssertTrue(headline.label.hasPrefix("Gain 0.4 lb a week to 190"), headline.label)
+        let plans = try await waitForDocuments("nutrition_plan", token: person.token) { $0.count == 2 }
+        let new = try XCTUnwrap(plans.first { ($0["goal"] as? [String: Any])?["direction"] as? String == "gain" })
+        XCTAssertEqual(((new["goal"] as? [String: Any])?["goalWeight"] as? [String: Any])?["value"] as? Double, 190)
+        let energy = try XCTUnwrap((new["targets"] as? [[String: Any]])?.first?["energy"] as? Double)
+        XCTAssertGreaterThan(energy, try XCTUnwrap((new["basis"] as? [String: Any])?["expenditure"] as? Double), "A surplus toward 190 lb")
     }
 
     // MARK: Readings

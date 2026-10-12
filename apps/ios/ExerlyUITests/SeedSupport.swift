@@ -103,6 +103,33 @@ extension ExerlyUITestCase {
         }
     }
 
+    /// The account's live documents of a kind, from the change feed.
+    func documents(_ kind: String, token: String) async throws -> [[String: Any]] {
+        var latest: [String: [String: Any]?] = [:]
+        var cursor = 0
+        while true {
+            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
+            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == kind {
+                guard let id = change["id"] as? String else { continue }
+                latest[id] = change["payload"] as? [String: Any]
+            }
+            cursor = page["cursor"] as? Int ?? cursor
+            guard page["has_more"] as? Bool == true else { break }
+        }
+        return Array(latest.compactMapValues { $0 }.values)
+    }
+
+    func waitForDocuments(_ kind: String, token: String, timeout: Int = 40,
+                          _ matches: @escaping ([[String: Any]]) -> Bool) async throws -> [[String: Any]] {
+        for _ in 0..<timeout {
+            let found = try await documents(kind, token: token)
+            if matches(found) { return found }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTFail("The server's \(kind) documents never matched")
+        return []
+    }
+
     /// The account's live weigh-in documents by ID, from the change feed.
     func weighIns(token: String) async throws -> [String: [String: Any]] {
         var latest: [String: [String: Any]?] = [:]

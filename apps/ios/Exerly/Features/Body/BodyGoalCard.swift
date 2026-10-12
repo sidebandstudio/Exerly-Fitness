@@ -66,7 +66,9 @@ struct BodyGoalCard: View {
         let planned = stretch.planned(on: today)
         let standing = WeightGoal.standing(trend: summary.trend, trendError: summary.trendError, planned: planned,
                                            direction: stretch.goal.direction)
-        let (title, color) = Self.status(standing, direction: stretch.goal.direction, unit: unit)
+        // Past the goal weight, the path no longer matters: never "On track" beside "past your goal".
+        let reached = stretch.goal.isReached(trend: summary.trend)
+        let (title, color) = reached ? ("Goal reached", Color.exSuccess) : Self.status(standing, direction: stretch.goal.direction, unit: unit)
         let detail = stretch.anchor == today
             ? "Set today. Its path starts from your trend of \(BodyFormat.weight(stretch.startTrend, unit))."
             : "Planned \(BodyFormat.weight(planned, unit)) today, from \(BodyFormat.weight(stretch.startTrend, unit)) "
@@ -86,10 +88,12 @@ struct BodyGoalCard: View {
                 : "Planned \(BodyFormat.spokenWeight(planned, unit)) today, from \(BodyFormat.spokenWeight(stretch.startTrend, unit)) "
                     + "on \(BodyFormat.shortDate(stretch.anchor))"))
             .accessibilityIdentifier("body.goal.standing")
-            Text(standing.band > WeightGoal.tolerance
-                 ? "On track: within \(BodyFormat.weight(standing.band, unit)) of the planned path, the trend's ± for now."
-                 : "On track: within \(BodyFormat.weight(standing.band, unit)) of the planned path.")
-                .font(.exSmall).foregroundStyle(Color.exTextMuted).fixedSize(horizontal: false, vertical: true)
+            if !reached {
+                Text(standing.band > WeightGoal.tolerance
+                     ? "On track: within \(BodyFormat.weight(standing.band, unit)) of the planned path, the trend's ± for now."
+                     : "On track: within \(BodyFormat.weight(standing.band, unit)) of the planned path.")
+                    .font(.exSmall).foregroundStyle(Color.exTextMuted).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -120,7 +124,8 @@ struct BodyGoalCard: View {
             .accessibilityIdentifier("body.goal.eta")
             checkpoints(goal, weeks: weeks)
         case .reached:
-            Text("Your trend weight is at or past your goal weight.").font(.exBody).foregroundStyle(Color.exSuccess)
+            Text("Your trend weight is at or past your goal weight. Edit the goal to maintain it or aim for a new one.")
+                .font(.exBody).foregroundStyle(Color.exTextSecondary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("body.goal.eta")
         case .noGoalWeight, .maintaining:
             Text("Add a goal weight to see when you'd reach it and the trend to expect each week.")
