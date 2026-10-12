@@ -85,6 +85,16 @@ class ExerlyUITestCase: XCTestCase {
         replace(app.secureTextFields["Password"], with: "Simulator-Test-123!", in: app)
         dismissKeyboard(app)
         tap(app.buttons["Log In"], in: app)
+        // At the largest text on an iPhone 17 Pro the form scrolls as the
+        // keyboard leaves and the tap can miss. Go on the keyboard submits too.
+        let password = app.secureTextFields["Password"]
+        if !app.navigationBars["Today"].waitForExistence(timeout: 10), password.exists {
+            if !app.keyboards.firstMatch.exists {
+                reveal(password, in: app)
+                password.tap()
+            }
+            app.typeText("\n")
+        }
         XCTAssertTrue(app.navigationBars["Today"].waitForExistence(timeout: 20))
         settleAfterSignIn(app)
     }
@@ -296,7 +306,15 @@ class ExerlyUITestCase: XCTestCase {
         // XCTest can call a partly obscured SwiftUI field hittable while its
         // tap point falls in the keyboard toolbar. Reveal the whole field
         // before switching focus, as a person scrolling the editor would.
-        if field.exists, field.frame.maxY > keyboardTop(in: app) - 50 {
+        // iOS 26 puts typing predictions between that toolbar and the keys,
+        // so measure from the toolbar itself when there is one.
+        let keys = keyboardTop(in: app)
+        var covered = keys - 50
+        let toolbar = app.toolbars.firstMatch
+        if keys.isFinite, toolbar.exists, let bar = (try? toolbar.snapshot())?.frame, bar.maxY <= keys {
+            covered = min(covered, bar.minY)
+        }
+        if field.exists, field.frame.maxY > covered {
             dismissKeyboard(app)
         }
         tap(field, in: app)

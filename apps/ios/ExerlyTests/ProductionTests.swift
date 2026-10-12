@@ -1335,6 +1335,39 @@ final class ProductionTests: XCTestCase {
         XCTAssertNil(TrendResponseDTO.savedWeights([], from: "2026-08-01", to: "2026-08-07").summary)
     }
 
+    func testWaterComesOffDownToZeroAndTheLogWaterShortcutUsesTheSameQueue() async throws {
+        let token = "e30.eyJzdWIiOiJhIn0.fixture"
+        keychain.saveSession(token: token, refreshToken: "fixture-refresh")
+        StubURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self), configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false, observeClock: false)
+        let user = UserDTO(id: "a", email: "a@exerly.test", timezone: "UTC", unitSystem: "metric", waterGoalMl: 2000)
+        defaults.set(try JSONEncoder().encode(user), forKey: APIClient.accountCacheKey(token))
+        func log(_ amount: Double?, token: String? = token) async throws -> String {
+            try await LoggingActions.logWater(amount, sync: engine, container: container, token: token, defaults: defaults)
+        }
+        // With no screen open, the shortcut opens the signed-in account's queue.
+        XCTAssertFalse(engine.isConfigured(for: "a"))
+        let glass = try await log(nil)
+        XCTAssertEqual(glass, "Logged 250 ml of water. 250 ml today, 1,750 ml to go.")
+        XCTAssertTrue(engine.isConfigured(for: "a"))
+        let bottle = try await log(500)
+        XCTAssertEqual(bottle, "Logged 500 ml of water. 750 ml today, 1,250 ml to go.")
+        // Taking off more than the day has stops at zero and queues only what was there.
+        let day = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(try engine.addWater(XCTUnwrap(day.water), milliliters: -1000), -750)
+        let emptied = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(emptied.waterMl, 0)
+        XCTAssertThrowsError(try engine.addWater(XCTUnwrap(emptied.water), milliliters: -250), "Nothing left to take off")
+        let deltas = try ModelContext(container).fetch(FetchDescriptor<PendingMutation>())
+            .compactMap { try JSONSerialization.jsonObject(with: $0.payload) as? [String: Any] }.compactMap { $0["deltaMl"] as? Int }
+        XCTAssertEqual(deltas.sorted(), [-750, 250, 500])
+        do { _ = try await log(9000); XCTFail("Too much at once") } catch {
+            XCTAssertEqual(error as? LoggingIntentError, .invalid("Enter a whole number from 1 to 5,000 ml."))
+        }
+        do { _ = try await log(nil, token: nil); XCTFail("Signed out") } catch { XCTAssertEqual(error as? LoggingIntentError, .signedOut) }
+    }
+
     func testWaterAdditionsSurviveLostAcknowledgementRelaunchAndAnotherDevice() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let url = FileManager.default.temporaryDirectory.appending(path: "water-\(UUID().uuidString).store")
@@ -2131,6 +2164,33 @@ final class ProductionTests: XCTestCase {
         let otherEnvironment = PreferencesStore(accountID: "a", api: otherAPI, defaults: defaults, ownerIsActive: { true })
         XCTAssertNil(otherEnvironment.draft)
         XCTAssertNotEqual(otherEnvironment.storageKey, reopened.storageKey)
+    }
+
+    /// Done tapped while a reopened screen still refreshes used to close it
+    /// with the change unsent; the save now waits for the refresh.
+    func testAPreferenceSavedWhileTheScreenIsStillLoadingIsSent() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var patches = 0
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            patches += 1
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            remote = self.preferencesDocument(revision: 2, values: body.changes)
+            return (200, try JSONEncoder().encode(remote))
+        }
+        await PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true }).load()
+        // Reopened as a screen is: the saved draft shows while it refreshes.
+        let store = PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true })
+        let loading = Task { await store.load() }
+        for _ in 0..<50 where !store.isLoading { await Task.yield() }
+        XCTAssertTrue(store.isLoading)
+        store.edit("name", value: "Quick Taylor")
+        await store.save()
+        await loading.value
+        XCTAssertEqual(patches, 1, "Sent once the refresh finished, not dropped")
+        XCTAssertFalse(store.hasEdits)
+        XCTAssertEqual(store.draft?.base.revision, 2)
     }
 
     func testPreferencesLostAcknowledgementReplaysAfterReopeningAndDoesNotUndoLaterDeviceChanges() async throws {

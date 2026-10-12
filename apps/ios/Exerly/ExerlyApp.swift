@@ -45,6 +45,7 @@ struct ExerlyApp: App {
         #else
         container = try? ModelContainer(for: schema, migrationPlan: ExerlyMigrationPlan.self)
         #endif
+        SyncEngine.launchContainer = container
         HealthSync.shared.registerAtLaunch()
         // Live Activity buttons and the watch can launch the app in the background to run.
         WorkoutActivityActions.install()

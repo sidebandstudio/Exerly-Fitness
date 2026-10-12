@@ -33,6 +33,8 @@ function serializeUser(user) {
     timezone: user.timezone ?? 'UTC',
     unitSystem: user.unitSystem ?? 'imperial',
     preferencesRevision: user.preferences_revision ?? 0,
+    nutritionDisplay: profile.nutritionDisplay ?? 'remaining',
+    waterGoalMl: profile.waterGoalMl ?? null,
     aiCreditsRemaining: remainingCredits,
     dailyAiCreditsUsed: user.aiDailyCreditsUsed ?? 0,
     hourlyAiCreditsUsed:

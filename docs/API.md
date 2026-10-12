@@ -140,7 +140,7 @@ Logging one food does not mark a day complete. Status writes support operation r
 | DELETE | `/api/measurements/:id`                            | Requires a revision; marks the record deleted                             |
 | POST   | `/api/measurements/:id/restore`                    | Requires the deleted record's revision; explicitly restores it            |
 
-Types are `waist`, `chest`, `hips`, `arms`, `thighs`, `neck`, `calves` and `body_fat`. Circumference accepts `cm` or `in` and stores centimetres. Body fat accepts `%`. The original value/unit remain in `entered_value` and `entered_unit`. Supported sources are `manual` and `legacy_device_import`. Weight retains its separate contract above.
+Types are `bust`, `chest`, `hips`, `neck`, `shoulders` and `waist`; `left_` and `right_` `ankle`, `bicep`, `calf`, `forearm`, `thigh` and `wrist`; and `body_fat`, a visual estimate. The older sides-unknown `arms`, `thighs` and `calves` remain accepted so their history stays editable. Circumference accepts `cm` or `in` and stores centimetres. Body fat accepts `%`. The original value/unit remain in `entered_value` and `entered_unit`. Supported sources are `manual` and `legacy_device_import`. Weight retains its separate contract above.
 
 The account/client UUID pair is unique, including deleted records. Revisions start at 1; stale edits return 409 with `details.current`. Export includes active owned records under `measurements`. Legacy device data requires explicit ownership review before import.
 

@@ -1233,3 +1233,102 @@ stand. Instead the missing serving is added once, where it's missed.
 - A typed serving word picks the plain serving ("1 slice") first, then the
   regular size ("1 medium or regular slice"). "1 slice" of toasted rye had
   picked "1 slice, crust not eaten", 13.5 g.
+
+## 2026-10-11: Body depth: goal paths, gaps, what the trend rests on, every site, photos on the device
+
+Outcome 3's body rows (PARITY S06, S07, S09, S10), each on Progress → Body or Photos.
+
+- The goal stays in plan versions, edited in the plan editor that Targets
+  uses, so a change starts a new version and earlier weeks keep theirs.
+  `WeightGoal` adds the path each goal planned: it starts at the smoothed
+  trend on the day the goal (direction, rate, goal weight) was set, and
+  check-ins or nutrient-goal versions with the same goal continue it rather
+  than restarting it. The chart draws the goal weight and that path for
+  whichever goal was in force on each day. The rate stays a share of
+  bodyweight a week, as MacroFactor's does, so its amount eases as weight
+  falls; the editor already steps it in 0.1 lb or 0.05 kg, and
+  `NutritionRate.share(ofWeekly:)` converts an amount back.
+- On track means within 0.5 kg (about 1 lb) of the planned path, or within
+  the trend's ±1 SD when that's wider, so a noisy trend can't be called
+  ahead or behind. Maintaining has no ahead: any drift past the band is
+  shown as up or down.
+- Two or more days in a row without a reading draw the trend dashed and
+  fainter, including the days since the last weigh-in. Dots are only real
+  readings, as before.
+- "What it rests on" gives each of the last 28 days' readings its exact
+  effect on today's trend: the filter and smoother are linear in the
+  readings, so nudging one by 1 kg and re-running gives its weight. It costs
+  about 7 µs per day of history per reading in a release build and runs off
+  the main thread. Older readings act through expenditure and are summed
+  as the rest.
+- Measurements sync through the daily-log API, `/api/measurements`, not
+  ExerlyCore documents as the brief assumed. Its allowlist gains bust,
+  shoulders and both sides of ankle, bicep, calf, forearm, thigh and wrist;
+  `arms`, `thighs` and `calves` stay accepted so older history stays
+  editable. Moving measurements to documents would mean a second migration
+  for no gain the person sees. The one entry sheet saves its changed fields
+  in one SwiftData transaction.
+- Progress photos move from SwiftData to files, one folder per account in
+  Application Support with complete file protection, and leave the device
+  only through the share sheet. The `ProgressPhoto` model class is listed by
+  all three frozen schema versions, so adding a pose to it would stop
+  existing stores opening. Photos saved by earlier builds under the
+  account's email are adopted once as front photos (the viewer moves one to
+  another pose), each removed from SwiftData only after its copy is written.
+  Deleting the account removes the folder. A UI test launch supplies
+  synthetic images in place of the system photo picker, which XCTest can't
+  fill.
+
+## 2026-10-11: Today's diary depth: left or eaten, water, day status, By time, habits
+
+PARITY N06, N18, N19, N20 and N33.
+
+- Whether Today's ring and macros lead with what's left or what's eaten is
+  a preference, `nutritionDisplay` (remaining or consumed), in Your details
+  under Food log, saved through /api/preferences like the others and sent on
+  the user, so Today follows it as it follows units. An overage is always
+  signed: "+120 over" on the ring, the macros and Log food's confirmation.
+- Water stays in its existing model: a day's total in millilitres on the
+  API, queued offline by SyncEngine. The dashboard, agent tools and Daily
+  health already read it, and a second store would drift from it. Removing
+  is a negative change that stops at zero, as the API does, and Undo queues
+  the opposite change. A glass is 250 ml or 8 fl oz; a bottle 500 ml or
+  16.9 fl oz.
+- The water goal is a preference, `waterGoalMl`, copied to goals.water_ml
+  as the sleep goal is. Saving it through POST /api/goals would accept a
+  new targets version. The goal counts water logged as water. Water in
+  food, from the foods that report it, is shown apart and only added to the
+  total: few foods report water (MacroFactor's help rates complete water
+  tracking "very low"), so counting it would move the goal by which foods
+  were logged, and it is never counted twice.
+- "Log water" joins the Shortcuts. It opens SyncEngine's store for the
+  signed-in account when the app was launched in the background for it.
+  That makes ten App Shortcuts, iOS's limit.
+- A day marked complete with nothing logged is unknown, not a zero, in the
+  energy balance and its JavaScript port, as it already was in averages.
+  Only a fast is a known zero. A day marked partial with nothing logged
+  counts as partial, not as not logged. Check-ins say how many of their
+  fully logged days were fasts and how many partial days were left out.
+- By time groups a day's food by the clock hour it was eaten in the
+  account's time zone. The hour clocks repeat in autumn shows twice, with
+  its zone; food logged on another day or moved here is listed last.
+  Moving an entry's day keeps its time of day, now in ExerlyCore with DST
+  tests: a skipped time moves on by the gap, a repeated one is the first.
+- Today's date button opens a month calendar of habits instead of the
+  system date picker: complete, food logged, partial, fasted, not logged,
+  and weigh-ins, each with its own shape. A tap opens the day. No streaks.
+- Today's cards (quick actions, calories and macros, training, weight,
+  water, meals) can be hidden and reordered in Customize Today. The layout
+  is kept on the device for each account, not synced: it's a layout, it
+  applies at once offline, and it needs no API. The day's status, note and
+  Customize are in a menu beside the date button, and a status shows under
+  the date.
+
+## 2026-10-12: Today's diary tests run outside CI's tap-budget check
+
+CI's iOS job runs the unit tests and `TodayUITests`, the tap budgets, within 60
+minutes. The diary work added six slow tests to that class (water, leading with
+what's eaten, a fasted day in the calendar, By time, a customized Today, and its
+screenshots), which pushed the job past its limit. They now live in
+`TodayDiaryUITests`, which the full local suite runs before every landing, and
+`TodayUITests` holds the tap budgets again.

@@ -40,6 +40,10 @@ public enum NutritionCheckIn {
         /// Complete or fasting days, and days with a weigh-in, of those seven.
         public var completeDays: Int
         public var weighInDays: Int
+        /// Of those seven, the fasts among `completeDays`, and the days marked
+        /// partial, which are left out. Counted by `NutritionStore.checkIn`.
+        public var fastingDays = 0
+        public var partialDays = 0
         public var problems: [String] = []
         public var proposal: Proposal?
     }
@@ -141,8 +145,12 @@ extension NutritionStore {
         guard let plan = checkInPlan(on: today), let first = plans.first else { return nil }
         let start = min(weights.first?.date ?? first.startDate, first.startDate)
         let days = energyBalanceDays(from: start, through: today.adding(days: -1))
-        return try NutritionCheckIn.review(plan: plan, days: days,
-                                           prior: first.basis.map { ($0.expenditure, $0.expenditureError) },
-                                           today: today, existing: existing, now: Date(), unit: unit)
+        var review = try NutritionCheckIn.review(plan: plan, days: days,
+                                                 prior: first.basis.map { ($0.expenditure, $0.expenditureError) },
+                                                 today: today, existing: existing, now: Date(), unit: unit)
+        let week = (1...7).map { review.date.adding(days: -$0) }.filter { $0 >= start && $0 < today }
+        review.fastingDays = week.filter { day($0).status == .fasting }.count
+        review.partialDays = week.filter { day($0).status == .partial }.count
+        return review
     }
 }

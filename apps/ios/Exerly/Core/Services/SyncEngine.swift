@@ -51,6 +51,8 @@ enum JSONValue: Codable, Equatable {
 @MainActor
 final class SyncEngine: ObservableObject {
     static let shared = SyncEngine()
+    /// The app's store, for an intent that runs before any screen opens it.
+    static var launchContainer: ModelContainer?
     @Published private(set) var pendingCount = 0
     @Published private(set) var attentionCount = 0
     @Published private(set) var isSyncing = false
@@ -245,7 +247,7 @@ final class SyncEngine: ObservableObject {
     @discardableResult
     func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, commit: Bool = true) throws -> String {
         guard let accountID, let context else { throw APIError.unauthorized }
-        guard ["waist", "chest", "hips", "arms", "thighs", "neck", "calves", "body_fat"].contains(request.type),
+        guard BodySite(rawValue: request.type) != nil,
               request.value.isFinite, request.value > 0, request.value <= (request.type == "body_fat" ? 100 : 1000),
               request.unit == (request.type == "body_fat" ? "%" : "cm") else {
             throw APIError.serverError(400, "Enter a valid measurement.")
@@ -281,6 +283,18 @@ final class SyncEngine: ObservableObject {
             if automaticallySync { Task { await synchronize() } }
         }
         return entityID
+    }
+
+    /// Saves new measurements as one change: all of them or, on any error, none.
+    func saveMeasurements(_ requests: [BodyMeasurementRequest]) throws {
+        guard let context else { throw APIError.unauthorized }
+        do {
+            for request in requests { try saveMeasurement(request, commit: false) }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
     }
 
     func importLegacyMeasurements(_ reviewed: [LegacyMeasurementImport]) throws {
@@ -775,18 +789,23 @@ final class SyncEngine: ObservableObject {
     }
     func undoWeightDeletion(entityID: String) throws { try undoDeletion(kind: "weight", entityID: entityID) }
 
-    func addWater(_ current: WaterDayDTO, milliliters: Int) throws {
+    /// Adds water to a day, or takes it off when `milliliters` is negative,
+    /// down to zero as the server does. Returns the change queued, for undo.
+    @discardableResult
+    func addWater(_ current: WaterDayDTO, milliliters: Int) throws -> Int {
         guard let accountID, let context else { throw APIError.unauthorized }
-        guard (1...5000).contains(milliliters) else { throw APIError.serverError(400, "Enter 1 to 5,000 ml.") }
+        guard (1...5000).contains(abs(milliliters)) else { throw APIError.serverError(400, "Enter 1 to 5,000 ml.") }
         let day = current.entry_date
         let old = try ownedResources().first { $0.kind == "water" && $0.entityID == day }
         let snapshot = try old.map { try JSONDecoder().decode(WaterDayDTO.self, from: $0.payload) } ?? current
-        let body: [String: Any] = ["entry_date": day, "deltaMl": milliliters]
+        let change = WaterDay.change(milliliters, to: snapshot.ml)
+        guard change != 0 else { throw APIError.serverError(400, "There's no water to remove on this day.") }
+        let body: [String: Any] = ["entry_date": day, "deltaMl": change]
         let payload = try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
         let resource = old ?? SyncedResource(accountID: accountID, kind: "water", entityID: day, payload: payload)
         do {
             if old == nil { context.insert(resource); resource.revision = current.revision }
-            resource.payload = try JSONEncoder().encode(WaterDayDTO(entry_date: day, ml: snapshot.ml + milliliters, revision: resource.revision))
+            resource.payload = try JSONEncoder().encode(WaterDayDTO(entry_date: day, ml: snapshot.ml + change, revision: resource.revision))
             resource.syncState = "pending"
             resource.updatedAt = Date()
             context.insert(PendingMutation(accountID: accountID, entityID: day, kind: "water", method: "POST", endpoint: "/api/water", payload: payload, baseRevision: nil))
@@ -795,6 +814,7 @@ final class SyncEngine: ObservableObject {
         changeToken += 1
         refreshCounts()
         if automaticallySync { Task { await synchronize() } }
+        return change
     }
 
     func saveDiaryDay(_ current: DiaryDayDTO, status: DiaryLoggingStatus, note: String) throws {
@@ -988,7 +1008,7 @@ final class SyncEngine: ObservableObject {
                         // and subsequent feed read recover intervening device changes.
                         var projected = value
                         projected["ml"] = try remaining.reduce(value["ml"] as? Int ?? 0) { total, pending in
-                            total + (try object(pending.payload)["deltaMl"] as? Int ?? 0)
+                            max(0, total + (try object(pending.payload)["deltaMl"] as? Int ?? 0))
                         }
                         resource.payload = try JSONSerialization.data(withJSONObject: projected)
                     }

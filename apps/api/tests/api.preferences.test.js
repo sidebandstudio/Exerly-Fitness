@@ -260,3 +260,34 @@ test('legacy goal changes participate in preference conflict detection and retai
   assert.equal((await save(user, initial.revision, { sleepGoalHours: 8 })).status, 409);
   assert.deepEqual((await api.get('/api/program', options(user))).body, nutrition);
 });
+
+test("Today's display and the water goal are preferences, and the water goal is the account's goal", async () => {
+  const user = await complete();
+  const initial = await get(user);
+  assert.equal(initial.values.nutritionDisplay, null);
+  assert.equal(initial.user.nutritionDisplay, 'remaining');
+  assert.equal(initial.user.waterGoalMl, null);
+  const saved = await save(user, initial.revision, {
+    nutritionDisplay: 'consumed',
+    waterGoalMl: 2500,
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.values.nutritionDisplay, 'consumed');
+  assert.equal(saved.body.user.nutritionDisplay, 'consumed');
+  assert.equal(saved.body.user.waterGoalMl, 2500);
+  assert.equal((await api.get('/api/goals', options(user))).body.water_ml, 2500);
+  for (const changes of [
+    { nutritionDisplay: 'both' },
+    { waterGoalMl: 100 },
+    { waterGoalMl: 2500.5 },
+  ])
+    assert.equal((await save(user, saved.body.revision, changes)).status, 400);
+  const cleared = await save(user, saved.body.revision, {
+    nutritionDisplay: null,
+    waterGoalMl: null,
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.user.nutritionDisplay, 'remaining');
+  assert.equal(cleared.body.user.waterGoalMl, null);
+  assert.equal((await api.get('/api/goals', options(user))).body.water_ml, null);
+});
