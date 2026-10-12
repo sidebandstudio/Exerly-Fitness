@@ -32,8 +32,8 @@ struct TodayTimelineView: View {
                       note: "Logged on another day, or moved here")
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("today.byTime")
+        // No container of its own: with a single hour, one would take over
+        // that hour's label and identifier, and the hour would vanish as an element.
     }
 
     /// "8 AM"; with the zone ("1 AM EST") when clocks go back and the hour comes twice.
