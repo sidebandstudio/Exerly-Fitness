@@ -174,11 +174,9 @@ struct FoodQuickRow: View {
                     }
                 }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(amounts.map { "\(name), \(detail), \(FoodFormat.kcal($0[.energy])) kilocalories, \(FoodMacroLine.spoken($0))" }
                     ?? "\(name), \(detail)")
                 .accessibilityHint(openHint)
-                .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier(openIdentifier)
             add
         }.padding(.vertical, 6)

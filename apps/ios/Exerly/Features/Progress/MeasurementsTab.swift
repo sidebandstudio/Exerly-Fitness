@@ -83,13 +83,15 @@ struct MeasurementsTab: View {
 
     var body: some View {
         let records = MeasurementRecords(viewModel.measurements)
-        ScrollView {
+        ScrollViewReader { proxy in ScrollView {
             VStack(alignment: .leading, spacing: ExSpacing.page) {
                 if let actionError { Text(actionError).font(.exCaption).foregroundStyle(Color.exError) }
                 if let workspace {
                     BodyWeightSection(workspace: workspace, unit: unit, timeZone: timeZone, onWeighIn: { weighIn = .new },
                                       onEdit: { weighIn = .edit($0) }, onDelete: delete, onDeleted: deleted,
-                                      onEditGoal: { editGoal(workspace) }, measurements: { measurementsCard(records) })
+                                      onEditGoal: { editGoal(workspace) },
+                                      onShowWeighIns: { withAnimation(.snappy) { proxy.scrollTo(BodyWeightSectionID.weighIns, anchor: .top) } },
+                                      measurements: { measurementsCard(records) })
                 } else if let openingError {
                     ExCard { Text(openingError).font(.exBody).foregroundStyle(Color.exTextSecondary) }
                     measurementsCard(records)
@@ -116,7 +118,7 @@ struct MeasurementsTab: View {
         .refreshable {
             await viewModel.load(today: sync.today)
             await workspace?.synchronize()
-        }
+        } }
         .navigationDestination(for: BodySite.self) { site in
             MeasurementHistoryView(site: site, unit: lengthUnit, timeZone: timeZone, model: viewModel)
         }

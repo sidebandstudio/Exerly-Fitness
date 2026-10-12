@@ -365,7 +365,7 @@ struct TargetsDetailRow: View {
             .padding(.vertical, ExSpacing.small).frame(minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
+        // Labelled itself: a new element around the button made a second row for VoiceOver.
         .accessibilityLabel(title)
         .accessibilityValue([value, detail].compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint(hint)

@@ -139,11 +139,9 @@ struct BodyMeasurementsCard: View {
             .frame(minHeight: 52).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(site.name), \(latest.map { MeasurementFormat.spoken($0.value, site, unit) } ?? "")"
             + (change.map { ", \(MeasurementFormat.spokenChange($0, site, unit))" + (since.map { " since \($0)" } ?? "") } ?? ""))
         .accessibilityHint("Shows its history")
-        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("body.measurement.\(site.rawValue)")
     }
 }

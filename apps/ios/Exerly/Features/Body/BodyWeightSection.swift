@@ -5,6 +5,11 @@ import SwiftUI
 /// goal and its planned path, change and rate over a chosen span, what the
 /// trend rests on, expenditure with its uncertainty, and every weigh-in, each
 /// editable. `measurements` sits between the goal and expenditure.
+/// Places on Progress → Body its screen scrolls to.
+enum BodyWeightSectionID {
+    static let weighIns = "body.weighIns"
+}
+
 struct BodyWeightSection<Measurements: View>: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
@@ -15,6 +20,8 @@ struct BodyWeightSection<Measurements: View>: View {
     /// A weigh-in deleted from a sheet opened here.
     let onDeleted: (WeightEntry) -> Void
     let onEditGoal: () -> Void
+    /// Scrolls the screen to the weigh-ins (`BodyWeightSectionID.weighIns`).
+    let onShowWeighIns: () -> Void
     @ViewBuilder var measurements: Measurements
     @AppStorage("body.weightRange") private var range: BodyRange = .quarter
     @State private var selection: LocalDate?
@@ -77,6 +84,18 @@ struct BodyWeightSection<Measurements: View>: View {
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
             }
             rangeStats(estimates, points: points, readings: readings, start: start, today: today)
+            // Run 7 found past readings only by tapping the trend number.
+            Button(action: onShowWeighIns) {
+                HStack {
+                    Label("All \(workspace.nutrition.weights.count) weigh-ins", systemImage: "list.bullet")
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.caption.weight(.semibold)).accessibilityHidden(true)
+                }
+                .font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Shows every weigh-in, to edit or delete one")
+            .accessibilityIdentifier("body.allWeighIns")
         }
     }
 
@@ -114,12 +133,10 @@ struct BodyWeightSection<Measurements: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Trend weight \(BodyFormat.spokenWeight(trend, unit)), give or take "
             + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). "
             + readoutDetail(picked, summary: summary, goals: goals, today: today, spoken: true))
         .accessibilityHint("Double-tap to see the readings it rests on")
-        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("body.trend")
     }
 
@@ -331,7 +348,7 @@ struct BodyWeightSection<Measurements: View>: View {
     private func history(_ entries: [WeightEntry], today: LocalDate) -> some View {
         let shown = showsAll ? entries : Array(entries.prefix(10))
         return VStack(alignment: .leading, spacing: ExSpacing.item) {
-            ExSectionHeading("Weigh-ins", detail: "\(entries.count)")
+            ExSectionHeading("Weigh-ins", detail: "\(entries.count)").id(BodyWeightSectionID.weighIns)
             VStack(spacing: 0) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
                     if index > 0 { Rectangle().fill(Color.exBorder.opacity(0.5)).frame(height: 0.5).padding(.leading, ExSpacing.content) }

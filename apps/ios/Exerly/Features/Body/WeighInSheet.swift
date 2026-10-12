@@ -192,7 +192,10 @@ struct WeighInSheet: View {
                 .frame(maxWidth: .infinity).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Weight, \(shown) \(BodyFormat.unitName(unit))")
+            // While typing, what's typed so far, not a weight: "1" read as "1 pounds" in run 7.
+            .accessibilityLabel(typing == .weight
+                ? "Weight, typing \(typed.isEmpty ? "nothing yet" : typed), in \(BodyFormat.unitName(unit))"
+                : "Weight, \(shown) \(BodyFormat.unitName(unit))")
             .accessibilityHint(fromHealth ? "" : "Double-tap to type a weight")
             .accessibilityIdentifier("weighIn.value")
             if let context {

@@ -125,6 +125,18 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         XCTAssertEqual(((new["goal"] as? [String: Any])?["goalWeight"] as? [String: Any])?["value"] as? Double, 190)
         let energy = try XCTUnwrap((new["targets"] as? [[String: Any]])?.first?["energy"] as? Double)
         XCTAssertGreaterThan(energy, try XCTUnwrap((new["basis"] as? [String: Any])?["expenditure"] as? Double), "A surplus toward 190 lb")
+
+        // Run 7 found past weigh-ins only by tapping the trend number.
+        let all = app.buttons["body.allWeighIns"]
+        reveal(all, in: app)
+        // A tap while the page still glides only stops it.
+        waitUntilStill(all)
+        XCTAssertTrue(all.label.hasPrefix("All ") && all.label.hasSuffix(" weigh-ins"), all.label)
+        tap(all, in: app)
+        // The newest weigh-in heads the list it scrolls to ("Weigh-ins" also names a figure on the card).
+        let newest = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "body.weighIn.")).firstMatch
+        await fulfillment(of: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: newest)], timeout: 5)
+        XCTAssertFalse(all.isHittable, "Scrolled past the card")
     }
 
     // MARK: Readings
@@ -187,7 +199,9 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         XCTAssertTrue(undo.waitForExistence(timeout: 5), "Undo shows wherever the list was scrolled")
         XCTAssertFalse(history.exists)
         capture(app, "body-reading-deleted")
-        tap(undo, in: app)
+        // Pinned over the list for 10 s: tapped where it is, since scrolling toward it can outlast it.
+        XCTAssertTrue(undo.isHittable)
+        undo.tap()
         reveal(history, in: app)
         XCTAssertTrue(history.waitForExistence(timeout: 10))
         XCTAssertTrue(history.label.contains("179.8 pounds"), history.label)

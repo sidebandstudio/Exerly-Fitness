@@ -128,10 +128,8 @@ struct TrendExplanationSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(entries.isEmpty)
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(day), \(readings) \(BodyFormat.unitName(unit)), \(Self.percent(item.effect)) of the trend")
         .accessibilityHint("Double-tap to edit")
-        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("trendExplanation.reading.\(item.date)")
     }
 
