@@ -434,10 +434,10 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         tapCount = 0
         tap(app.buttons["nutrition.scanBarcodeDirect"], in: app)
         scanSyntheticBarcode("0012345678905", in: app)
-        let log = app.buttons["nutrition.saveEntry"]
-        XCTAssertTrue(log.waitForExistence(timeout: 10), "A matched barcode opens its portion directly")
-        XCTAssertTrue(app.staticTexts["Synthetic oat bar"].exists)
-        XCTAssertEqual(app.textFields["Number of servings"].value as? String, "1", "The default is one of the label's servings")
+        let log = app.buttons["nutrition.scanLogAll"]
+        XCTAssertTrue(log.waitForExistence(timeout: 10), "A matched barcode lands on the plate at once")
+        let row = app.buttons["nutrition.scanRow.off:0012345678905"]
+        XCTAssertTrue(row.label.contains("Synthetic oat bar") && row.label.contains("1 bar (40 g)"), "One of the label's servings: \(row.label)")
         if capturing { capture(app, "food-barcode-portion") }
         tap(log, in: app)
         XCTAssertEqual(tapCount, 3, "Scan button, scan, Log")
@@ -449,7 +449,7 @@ final class FoodLoggingUITests: ExerlyUITestCase {
         openSearch(app)
         tap(app.buttons["nutrition.barcode"], in: app)
         scanSyntheticBarcode("0012345678905", in: app)
-        tap(app.buttons["nutrition.saveEntry"], in: app)
+        tap(app.buttons["nutrition.scanLogAll"], in: app)
         XCTAssertEqual(tapCount, 4)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
         XCTAssertEqual(bar.count, 2)

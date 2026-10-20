@@ -1564,3 +1564,54 @@ live app and confirm the server records the real address. The per-account
 confirmation budget, the per-email sign-in backoff and the per-email signup
 and reset limits don't depend on the address, so they work the same either
 way.
+
+## 2026-10-20: Barcode scanning reads camera frames with Vision, not DataScanner
+
+Scan barcode now runs its own `AVCaptureSession` with a video data output and
+reads each frame with Vision's `VNDetectBarcodesRequest` (`BarcodeDecoder` in
+ExerlyCore). The alternatives:
+
+- **VisionKit's `DataScannerViewController`** uses Vision underneath and is the least
+  code, but it owns the camera: no torch, no exposure reading for a low-light prompt,
+  no zoom from the lens's closest focus, and no way to feed it an image, so neither the
+  simulator nor a benchmark could exercise it.
+- **`AVCaptureMetadataOutput`**, the old scanner, decodes in hardware but can't be run on
+  an image either, and it accepted the first read of a code, so a misread digit that
+  passed its check digit could log the wrong food.
+- **Vision on frames** gives one decoder for the camera, the simulator's stand-in feed and
+  the benchmark; every retail symbology Vision reads, DataBar Limited and Expanded, Micro
+  QR and DataMatrix included; and full control of torch, zoom, focus and exposure. Its
+  cost is running Vision on each frame, with one frame in flight and late frames dropped.
+
+The rest of the slice:
+
+- A code is accepted after a valid check digit and two agreeing reads within 1.2 s. It is
+  held while in view; shown again after a second away, it counts again, as a second pack.
+- EAN-8 and UPC-E reads need 2.5 pixels a module. The benchmark caught Vision reading a
+  small GS1 DataBar as an EAN-8 whose check digit passed, in two frames running, so two
+  agreeing reads weren't enough. Closer than that they read at 100%; the scanner asks
+  to hold the phone closer.
+- Every form of a code is keyed by its GTIN-14. The phone normalizes and sends the
+  GTIN-14; the server's `normalizeBarcode` already gives the same key, now checked by
+  shared vectors. Prefixes 020–029 and 200–299 (in-store weighed or priced labels),
+  040–049 (a store's own numbers), coupons and 977–979 publications are explained, not
+  looked up. EAN-8s starting 0 or 2 are restricted numbers too but are looked up,
+  because retailers' own-brand EAN-8s are stable and appear in Open Food Facts.
+- Resolved codes are cached per account in the account's SQLite settings table: local,
+  not synced, deleted with the account's database. It keeps 500 products and 60 scans,
+  never dropping one waiting to resolve, and refreshes a product older than 30 days in
+  the background. A scan offline with no cached product waits and resolves after the next
+  sync or when the scanner opens; it logs to the meal, day and time it was scanned for.
+- Several scans build one plate (`NutritionPlateDraft`) that logs in one tap. A found food
+  no longer opens its portion sheet: it lands on the plate at its usual amount with −
+  and + for one serving, so one item still logs in three taps from Today.
+- A food entered for a missed code is remembered for that code on this device. Sending it
+  to Open Food Facts is the next wave's.
+- The iOS simulator can't run Vision's barcode revisions 2 to 4 ("Could not create
+  inference context"), so the decoder falls back to revision 1 there and UI tests still
+  go through Vision. The benchmark runs under `swift test` on the Mac at the revision a
+  phone uses, and skips itself where only revision 1 is available, as it may on CI's VMs.
+- Synthetic codes for the benchmark come from encoders in ExerlyCore, whose DataBar widths
+  match bwip-js. DataBar Limited, DataBar Expanded, GS1 DataMatrix and Micro QR, which
+  have large published tables, were rendered once by bwip-js (MIT) for synthetic GTINs
+  under GS1's demonstration prefix 950, and are committed as test fixtures.

@@ -2,28 +2,36 @@ import AVFoundation
 import ExerlyCore
 import SwiftUI
 
+/// Scan barcode: point the camera at one pack after another and each lands
+/// on a plate that logs in one tap. A code read before resolves on this
+/// device, offline too; one never seen while offline is saved for later.
+/// See docs/BARCODE.md.
 struct NutritionBarcodeView: View {
     let workspace: TrainingWorkspace
     let date: LocalDate
-    let meal: String
     let timeZone: TimeZone
-    let unit: MassUnit
     @ObservedObject var actions: NutritionDiaryActions
-    let onLogged: (FoodEntry) -> Void
+    let onLogged: ([FoodEntry]) -> Void
+    /// Building a meal or recipe: a found food goes back to it at once.
     let onPicked: ((ExerlyCore.Food) -> Void)?
-    @StateObject private var search: NutritionSearchModel
-    @StateObject private var camera = CameraCaptureController()
+    @StateObject private var session: BarcodeScanSession
+    @StateObject private var camera = BarcodeCamera()
+    #if DEBUG
+    @StateObject private var feed = BarcodeTestFeed()
+    #endif
     @State private var code = ""
-    @State private var symbology: AccountAPI.BarcodeSymbology?
+    @State private var codeError: String?
     @State private var cameraAllowed = false
     @State private var enteringDigits = false
-    @State private var cameraMessage: String?
-    @State private var selectedFood: ExerlyCore.Food?
-    @State private var createdFood: ExerlyCore.Food?
+    @State private var editing: NutritionPlateDraft.Row?
+    @State private var creatingFor: GTIN?
     @State private var creating = false
+    @State private var createdFood: ExerlyCore.Food?
     @State private var scanningLabel = false
-    @State private var logged: FoodEntry?
-    @State private var lookupTask: Task<Void, Never>?
+    @State private var showingHistory = false
+    @State private var discarding = false
+    /// Under UI tests: how long each step took inside the app.
+    @State private var timings = ""
     @FocusState private var typing: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -31,246 +39,339 @@ struct NutritionBarcodeView: View {
 
     init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions,
-         onPicked: ((ExerlyCore.Food) -> Void)? = nil, onLogged: @escaping (FoodEntry) -> Void) {
+         onPicked: ((ExerlyCore.Food) -> Void)? = nil, onLogged: @escaping ([FoodEntry]) -> Void) {
         self.workspace = workspace
         self.date = date
-        self.meal = meal
         self.timeZone = timeZone
-        self.unit = unit
         self.actions = actions
         self.onLogged = onLogged
         self.onPicked = onPicked
-        _search = StateObject(wrappedValue: NutritionSearchModel(api: api))
+        _session = StateObject(wrappedValue: BarcodeScanSession(workspace: workspace, api: api, date: date, meal: meal,
+                                                                unit: unit, timeZone: timeZone))
     }
 
     var body: some View {
         ExScreen {
-            cameraSection
-            VStack(alignment: .leading, spacing: 0) {
-                // Without a camera the digits are the only way in, so they stay open.
-                if cameraAllowed {
-                Button { withAnimation(.snappy) { enteringDigits.toggle() } } label: {
-                    HStack {
-                        Label("Enter barcode digits", systemImage: "keyboard")
-                        Spacer()
-                        Image(systemName: "chevron.down").rotationEffect(.degrees(enteringDigits ? 180 : 0))
-                            .accessibilityHidden(true)
-                    }.frame(minHeight: 44).contentShape(Rectangle())
-                }.font(.exLabel).buttonStyle(.plain).foregroundStyle(Color.exPrimaryText)
-                    .accessibilityIdentifier("nutrition.enterBarcodeDigits")
-                    .accessibilityValue(enteringDigits ? "Expanded" : "Collapsed")
-                }
-                if enteringDigits || !cameraAllowed { barcodeInput }
+            BarcodeViewfinder(camera: camera, feedImage: feedImage, feedPrimed: feedPrimed, usesCamera: usesCamera, usesFeed: usesFeed,
+                              cameraDenied: cameraDenied, status: status, statusIcon: statusIcon)
+            if let notice = session.notice { noticeCard(notice) }
+            if picking == false, !session.plate.rows.isEmpty {
+                BarcodeTray(session: session, edit: { editing = $0 })
             }
-            lookupResult
-            if search.request != nil && cameraAllowed {
-                Button("Scan again", systemImage: "barcode.viewfinder") {
-                    lookupTask?.cancel(); search.clear(); cameraMessage = nil
-                    enteringDigits = false; camera.resumeScanning()
-                }.buttonStyle(ExActionStyle(secondary: true))
+            digitsSection
+            if !session.library.history.isEmpty {
+                BarcodeRecentScans(session: session, limit: 4, picking: picking, log: relog) { showingHistory = true }
             }
-            if !barcodeMissing {
+            if session.plate.rows.isEmpty {
                 HStack(spacing: ExSpacing.small) {
-                    searchAction
-                    Button { camera.stop(); scanningLabel = true } label: { Label("Label", systemImage: "text.viewfinder") }
+                    Button { dismiss() } label: { Label("Search", systemImage: "magnifyingglass") }
+                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityLabel("Search by name")
+                        .accessibilityIdentifier("nutrition.barcodeSearch")
+                    Button { scanningLabel = true } label: { Label("Label", systemImage: "text.viewfinder") }
                         .buttonStyle(ExActionStyle(secondary: true)).accessibilityLabel("Scan nutrition label")
                         .accessibilityIdentifier("nutrition.scanLabel")
                 }
             }
         }
+        .exFooter { logFooter }
+        .overlay(alignment: .topLeading) {
+            if !timings.isEmpty {
+                Text(timings).font(.system(size: 1)).opacity(0.01).accessibilityIdentifier("nutrition.scanTimings")
+            }
+        }
+        .environment(\.timeZone, timeZone)
         .navigationTitle("Scan barcode").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { typing = false } } }
+        .navigationBarBackButtonHidden(!session.plate.rows.isEmpty)
+        .toolbar {
+            if !session.plate.rows.isEmpty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { discarding = true }.accessibilityIdentifier("nutrition.scanCancel")
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Scan history", systemImage: "clock.arrow.circlepath") { showingHistory = true }
+                    .accessibilityIdentifier("nutrition.scanHistory")
+            }
+            ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { typing = false } }
+        }
+        .sensoryFeedback(.success, trigger: session.successes)
+        .sensoryFeedback(.warning, trigger: session.warnings)
         .task { await checkCameraPermission() }
-        .onChange(of: camera.detected) { _, detected in
-            guard let detected else { return }
-            code = detected.value
-            symbology = AccountAPI.BarcodeSymbology(rawValue: detected.symbology)
-            lookup(format: symbology, openMatch: true)
-        }
+        .task { await session.resolveWaiting() }
+        .onReceive(camera.accepted) { code in Task { await accept(code) } }
+        #if DEBUG
+        .onReceive(feed.accepted) { code in Task { await accept(code) } }
+        #endif
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await checkCameraPermission() } } else { camera.stop() }
+            if phase == .active { Task { await checkCameraPermission() } } else { stopSources() }
         }
-        .onDisappear { camera.stop(); lookupTask?.cancel(); search.clear() }
-        .sheet(isPresented: $creating, onDismiss: {
-            if let createdFood { choose(createdFood); self.createdFood = nil }
-        }, content: {
-            NutritionFoodEditor(workspace: workspace) { createdFood = $0 }
-        })
-        .sheet(isPresented: $scanningLabel, onDismiss: {
-            if let createdFood { choose(createdFood); self.createdFood = nil }
-        }, content: {
+        // Nothing joins the plate while a sheet is up.
+        .onChange(of: presenting) { _, presenting in if presenting { stopSources() } else { startSources() } }
+        .onDisappear { stopSources() }
+        .navigationDestination(isPresented: $showingHistory) {
+            BarcodeHistoryView(session: session, picking: picking, log: relog)
+        }
+        .sheet(item: $editing) { row in
+            FoodPortionStep(store: workspace.nutrition, food: row.food,
+                            editing: row.entry(on: session.plate.date, meal: session.plate.meal, at: session.plate.loggedAt),
+                            unit: session.unit, title: "Portion", confirm: "Apply", identifier: "nutrition.scanPortion",
+                            removeTitle: "Remove from plate", onRemove: { session.plate.remove(row) },
+                            onConfirm: { amount, _ in session.plate.stage(row.food, amount: amount, replacing: row) })
+        }
+        .sheet(isPresented: $creating, onDismiss: addCreatedFood) {
+            NutritionFoodEditor(workspace: workspace, start: creatingFor.map { ExerlyCore.Food(name: "", per100g: NutrientAmounts(), barcode: $0.key) }) {
+                createdFood = $0
+            }
+        }
+        .sheet(isPresented: $scanningLabel, onDismiss: addCreatedFood) {
             NutritionLabelCaptureView(workspace: workspace) { createdFood = $0 }
-        })
-        .sheet(item: $selectedFood, onDismiss: {
-            if let logged { self.logged = nil; onLogged(logged) }
-        }, content: { food in
-            NutritionEntryEditor(workspace: workspace, food: food, date: date, meal: meal,
-                                 timeZone: timeZone, unit: unit, actions: actions) { logged = $0 }
-        })
-    }
-
-    @ViewBuilder private var cameraSection: some View {
-        if cameraAllowed && camera.error == nil {
-            VStack(alignment: .leading, spacing: ExSpacing.small) {
-                CameraPreview(controller: camera).frame(height: 300)
-                    .overlay { ScanFrame().padding(.horizontal, 36).padding(.vertical, 70).allowsHitTesting(false).accessibilityHidden(true) }
-                    .clipShape(RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        Button(camera.torchOn ? "Turn flashlight off" : "Turn flashlight on",
-                               systemImage: camera.torchOn ? "flashlight.on.fill" : "flashlight.off.fill") { camera.toggleTorch() }
-                            .labelStyle(.iconOnly).font(.body.weight(.semibold)).foregroundStyle(.white)
-                            .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: Circle()).padding(ExSpacing.item)
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel("Camera barcode viewfinder")
-                Text("Point at the barcode. The food opens as soon as it's read.")
-                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-            }
-        } else {
-            HStack(alignment: .top, spacing: ExSpacing.item) {
-                if !typeSize.isAccessibilitySize {
-                    Image(systemName: cameraDenied ? "camera.badge.ellipsis" : "barcode.viewfinder")
-                        .font(.system(size: 22, weight: .semibold)).foregroundStyle(Color.exPrimaryText)
-                        .frame(width: 48, height: 48).background(Color.exPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: ExRadius.control))
-                        .accessibilityHidden(true)
-                }
-                VStack(alignment: .leading, spacing: ExSpacing.tight) {
-                    Text(cameraDenied ? "Allow the camera to scan" : "No camera here").font(.exH3).foregroundStyle(Color.exTextPrimary)
-                    Text(cameraDenied
-                         ? "Turn on camera access to scan packages. You can also type the digits under the barcode."
-                         : "Type the digits printed under the barcode instead.")
-                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
-                    if cameraDenied {
-                        Button("Open camera settings") {
-                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                        }.font(.exLabel).frame(minHeight: 44)
-                    }
-                    if let error = camera.error { Text(error).font(.exCaption).foregroundStyle(Color.exTextSecondary) }
-                }
-            }
+        }
+        .sheet(isPresented: $discarding) {
+            NutritionConfirmation(title: "Discard these scans?", message: "Nothing has been logged. Your scan history keeps every code.",
+                                  confirm: "Discard", cancelLabel: "Keep scanning", destructive: true) { dismiss() }
+                cancel: { discarding = false }
         }
     }
 
-    @ViewBuilder private var lookupResult: some View {
-        if search.isLoading {
-            ProgressView("Finding your food…").frame(maxWidth: .infinity, minHeight: 60)
-                .accessibilityIdentifier("nutrition.barcodeLoading")
-        } else if let error = search.error {
-            ExCard {
-                Text("Couldn't look up this barcode").font(.exH3)
-                Text(error).font(.exBody).foregroundStyle(Color.exError)
-                Button("Try barcode again") { lookup(openMatch: true) }.frame(minHeight: 44)
-            }
-        } else if let result = search.result, !result.foods.isEmpty {
-            ExCard {
-                ExSectionHeading("Found your food")
-                ForEach(result.foods) { food in
-                    Button { choose(food) } label: {
-                        VStack(alignment: .leading, spacing: ExSpacing.item) {
-                            NutritionFoodRow(food: food)
-                            Label(onPicked == nil ? "Review portion" : "Add to meal", systemImage: "arrow.right")
-                                .font(.exBodyMedium).foregroundStyle(Color.exPrimaryText)
-                        }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                        .accessibilityIdentifier("nutrition.barcodeFood")
-                }
-                Text(result.attribution).font(.exCaption).foregroundStyle(Color.exTextSecondary)
-            }
-        } else if barcodeMissing {
-            ExCard(accent: true) {
-                Label("Not in the database yet", systemImage: "barcode").font(.exH3).foregroundStyle(Color.exTextPrimary)
-                Text("Photograph its Nutrition Facts label and we'll read the numbers for you, or type them in.")
-                    .font(.exBody).foregroundStyle(Color.exTextSecondary)
-                    .accessibilityIdentifier("nutrition.barcodeNotFound")
-                Button("Scan nutrition label", systemImage: "text.viewfinder") { camera.stop(); scanningLabel = true }
-                    .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.scanLabel")
-                HStack(spacing: ExSpacing.small) {
-                    Button("Type it in", systemImage: "square.and.pencil") { camera.stop(); creating = true }
-                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeManualFood")
-                    Button { dismiss() } label: { Label("Search", systemImage: "magnifyingglass") }
-                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeSearch")
-                }
-            }
-        }
-    }
+    // MARK: Viewfinder
 
-    private var searchAction: some View {
-        Button { dismiss() } label: { Label("Search", systemImage: "magnifyingglass") }
-            .buttonStyle(ExActionStyle(secondary: true)).accessibilityLabel("Search by name")
-            .accessibilityIdentifier("nutrition.barcodeSearch")
-    }
+    private var picking: Bool { onPicked != nil }
+    private var presenting: Bool { editing != nil || creating || scanningLabel || discarding }
 
-    private var barcodeInput: some View {
-        VStack(alignment: .leading, spacing: ExSpacing.item) {
-            TextField("Barcode digits", text: $code).keyboardType(.numberPad).focused($typing).font(.exStatSmall)
-                .padding(ExSpacing.item).background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))
-                .accessibilityIdentifier("nutrition.barcodeDigits")
-                .onChange(of: code) { _, _ in if typing { symbology = nil } }
-            if code.filter(\.isNumber).count == 8 {
-                ExChoiceChips(values: [AccountAPI.BarcodeSymbology?.none, .ean8, .upcE], selection: $symbology) {
-                    $0 == .ean8 ? "EAN-8" : $0 == .upcE ? "UPC-E" : "Choose format"
-                }
-                Text("Eight-digit barcodes need their format. Scan with the camera if you're unsure.")
-                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-            }
-            Button("Look up barcode") { lookup(openMatch: true) }.buttonStyle(ExActionStyle())
-                .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || search.isLoading)
-                .accessibilityIdentifier("nutrition.lookupBarcode")
-            if let cameraMessage { Text(cameraMessage).font(.exCaption).foregroundStyle(Color.exTextSecondary) }
-        }.padding(.top, ExSpacing.item)
-    }
+    #if DEBUG
+    private var feedImage: CGImage? { feed.image }
+    private var feedPrimed: Bool { feed.primed }
+    private var usesFeed: Bool { feed.isActive }
+    #else
+    private var feedImage: CGImage? { nil }
+    private var feedPrimed: Bool { false }
+    private var usesFeed: Bool { false }
+    #endif
 
+    private var usesCamera: Bool { !usesFeed && cameraAllowed && camera.error == nil }
     private var cameraDenied: Bool { AVCaptureDevice.authorizationStatus(for: .video) == .denied }
-    private var barcodeMissing: Bool { search.request != nil && !search.isLoading && search.error == nil && (search.result?.foods.isEmpty ?? true) }
+    private var hasViewfinder: Bool { usesFeed || usesCamera }
 
-    private func choose(_ food: ExerlyCore.Food) {
-        if let onPicked { onPicked(food); dismiss() } else { selectedFood = food }
+    private var status: String {
+        switch session.notice {
+        case .added(let name)?: "Added \(name)"
+        case .again(let name)?: "One more \(name)"
+        case .looking?: "Looking it up…"
+        case .queued?: "Code read · offline"
+        case .missing?: "Code read · no match"
+        case .notProduct?: "Code read · not a product"
+        case .ready?, nil:
+            camera.holdCloser ? "Hold it closer to read this small code"
+                : session.plate.rows.isEmpty ? "Point at a barcode" : "Scan the next one, or log your plate"
+        }
     }
 
-    private func lookup(format: AccountAPI.BarcodeSymbology? = nil, openMatch: Bool = false) {
-        typing = false
-        camera.stop()
-        cameraMessage = nil
-        lookupTask?.cancel()
-        let digits = code
-        let format = format ?? symbology
-        lookupTask = Task {
-            await search.lookup(digits, symbology: format)
-            guard !Task.isCancelled, openMatch, let foods = search.result?.foods, foods.count == 1 else { return }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            choose(foods[0])
+    private var statusIcon: String {
+        switch session.notice {
+        case .added?, .again?: "checkmark.circle.fill"
+        case .looking?: "magnifyingglass"
+        case .queued?: "wifi.slash"
+        case .missing?, .notProduct?: "exclamationmark.circle.fill"
+        case .ready?, nil: "barcode.viewfinder"
         }
+    }
+
+    private func stopSources() {
+        camera.stop()
+        #if DEBUG
+        feed.stop()
+        #endif
+    }
+
+    private func startSources() {
+        #if DEBUG
+        if feed.isActive { feed.start(); return }
+        #endif
+        if cameraAllowed, scenePhase == .active { camera.start() }
     }
 
     private func checkCameraPermission() async {
+        if usesFeed { startSources(); return }
         guard AVCaptureDevice.default(for: .video) != nil else {
             // Without a camera, the digits are the only way in: show them ready.
             cameraAllowed = false
-            if search.request == nil { enteringDigits = true }
+            enteringDigits = true
             return
         }
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         let allowed = status == .authorized ? true : status == .notDetermined ? await AVCaptureDevice.requestAccess(for: .video) : false
         guard !Task.isCancelled else { return }
         cameraAllowed = allowed
-        if allowed && scenePhase == .active && search.request == nil && selectedFood == nil && !creating && !scanningLabel { camera.start() }
+        if !allowed { enteringDigits = true }
+        startSources()
+    }
+
+    // MARK: Scans
+
+    private func accept(_ code: ScannedCode) async {
+        let accepted = Date()
+        guard let food = await session.food(for: code.gtin) else { return }
+        use(food)
+        #if DEBUG
+        if let received = feed.receivedAt {
+            func ms(_ end: Date, _ start: Date) -> Int { Int(end.timeIntervalSince(start) * 1000) }
+            timings = "ready \(feed.primedAt.map { ms($0, feed.started) } ?? -1) · read \(ms(accepted, received))"
+                + " · on plate \(ms(Date(), accepted))"
+        }
+        #endif
+    }
+
+    /// A found food joins the plate, or goes back to the meal or recipe being built.
+    private func use(_ food: ExerlyCore.Food) {
+        if let onPicked {
+            onPicked(food)
+            dismiss()
+        } else {
+            session.add(food)
+        }
+    }
+
+    private func relog(_ scan: BarcodeLibrary.Scan) {
+        if let onPicked, let product = session.library.product(scan.gtin) {
+            onPicked(product.food)
+            dismiss()
+        } else if let entry = session.relog(scan) {
+            Task { await workspace.synchronize() }
+            onLogged([entry])
+        }
+    }
+
+    private func addCreatedFood() {
+        guard let food = createdFood else { return }
+        createdFood = nil
+        if let gtin = creatingFor {
+            session.library.remember(food, for: gtin, attribution: "Your food", meal: session.plate.meal, date: session.plate.date)
+            creatingFor = nil
+        }
+        session.dismissNotice()
+        use(food)
+    }
+
+    // MARK: Notices
+
+    @ViewBuilder private func noticeCard(_ notice: BarcodeScanSession.Notice) -> some View {
+        switch notice {
+        case .missing(let gtin):
+            BarcodeNoticeCard(icon: "barcode", title: "Not in the food database yet", gtin: gtin,
+                              message: "Search for it by name, or enter it from its label once. After that, this code finds it.",
+                              identifier: "nutrition.barcodeNotFound") { missActions(gtin) }
+        case .notProduct(let gtin, let kind):
+            BarcodeNoticeCard(icon: "tag", title: BarcodeNoticeCopy.title(kind), gtin: gtin, message: BarcodeNoticeCopy.detail(kind),
+                              identifier: "nutrition.barcodeNotProduct") { missActions(nil) }
+        case .queued(let gtin):
+            BarcodeNoticeCard(icon: "wifi.slash", title: "Saved for when you're online", gtin: gtin,
+                              message: "You're offline and this code is new to this phone. It's in Recent scans and will be looked up as soon as you're back, ready to log to \(session.plate.meal).",
+                              identifier: "nutrition.barcodeQueued") {
+                Button("Keep scanning", systemImage: "barcode.viewfinder") { session.dismissNotice() }
+                    .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeKeepScanning")
+            }
+        case .ready(let count):
+            BarcodeNoticeCard(icon: "checkmark.icloud", title: "\(count) offline \(count == 1 ? "scan is" : "scans are") ready", gtin: nil,
+                              message: "Found now that you're back online. Log \(count == 1 ? "it" : "them") from Recent scans.",
+                              identifier: "nutrition.barcodeReady") {
+                HStack(spacing: ExSpacing.small) {
+                    Button("Show scans", systemImage: "clock.arrow.circlepath") { showingHistory = true }
+                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeShowReady")
+                    Button("Not needed") { session.dismissReady() }
+                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeDismissReady")
+                }
+            }
+        case .added, .again, .looking: EmptyView()
+        }
+    }
+
+    /// A code the database can't give a food for is never a dead end:
+    /// search by name, enter it yourself, or read its label.
+    @ViewBuilder private func missActions(_ gtin: GTIN?) -> some View {
+        Button { dismiss() } label: { Label("Search by name", systemImage: "magnifyingglass") }
+            .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.barcodeSearchByName")
+        HStack(spacing: ExSpacing.small) {
+            Button("Enter it", systemImage: "square.and.pencil") { creatingFor = gtin; creating = true }
+                .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeManualFood")
+            Button("Read label", systemImage: "text.viewfinder") { creatingFor = gtin; scanningLabel = true }
+                .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeScanLabel")
+        }
+    }
+
+    // MARK: Digits
+
+    private var digitsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Without a camera the digits are the only way in, so they stay open.
+            if hasViewfinder {
+                Button { withAnimation(.snappy) { enteringDigits.toggle() } } label: {
+                    HStack {
+                        Label("Type the digits instead", systemImage: "keyboard")
+                        Spacer()
+                        Image(systemName: "chevron.down").rotationEffect(.degrees(enteringDigits ? 180 : 0)).accessibilityHidden(true)
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }.font(.exLabel).buttonStyle(.plain).foregroundStyle(Color.exPrimaryText)
+                    .accessibilityIdentifier("nutrition.enterBarcodeDigits")
+                    .accessibilityValue(enteringDigits ? "Expanded" : "Collapsed")
+            }
+            if enteringDigits || !hasViewfinder {
+                VStack(alignment: .leading, spacing: ExSpacing.item) {
+                    TextField("Digits under the barcode", text: $code).keyboardType(.numberPad).focused($typing).font(.exStatSmall)
+                        .padding(ExSpacing.item).background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))
+                        .accessibilityIdentifier("nutrition.barcodeDigits")
+                        .onChange(of: code) { _, _ in codeError = nil }
+                    Button("Look up barcode") { lookUpDigits() }.buttonStyle(ExActionStyle())
+                        .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty || session.notice.isLooking)
+                        .accessibilityIdentifier("nutrition.lookupBarcode")
+                    if let codeError {
+                        Text(codeError).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("nutrition.barcodeDigitsError")
+                    } else {
+                        Text("Leading zeros are optional. Eight digits are tried as both EAN-8 and UPC-E.")
+                            .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    }
+                }.padding(.top, hasViewfinder ? ExSpacing.small : 0)
+            }
+        }
+    }
+
+    private func lookUpDigits() {
+        typing = false
+        let text = code
+        Task {
+            switch await session.lookUp(typed: text) {
+            case .food(let food):
+                code = ""
+                use(food)
+            case .noFood: code = ""
+            case .invalid: codeError = "Those digits don't make a valid barcode. Check them against the numbers under the bars."
+            }
+        }
+    }
+
+    // MARK: Logging
+
+    @ViewBuilder private var logFooter: some View {
+        if !picking, !session.plate.rows.isEmpty {
+            let count = session.plate.rows.count
+            VStack(spacing: ExSpacing.small) {
+                if let error = session.plate.error {
+                    Text(error).font(.exCaption).foregroundStyle(Color.exError).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Button {
+                    if let entries = session.logAll() {
+                        Task { await workspace.synchronize() }
+                        onLogged(entries)
+                    }
+                } label: {
+                    Label("Log \(count) \(count == 1 ? "food" : "foods") to \(session.plate.meal)", systemImage: "checkmark")
+                }
+                .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.scanLogAll")
+            }
+            .padding(ExSpacing.page).background(Color.exBackground)
+        }
     }
 }
 
-/// Corner brackets for the barcode viewfinder.
-private struct ScanFrame: View {
-    var body: some View {
-        GeometryReader { geometry in
-            let length: CGFloat = 26
-            Path { path in
-                let rect = CGRect(origin: .zero, size: geometry.size)
-                for (corner, dx, dy) in [(CGPoint(x: rect.minX, y: rect.minY), 1.0, 1.0), (CGPoint(x: rect.maxX, y: rect.minY), -1.0, 1.0),
-                                         (CGPoint(x: rect.minX, y: rect.maxY), 1.0, -1.0), (CGPoint(x: rect.maxX, y: rect.maxY), -1.0, -1.0)] {
-                    path.move(to: CGPoint(x: corner.x + dx * length, y: corner.y))
-                    path.addLine(to: corner)
-                    path.addLine(to: CGPoint(x: corner.x, y: corner.y + dy * length))
-                }
-            }.stroke(Color.white, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-        }
-    }
+private extension Optional where Wrapped == BarcodeScanSession.Notice {
+    var isLooking: Bool { if case .looking? = self { true } else { false } }
 }

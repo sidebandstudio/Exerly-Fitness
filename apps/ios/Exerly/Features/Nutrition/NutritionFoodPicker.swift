@@ -129,9 +129,9 @@ struct NutritionFoodPicker: View {
             .navigationDestination(isPresented: $showingBarcode) {
                 NutritionBarcodeView(workspace: workspace, api: api, date: date, meal: meal,
                                      timeZone: timeZone, unit: unit, actions: actions,
-                                     onPicked: picking ? { select($0) } : nil) { entry in
+                                     onPicked: picking ? { select($0) } : nil) { entries in
                     showingBarcode = false
-                    finish([entry])
+                    finish(entries)
                 }
             }
             .sheet(isPresented: $creating, onDismiss: openCreatedFood) {

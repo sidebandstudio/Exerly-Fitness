@@ -62,6 +62,7 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 | Branch      | Unlanded | Last landed |
 | ----------- | -------- | ----------- |
 | claude/next | nothing  | this commit |
+| claude/barcode | barcode wave 1; camera checks left, see docs/BARCODE.md | no |
 
 ## Risks
 

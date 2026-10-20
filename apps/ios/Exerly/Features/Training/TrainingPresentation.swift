@@ -12,6 +12,8 @@ final class TrainingWorkspace: ObservableObject {
     let programs: ProgramStore
     let gyms: GymStore
     let nutrition: NutritionStore
+    /// Barcodes this account resolved, scanned, or scanned offline.
+    let barcodes: BarcodeLibrary
     let agent: AgentStore
     let entryChecks: TrainingEntryChecks
     private let persistence: SQLiteTrainingPersistence
@@ -41,6 +43,7 @@ final class TrainingWorkspace: ObservableObject {
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
         nutrition = try NutritionStore(persistence: persistence)
+        barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
         entryChecks = TrainingEntryChecks(training: store, agent: agent, accountID: accountID)
         unreadableCount = persistence.unreadableRows.count
@@ -79,6 +82,10 @@ final class TrainingWorkspace: ObservableObject {
         }
         guard !persistence.isClosed, !Task.isCancelled else { return }
         if await entryChecks.refresh() { try? await sync?.sync() }
+        // Scans made offline resolve once the server answers again.
+        if let accountAPI, !barcodes.waiting.isEmpty, !persistence.isClosed {
+            await barcodes.resolveWaiting(fetch: BarcodeLibrary.fetch(accountAPI))
+        }
     }
 
     /// The active program's next workout. With `unit`, every recommended load

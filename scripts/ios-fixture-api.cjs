@@ -79,6 +79,8 @@ let dailyLogsRoundTrip = null;
 let setupRoundTrip = null;
 let preferencesRoundTrip = null;
 const foodDatabaseRequests = [];
+// What the simulator's stand-in camera sees next: a synthetic code as `<symbology>:<data>`.
+let barcodeFeed = { id: 0, payload: null };
 providers.searchOpenFoodFactsProducts = async (query, limit) => {
   foodDatabaseRequests.push({ type: 'search', query, limit });
   if (query === 'provider unavailable')
@@ -190,6 +192,15 @@ providers.lookupBarcode = async (identity) => ({
   app.get('/__test/apple-revocations', (req, res) => {
     if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
     res.json({ codes: appleRevocations });
+  });
+  app.get('/__test/barcode-feed', (_req, res) => res.json(barcodeFeed));
+  app.post('/__test/barcode-feed', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    barcodeFeed = {
+      id: barcodeFeed.id + 1,
+      payload: req.body.payload ? String(req.body.payload) : null,
+    };
+    res.json(barcodeFeed);
   });
   // Read by the API's own fetcher, which sends no fixture header; "plain" has no recipe data.
   app.get('/__test/recipe-pages/:slug', (req, res) => {
