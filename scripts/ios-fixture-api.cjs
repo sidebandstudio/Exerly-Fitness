@@ -15,6 +15,7 @@ const { createApp } = require('../apps/api/app');
 const { reset: resetRateLimits } = require('../apps/api/lib/ratelimit');
 const { start: startCluster } = require('../apps/api/tests/helpers/cluster');
 const recipePages = require('../apps/api/lib/recipePages');
+const mail = require('../apps/api/lib/mail');
 // Synthetic recipe pages for import, since the simulator can't reach real sites.
 // One line names a food the generic table doesn't have, so it's left to resolve.
 const syntheticRecipePages = {
@@ -183,6 +184,17 @@ providers.lookupBarcode = async (identity) => ({
     } catch (error) {
       next(error);
     }
+  });
+  // The newest password reset email to a synthetic address, from the API's
+  // memory mail transport. Nothing is ever sent.
+  app.get('/__test/password-reset-mail', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    if (typeof req.query.email !== 'string' || !req.query.email.endsWith('@exerly.test'))
+      return res.sendStatus(400);
+    const message = mail.sent(req.query.email.toLowerCase()).at(-1);
+    const code = message?.text.match(/code is ([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1];
+    if (!code) return res.sendStatus(404);
+    res.json({ code, subject: message.subject });
   });
   app.get('/__test/session-upgrades', async (req, res, next) => {
     if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);

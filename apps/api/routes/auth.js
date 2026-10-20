@@ -2,13 +2,15 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 
 const store = require('../data');
-const { asyncHandler, unauthorized, conflict } = require('../lib/errors');
+const { asyncHandler, unauthorized, conflict, badRequest } = require('../lib/errors');
 const { authenticate, adminEmails } = require('../lib/auth');
 const sessions = require('../lib/sessions');
 const { rateLimit } = require('../lib/ratelimit');
 const v = require('../lib/validate');
 const { requireUser, newUserFields } = require('../lib/users');
 const { normalizeTimeZone } = require('../lib/dates');
+const passwordReset = require('../lib/passwordReset');
+const mail = require('../lib/mail');
 
 const router = express.Router();
 
@@ -147,6 +149,126 @@ router.post(
     );
     await sessions.revokeAll(user.id);
     res.json({ message: 'Password changed successfully' });
+  })
+);
+
+// Password recovery by a code sent to the account's email. The request always
+// gets the same answer, sent before any mail goes out, so it never says
+// whether an address has an account.
+const RESET_REQUESTED =
+  'If an Exerly account uses that email, we sent it a code. It works for 15 minutes.';
+
+router.post(
+  '/auth/password/forgot',
+  rateLimit({ name: 'password-forgot', max: 5, windowMs: 15 * 60 * 1000 }),
+  rateLimit({
+    name: 'password-forgot-email',
+    max: 3,
+    windowMs: 60 * 60 * 1000,
+    key: (req) =>
+      String(req.body?.email ?? '')
+        .trim()
+        .toLowerCase(),
+    message: 'We already sent codes to this email. Check your inbox, or try again in an hour.',
+  }),
+  asyncHandler(async (req, res) => {
+    const email = v.email(req.body.email);
+    const user = await store.findOne('users', { email });
+    if (user && passwordReset.deliverable(email)) {
+      const code = passwordReset.newCode();
+      const now = new Date();
+      await store.transaction(async () => {
+        // A new code ends every earlier one.
+        await store.updateMany(
+          'password_resets',
+          { account_id: user.id, used_at: null },
+          { used_at: now }
+        );
+        await store.insert('password_resets', {
+          account_id: user.id,
+          code_hash: passwordReset.digest(user.id, code),
+          attempts: 0,
+          created_at: now,
+          expires_at: new Date(now.getTime() + passwordReset.TTL_MS),
+        });
+      });
+      mail
+        .send({
+          to: email,
+          subject: 'Your Exerly password reset code',
+          text: [
+            `Your code is ${passwordReset.display(code)}.`,
+            '',
+            'Enter it in Exerly within 15 minutes to choose a new password. Changing it signs you out on every device.',
+            '',
+            'If you didn’t ask for this, ignore this email. Your password hasn’t changed.',
+            '',
+            'Exerly by Sideband · https://sideband.studio',
+          ].join('\n'),
+        })
+        // The address stays out of the log.
+        .catch((error) => console.error('Password reset email not sent:', error.message));
+    }
+    res.status(202).json({ message: RESET_REQUESTED });
+  })
+);
+
+router.post(
+  '/auth/password/reset',
+  rateLimit({ name: 'password-reset', max: 10, windowMs: 15 * 60 * 1000 }),
+  asyncHandler(async (req, res) => {
+    const email = v.email(req.body.email);
+    const code = passwordReset.normalize(req.body.code);
+    const newPassword = v.password(req.body.newPassword, 'newPassword');
+    // Hashed whether or not the code is right, so timing says nothing.
+    const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    const changed = await store.transaction(async () => {
+      const user = await store.findOne('users', { email });
+      if (!user || !code) return false;
+      const [reset] = await store.find(
+        'password_resets',
+        { account_id: user.id, used_at: null, expires_at: { gt: new Date() } },
+        { sort: { created_at: -1 }, limit: 1 }
+      );
+      if (!reset) return false;
+      if (!passwordReset.matches(reset.code_hash, user.id, code)) {
+        const attempts = reset.attempts + 1;
+        await store.update(
+          'password_resets',
+          { id: reset.id },
+          attempts >= passwordReset.MAX_ATTEMPTS ? { attempts, used_at: new Date() } : { attempts }
+        );
+        return false;
+      }
+      const now = new Date();
+      await store.updateMany(
+        'password_resets',
+        { account_id: user.id, used_at: null },
+        { used_at: now }
+      );
+      await store.update(
+        'users',
+        { id: user.id },
+        { hash, credentials_version: (user.credentials_version ?? 0) + 1 }
+      );
+      // Whoever knew the old password may have signed in or made a token.
+      await sessions.revokeAll(user.id);
+      await store.updateMany(
+        'personal_access_tokens',
+        { account_id: user.id, revoked_at: null },
+        { revoked_at: now }
+      );
+      return true;
+    });
+    if (!changed) {
+      throw badRequest(
+        'That code is wrong or has expired. Check the latest email, or ask for a new code.',
+        {
+          code: 'reset_code_invalid',
+        }
+      );
+    }
+    res.json({ message: 'Password changed. Sign in with your new password.' });
   })
 );
 

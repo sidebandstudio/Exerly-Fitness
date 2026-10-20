@@ -1332,3 +1332,30 @@ what's eaten, a fasted day in the calendar, By time, a customized Today, and its
 screenshots), which pushed the job past its limit. They now live in
 `TodayDiaryUITests`, which the full local suite runs before every landing, and
 `TodayUITests` holds the tap budgets again.
+
+## 2026-10-20: password recovery by a mailed code
+
+- Recovery mails an 8-character code (`ABCD-EFGH`, no 0/O or 1/I, 40 bits)
+  rather than a link. A link needs universal links, an associated domain and
+  a file hosted on sideband.studio; a code works in any mail app and needs
+  nothing outside the API. It lasts 15 minutes, works once, is used up by
+  five wrong guesses and is ended by a newer code. Only an HMAC keyed with
+  the server secret and the account is stored, so a database copy can't be
+  brute-forced offline.
+- The request always answers 202 with one message, and the reset answers
+  one 400 for an unknown address, a wrong code, a used code and an expired
+  one, so neither says whether an account exists. The new password is
+  hashed before the lookup so timing doesn't either. Limits: 5 requests per
+  15 minutes per address, 3 per hour per email, 10 resets per 15 minutes
+  per address.
+- A reset revokes every session and every personal access token, unlike a
+  password change: recovery is what someone does after losing control of a
+  password, and whoever had it could have made a token. It doesn't mark the
+  email verified; that stays a Sign in with Apple fact.
+- Sign in with Apple accounts whose address is a real one can set a
+  password this way. Accounts with a hidden-address placeholder can't
+  receive mail and get the same answer as anyone else.
+- Mail goes through `lib/mail.js`: a memory outbox in tests and the
+  simulator fixture, the console in development, and nothing in production
+  until Ali chooses a provider (QUESTIONS_FOR_ALI.md). Until then a
+  production request answers as usual and logs that no mail was sent.

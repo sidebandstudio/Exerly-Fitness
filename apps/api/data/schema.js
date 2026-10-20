@@ -520,6 +520,20 @@ const collections = {
     indexes: [{ keys: { token_hash: 1 }, unique: true }, { keys: { account_id: 1 } }],
   },
 
+  // Password reset codes, hashed. Migration 0008.
+  password_resets: {
+    collection: 'passwordresets',
+    fields: {
+      account_id: t.str,
+      code_hash: t.str,
+      attempts: t.num,
+      created_at: t.date,
+      expires_at: t.date,
+      used_at: t.date,
+    },
+    indexes: [{ keys: { account_id: 1 } }],
+  },
+
   // Webhooks. Migration 0007.
   webhooks: {
     collection: 'webhooks',
