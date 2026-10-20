@@ -64,7 +64,7 @@ const apple = {
 
   /**
    * Verifies an identity token against the raw nonce the app generated.
-   * Returns { subject, email, emailVerified, nonceHash }.
+   * Returns { subject, email, emailVerified, nonceHash, issuedAt } (issuedAt in seconds).
    */
   async verifyIdentityToken(identityToken, rawNonce) {
     if (typeof identityToken !== 'string' || identityToken.length > 8192) {
@@ -97,7 +97,7 @@ const apple = {
     const emailVerified = claims.email_verified === true || claims.email_verified === 'true';
     const email =
       typeof claims.email === 'string' && emailVerified ? claims.email.trim().toLowerCase() : null;
-    return { subject: claims.sub, email, emailVerified, nonceHash };
+    return { subject: claims.sub, email, emailVerified, nonceHash, issuedAt: claims.iat };
   },
 
   revocationConfigured() {

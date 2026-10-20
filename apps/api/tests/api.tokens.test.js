@@ -287,7 +287,12 @@ test('deleting the account removes its tokens', async () => {
   const user = await signUp(api);
   const created = await token(user, ['read']);
   assert.equal(
-    (await api.del('/api/account', { token: user.token, body: { confirm: true } })).status,
+    (
+      await api.del('/api/account', {
+        token: user.token,
+        body: { confirm: true, password: user.password },
+      })
+    ).status,
     200
   );
   assert.equal(await api.store.count('personal_access_tokens', { id: created.id }), 0);

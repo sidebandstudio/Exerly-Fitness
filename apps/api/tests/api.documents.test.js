@@ -214,7 +214,10 @@ test('custom exercises sync as documents and appear in the export and deletion',
   const exported = (await api.get('/api/export', { token: user.token })).body;
   assert.equal(exported.documents.length, 1);
   assert.deepEqual(exported.documents[0].payload, exercise);
-  await api.del('/api/account', { token: user.token, body: { confirm: true } });
+  await api.del('/api/account', {
+    token: user.token,
+    body: { confirm: true, password: user.password },
+  });
   assert.equal(await api.store.count('documents', { account_id: user.user._id }), 0);
 });
 

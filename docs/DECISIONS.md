@@ -1359,3 +1359,31 @@ screenshots), which pushed the job past its limit. They now live in
   simulator fixture, the console in development, and nothing in production
   until Ali chooses a provider (QUESTIONS_FOR_ALI.md). Until then a
   production request answers as usual and logs that no mail was sent.
+
+## 2026-10-20: deleting an account needs the password or a fresh Apple sign-in
+
+- `DELETE /api/account` used to accept any valid session with
+  `{"confirm": true}`, so a phone left unlocked or a copied access token could
+  erase an account. It now also needs the password, or, for an account
+  connected to Apple, a Sign in with Apple identity token for the same Apple ID
+  issued in the last ten minutes, with its nonce (used up, like a sign-in's).
+  The server verifies Apple's signature itself; the app's word isn't enough.
+- A refusal is 403 (`wrong_password`, `apple_not_confirmed`), not 401: the
+  session is fine, and a 401 makes the app refresh or sign out. Five attempts
+  per account per hour, keyed by account so a copied session can't keep
+  guessing, and so one person's guesses don't lock out others on a shared
+  network.
+- Accounts with both a password and Apple confirm with Apple in the app, since
+  revoking Apple's authorization needs the authorization code from that same
+  sheet. The API accepts either.
+- Installed builds that send only `{"confirm": true}` get "Enter your password
+  to delete your account" until they update. That's deliberate.
+
+## 2026-10-20: a refresh credential presented twice ends its session
+
+Refresh credentials already rotated on use. Now a genuine credential from an
+earlier generation (checked by its HMAC, so a guess proves nothing) presented
+again revokes the session: either the app or a copy of it is replaying, and the
+server can't tell which. A retry of a lost acknowledgement with its own
+operation key is still answered with the same credential, so a dropped
+response never signs anyone out.

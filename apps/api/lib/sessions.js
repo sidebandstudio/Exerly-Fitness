@@ -154,7 +154,7 @@ async function rotate(refreshToken, operation) {
     throw unauthorized('Invalid refresh credential');
   if (typeof operation !== 'string' || !/^[a-zA-Z0-9._:-]{8,128}$/.test(operation))
     throw badRequest('An operation key is required to refresh the session');
-  return store.transaction(async () => {
+  const result = await store.transaction(async () => {
     const id = refreshToken.split('.')[0];
     const session = await store.findOne('sessions', { session_id: id });
     if (!session || session.revoked_at || session.expires_at <= new Date())
@@ -167,8 +167,17 @@ async function rotate(refreshToken, operation) {
     // Keychain. Retrying a lost acknowledgement returns the same credential.
     if (equal(session.previous_refresh_hash, presented) && session.previous_operation === operation)
       return response(user, session);
-    if (!equal(session.refresh_hash, presented))
+    if (!equal(session.refresh_hash, presented)) {
+      // A genuine credential this session already rotated past means two
+      // holders: the app and whoever copied it. Nobody can tell which is
+      // which, so the session ends for both. The revocation must commit, so
+      // the refusal is thrown after the transaction.
+      if (rotatedEarlier(refreshToken, id, session.generation)) {
+        await store.update('sessions', { id: session.id }, { revoked_at: new Date() });
+        return REUSED;
+      }
       throw unauthorized('Refresh credential has already been rotated');
+    }
     const generation = session.generation + 1;
     const updated = await store.update(
       'sessions',
@@ -184,6 +193,19 @@ async function rotate(refreshToken, operation) {
     if (!updated) throw unauthorized('Session changed. Retry with the saved credential.');
     return response(user, updated);
   });
+  if (result === REUSED)
+    throw unauthorized('This sign-in was used from two places, so it was ended. Sign in again.');
+  return result;
+}
+
+const REUSED = Symbol('reused refresh credential');
+
+/** Whether `presented` is this session's credential from an earlier generation. */
+function rotatedEarlier(presented, sessionID, generation) {
+  for (let earlier = generation - 1; earlier >= 0; earlier--) {
+    if (equal(credential(sessionID, earlier), presented)) return true;
+  }
+  return false;
 }
 
 async function revokeAll(accountID) {

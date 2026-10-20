@@ -123,6 +123,60 @@ paths:
         '200': { $ref: '#/components/responses/SignedIn' }
         '401': { $ref: '#/components/responses/Problem' }
 
+  /auth/password/forgot:
+    post:
+      operationId: requestPasswordReset
+      tags: [Sessions]
+      summary: Email a password reset code
+      description: |
+        Always answers 202 with the same message, whether or not an account uses
+        the address. A new code ends earlier ones. 5 requests per 15 minutes per
+        address, 3 per hour per email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202': { description: Requested }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      tags: [Sessions]
+      summary: Choose a new password with a mailed code
+      description: |
+        The code lasts 15 minutes, works once and is used up by five wrong
+        guesses. Success revokes every session and personal access token; sign
+        in again with the new password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, example: ABCD-EFGH }
+                newPassword: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { description: Password changed }
+        '400':
+          description: A weak password, or `details.code = reset_code_invalid` for any wrong, used, expired or unknown case.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
   /auth/logout:
     post:
       operationId: signOut
@@ -168,10 +222,14 @@ paths:
       tags: [Account]
       summary: Delete the account and all of its data
       description: |
-        Removes every row the account owns in one transaction. When the account
-        uses Sign in with Apple and the server can revoke Apple tokens, send
-        `appleAuthorizationCode` from a fresh Apple sign-in; revocation happens
-        first, and if it fails nothing is deleted (`502`).
+        Needs proof of identity as well as the session: `password` for a
+        password account, or `identityToken` and raw `nonce` from a Sign in with
+        Apple authorization in the last ten minutes for the connected Apple ID.
+        Five attempts per account per hour. Removes every row the account owns,
+        including every session and token, in one transaction. When the account
+        uses Sign in with Apple and the server can revoke Apple tokens, also
+        send `appleAuthorizationCode` from the same authorization; revocation
+        happens first, and if it fails nothing is deleted (`502`).
       requestBody:
         required: true
         content:
@@ -181,6 +239,9 @@ paths:
               required: [confirm]
               properties:
                 confirm: { const: true }
+                password: { type: string }
+                identityToken: { type: string }
+                nonce: { type: string }
                 appleAuthorizationCode: { type: string }
       responses:
         '200':
@@ -194,10 +255,20 @@ paths:
                   apple_revoked: { type: boolean }
                   removed: { type: object, additionalProperties: { type: integer } }
         '400':
-          description: Missing confirmation, or `details.code = apple_reauthorization_required`.
+          description: |
+            Missing confirmation, or missing proof: `details.code` is
+            `password_required` or `apple_reauthorization_required`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: |
+            Wrong proof: `details.code` is `wrong_password` or
+            `apple_not_confirmed`. The session stays valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
         '502': { $ref: '#/components/responses/Problem' }
 
   /api/export:
