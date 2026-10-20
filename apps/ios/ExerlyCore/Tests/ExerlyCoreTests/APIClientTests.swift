@@ -190,26 +190,39 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
         #expect(deleted == .applied(revision: 4))
     }
 
-    @Test func connectsAndDisconnectsApple() async throws {
+    @Test func connectsAndDisconnectsAppleOnlyWithAConfirmation() async throws {
         let store = InMemoryCredentialStore()
         try store.save(Credentials(accessToken: "t", refreshToken: "r", accessExpiresAt: start.addingTimeInterval(600), sessionID: "s", accountID: "a"))
         var conflict = false
+        var bodies: [[String: Any]] = []
         let transport = FakeTransport { request in
             #expect(request.path == "/api/account/identities/apple")
+            bodies.append(request.body ?? [:])
             if request.method == "POST" {
                 #expect(request.body?["identityToken"] as? String == "jwt" && request.body?["nonce"] as? String == "raw")
+                if request.body?["password"] as? String == "wrong" { return (403, ["message": "Wrong", "details": ["code": "wrong_password"]]) }
                 return conflict ? (409, ["message": "Taken"]) : (201, ["provider": "apple", "connected": true])
             }
             return (400, ["message": "Set a password before disconnecting Apple"])
         }
         let start = self.start
         let api = client(transport, store: store, clock: { start })
-        try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw")
-        conflict = true
-        await #expect(throws: APIError.linkConflict) { try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw") }
-        await #expect(throws: APIError.server(status: 400, message: "Set a password before disconnecting Apple")) {
-            try await api.account().disconnectApple()
+        try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw", confirmation: .password("secret"))
+        #expect(bodies.last?["password"] as? String == "secret")
+        try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw",
+                                             confirmation: .apple(identityToken: "current", rawNonce: "now", authorizationCode: nil))
+        #expect(bodies.last?["currentIdentityToken"] as? String == "current" && bodies.last?["currentNonce"] as? String == "now")
+        await #expect(throws: APIError.wrongPassword) {
+            try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw", confirmation: .password("wrong"))
         }
+        conflict = true
+        await #expect(throws: APIError.linkConflict) {
+            try await api.account().connectApple(identityToken: "jwt", rawNonce: "raw", confirmation: .password("secret"))
+        }
+        await #expect(throws: APIError.server(status: 400, message: "Set a password before disconnecting Apple")) {
+            try await api.account().disconnectApple(password: "secret")
+        }
+        #expect(bodies.last?["password"] as? String == "secret")
     }
 
     @Test func deletesTheAccountAndForgetsTheSession() async throws {
@@ -268,6 +281,7 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
             case ("POST", "/v1/tokens"):
                 #expect(request.body?["scopes"] as? [String] == ["read", "propose"])
                 #expect(request.body?["name"] as? String == "Claude")
+                #expect(request.body?["password"] as? String == "secret")
                 return (201, row.merging(["token": replayed ? NSNull() : "exr_secret"]) { _, new in new })
             case ("GET", "/v1/tokens"): return (200, [row])
             default:
@@ -277,12 +291,12 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
         }
         let api = ExerlyAPI(baseURL: URL(string: "https://api.exerly.test")!, transport: transport, credentials: store, now: { start })
         let account = try await api.account()
-        let created = try await account.createAccessToken(name: "Claude", scopes: [.propose])
+        let created = try await account.createAccessToken(name: "Claude", scopes: [.propose], confirmation: .password("secret"))
         #expect(created.secret == "exr_secret" && created.token.createdAt == start)
         #expect(try await account.accessTokens().map(\.scopes) == [[.read, .propose]])
         try await account.revokeAccessToken(id: "tok-1")
         replayed = true
-        await #expect(throws: APIError.self) { try await account.createAccessToken(name: "Claude", scopes: [.propose]) }
+        await #expect(throws: APIError.self) { try await account.createAccessToken(name: "Claude", scopes: [.propose], confirmation: .password("secret")) }
     }
 
     @Test func listsDeletesAndResumesTheAccountsWebhooks() async throws {

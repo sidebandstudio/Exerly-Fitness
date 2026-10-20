@@ -44,7 +44,9 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         XCTAssertTrue(app.buttons["Close"].firstMatch.waitForExistence(timeout: 20))
         capture(app, "ready-delete-export")
         closeShareSheet(app)
-        XCTAssertTrue(app.buttons["Export again"].waitForExistence(timeout: 10))
+        // Closing the share sheet saved nothing, so it doesn't count as an export.
+        XCTAssertTrue(app.buttons["Export my data"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Export again"].exists)
 
         // Nothing to confirm with until a password is typed.
         reveal(app.buttons["account.confirmDelete"], in: app)
@@ -56,8 +58,8 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         let field = app.secureTextFields["account.deletePassword"]
         replace(field, with: "not-my-password", in: app)
         app.typeText("\n")
-        XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
-        tap(app.alerts.buttons["Delete account"], in: app)
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
         // At the largest text the error row starts below the fold.
         let wrong = app.staticTexts["That password is incorrect."]
         reveal(wrong, in: app)
@@ -70,12 +72,19 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         XCTAssertFalse(app.buttons["account.confirmDelete"].isEnabled, "the wrong password was cleared")
         replace(field, with: password, in: app)
         app.typeText("\n")
-        XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
-        tap(app.alerts.buttons["Cancel"], in: app)
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
+        tap(app.buttons["account.deleteConfirmation.confirmCancel"], in: app)
         tap(app.buttons["account.confirmDelete"], in: app)
-        XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
+        // The whole warning is readable, at any text size, with both choices.
+        let warning = app.staticTexts["You haven’t exported your data. Your Exerly records will be permanently removed."]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
         capture(app, "ready-delete-confirm")
-        tap(app.alerts.buttons["Delete account"], in: app)
+        let confirm = app.buttons["account.deleteConfirmation.confirm"]
+        reveal(confirm, in: app)
+        XCTAssertTrue(confirm.isHittable)
+        XCTAssertTrue(app.buttons["account.deleteConfirmation.confirmCancel"].isHittable)
+        capture(app, "ready-delete-confirm-actions")
+        tap(confirm, in: app)
         XCTAssertTrue(app.buttons["I already have an account"].waitForExistence(timeout: 30))
         let leaving = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
                                                 object: app.navigationBars["Delete account"])

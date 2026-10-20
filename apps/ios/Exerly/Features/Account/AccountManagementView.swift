@@ -11,8 +11,9 @@ struct AccountSignInMethods: Equatable {
 
 struct AccountManagementActions {
     var signInMethods: @MainActor () async throws -> AccountSignInMethods
-    var connectApple: @MainActor (AppleAuthorizationResult) async throws -> AccountSignInMethods
-    var disconnectApple: @MainActor () async throws -> AccountSignInMethods
+    /// Connecting another way in needs the password, like deleting.
+    var connectApple: @MainActor (AppleAuthorizationResult, AccountConfirmation) async throws -> AccountSignInMethods
+    var disconnectApple: @MainActor (_ password: String) async throws -> AccountSignInMethods
     var exportAccount: @MainActor () async throws -> Data
     var deleteAccount: @MainActor (AccountConfirmation) async throws -> Void
     var exportDeviceData: (@MainActor () throws -> Data)?
@@ -26,6 +27,8 @@ struct AccountManagementView: View {
     @State private var busy: String?
     @State private var error: String?
     @State private var disconnecting = false
+    @State private var linkPassword = ""
+    @State private var disconnectPassword = ""
     @State private var task: Task<Void, Never>?
     @AccessibilityFocusState private var errorFocused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -61,17 +64,28 @@ struct AccountManagementView: View {
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("Connect Apple to sign in to this same account.")
+                        Text("Connect Apple to sign in to this same account. Enter your password first.")
                             .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        SecureField("Password", text: $linkPassword)
+                            .textContentType(.password)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("account.linkPassword")
                         AppleAuthorizationButton { payload in
                             guard busy == nil else { return }
                             busy = "Connecting Apple…"
                             defer { busy = nil }
-                            let updated = try await actions.connectApple(payload)
-                            try Task.checkCancellation()
-                            self.methods = updated
+                            do {
+                                let updated = try await actions.connectApple(payload, .password(linkPassword))
+                                try Task.checkCancellation()
+                                self.methods = updated
+                                linkPassword = ""
+                            } catch {
+                                if case ExerlyCore.APIError.wrongPassword = error { linkPassword = "" }
+                                throw error
+                            }
                         }
-                        .disabled(busy != nil)
+                        .disabled(busy != nil || linkPassword.isEmpty)
                     }
                 } else if busy == nil {
                     Button("Load sign-in methods") { start { try await loadMethods() } }
@@ -87,7 +101,7 @@ struct AccountManagementView: View {
             Section {
                 if let methods {
                     NavigationLink {
-                        DeleteAccountView(email: email, appleConnected: methods.appleConnected,
+                        DeleteAccountView(email: email, hasPassword: methods.hasPassword,
                                           export: actions.exportAccount, delete: actions.deleteAccount)
                     } label: {
                         Label("Delete account", systemImage: "trash")
@@ -115,17 +129,22 @@ struct AccountManagementView: View {
             do { try await loadMethods() } catch is CancellationError { } catch { showError(error) }
         }
         .alert("Disconnect Apple?", isPresented: $disconnecting) {
-            Button("Cancel", role: .cancel) { }
+            SecureField("Password", text: $disconnectPassword)
+                .textContentType(.password)
+                .accessibilityIdentifier("account.disconnectPassword")
+            Button("Cancel", role: .cancel) { disconnectPassword = "" }
             Button("Disconnect Apple", role: .destructive) {
+                let password = disconnectPassword
+                disconnectPassword = ""
                 start {
                     busy = "Disconnecting Apple…"
-                    let updated = try await actions.disconnectApple()
+                    let updated = try await actions.disconnectApple(password)
                     try Task.checkCancellation()
                     methods = updated
                 }
             }
         } message: {
-            Text("You will use your email and password to sign in.")
+            Text("Enter your password. You will use your email and password to sign in.")
         }
         .onDisappear { task?.cancel() }
     }
@@ -237,14 +256,19 @@ private struct AccountExportView: View {
 }
 
 private struct DeleteAccountView: View {
+    /// A confirmation waiting for the person to say delete, once more.
+    private struct PendingDeletion: Identifiable {
+        let id = UUID()
+        let confirmation: AccountConfirmation
+    }
+
     let email: String
-    let appleConnected: Bool
+    let hasPassword: Bool
     let export: @MainActor () async throws -> Data
     let delete: @MainActor (AccountConfirmation) async throws -> Void
     @State private var password = ""
     @State private var needsApple = false
-    @State private var pending: AccountConfirmation?
-    @State private var confirming = false
+    @State private var pending: PendingDeletion?
     @State private var deleting = false
     @State private var exporting = false
     @State private var exportFile: AccountExportFile?
@@ -254,7 +278,8 @@ private struct DeleteAccountView: View {
     @FocusState private var passwordFocused: Bool
     @AccessibilityFocusState private var errorFocused: Bool
 
-    private var confirmsWithApple: Bool { appleConnected || needsApple }
+    // A password account confirms with its password even with Apple connected.
+    private var confirmsWithApple: Bool { !hasPassword || needsApple }
     private var busy: Bool { deleting || exporting }
 
     var body: some View {
@@ -322,15 +347,20 @@ private struct DeleteAccountView: View {
         .exListStyle()
         .interactiveDismissDisabled(deleting)
         .navigationBarBackButtonHidden(deleting)
-        .alert("Delete this account?", isPresented: $confirming, presenting: pending) { confirmation in
-            Button("Cancel", role: .cancel) { pending = nil }
-            Button("Delete account", role: .destructive) { perform(confirmation) }
-        } message: { _ in
-            Text(exported ? "Your Exerly records will be permanently removed."
-                          : "You haven’t exported your data. Your Exerly records will be permanently removed.")
+        // A sheet rather than an alert: at the largest text sizes an alert cuts
+        // the warning off, and this one has to be read in full.
+        .sheet(item: $pending) { pending in
+            ExConfirmation(title: "Delete this account?",
+                           message: exported ? "Your Exerly records will be permanently removed."
+                                             : "You haven’t exported your data. Your Exerly records will be permanently removed.",
+                           confirm: "Delete account", destructive: true, screenTitle: "Delete account",
+                           identifier: "account.deleteConfirmation",
+                           perform: { perform(pending.confirmation) },
+                           cancel: { self.pending = nil })
         }
         .sheet(item: $exportFile) { file in
-            AccountShareSheet(url: file.url).onDisappear { file.remove() }
+            AccountShareSheet(url: file.url) { completed in if completed { exported = true } }
+                .onDisappear { file.remove() }
         }
         .onDisappear { task?.cancel() }
     }
@@ -343,8 +373,7 @@ private struct DeleteAccountView: View {
 
     private func ask(_ confirmation: AccountConfirmation) {
         passwordFocused = false
-        pending = confirmation
-        confirming = true
+        pending = PendingDeletion(confirmation: confirmation)
     }
 
     private func prepareExport() {
@@ -356,8 +385,8 @@ private struct DeleteAccountView: View {
             do {
                 let data = try await export()
                 try Task.checkCancellation()
+                // Counted as exported only once it's shared or saved.
                 exportFile = try AccountExportFile(data: data)
-                exported = true
             } catch is CancellationError { } catch {
                 guard !Task.isCancelled else { return }
                 show(error)
@@ -369,8 +398,9 @@ private struct DeleteAccountView: View {
         guard !busy else { return }
         error = nil
         deleting = true
+        pending = nil
         task = Task { @MainActor in
-            defer { deleting = false; pending = nil }
+            defer { deleting = false }
             do { try await delete(confirmation) } catch is CancellationError { } catch {
                 guard !Task.isCancelled else { return }
                 switch error {
@@ -409,8 +439,12 @@ struct AccountExportFile: Identifiable {
 
 private struct AccountShareSheet: UIViewControllerRepresentable {
     let url: URL
+    /// Whether the file was shared or saved; false when the sheet was cancelled.
+    var finished: (Bool) -> Void = { _ in }
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, completed, _, _ in finished(completed) }
+        return controller
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) { }
 }

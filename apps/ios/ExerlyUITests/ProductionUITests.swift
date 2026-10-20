@@ -657,13 +657,13 @@ final class ProductionUITests: ExerlyUITestCase {
         tap(app.buttons["account.delete"], in: app)
         replace(app.secureTextFields["account.deletePassword"], with: "Synthetic-Password-1", in: app)
         app.typeText("\n")
-        XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
         capture(app, "account-delete-confirmation")
-        tap(app.alerts.buttons["Cancel"], in: app)
-        XCTAssertTrue(app.buttons["account.confirmDelete"].exists)
+        tap(app.buttons["account.deleteConfirmation.confirmCancel"], in: app)
+        XCTAssertTrue(app.buttons["account.confirmDelete"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Account deleted"].exists)
         tap(app.buttons["account.confirmDelete"], in: app)
-        tap(app.alerts.buttons["Delete account"], in: app)
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
         let failure = app.staticTexts["Could not reach Exerly. Check your connection and try again."]
         reveal(failure, in: app)
         XCTAssertTrue(failure.waitForExistence(timeout: 10))
@@ -733,9 +733,9 @@ final class ProductionUITests: ExerlyUITestCase {
         tap(app.buttons["account.delete"], in: app)
         replace(app.secureTextFields["account.deletePassword"], with: "Simulator-Test-123!", in: app)
         app.typeText("\n")
-        XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
         try await control(["dropAccountDeleteAcknowledgement": true])
-        tap(app.alerts.buttons["Delete account"], in: app)
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
         XCTAssertTrue(app.buttons["I already have an account"].waitForExistence(timeout: 20))
         capture(app, "account-live-deleted")
         var check = URLRequest(url: URL(string: fixtureURL + "/api/export")!)
@@ -1273,7 +1273,7 @@ final class ProductionUITests: ExerlyUITestCase {
         slots[0]["target"] = target
         days[0]["slots"] = slots
         after["days"] = days
-        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic program coach", "scopes": ["propose"], "expires_in_days": 7], token: token)
+        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic program coach", "scopes": ["propose"], "expires_in_days": 7, "password": "Simulator-Test-123!"], token: token)
         let secret = try XCTUnwrap(created["token"] as? String)
         let envelope = try await request("POST", "/mcp", body: ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "propose", "arguments": [
             "title": "Leave more reps in reserve", "summary": "Review a change to future workout targets.", "confidence": "low",
@@ -1588,6 +1588,11 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         reveal(app.buttons["agents.permission"], in: app)
         XCTAssertTrue(app.buttons["agents.permission"].label.contains("Read and propose"))
+        // A token outlives the session, so it needs the password.
+        reveal(app.buttons["agents.confirmCreate"], in: app)
+        XCTAssertFalse(app.buttons["agents.confirmCreate"].isEnabled)
+        replace(app.secureTextFields["agents.password"], with: "Simulator-Test-123!", in: app)
+        dismissKeyboard(app)
         capture(app, "agents-propose-form")
         tap(app.buttons["agents.confirmCreate"], in: app)
         XCTAssertTrue(app.navigationBars["Save your token"].waitForExistence(timeout: 15))
@@ -1623,6 +1628,8 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         tap(app.buttons["agents.permission"], in: app)
         tap(app.buttons["Direct write"], in: app)
+        replace(app.secureTextFields["agents.password"], with: "Simulator-Test-123!", in: app)
+        dismissKeyboard(app)
         tap(app.buttons["agents.confirmCreate"], in: app)
         XCTAssertTrue(app.alerts["Allow direct changes?"].waitForExistence(timeout: 5))
         capture(app, "agents-direct-write-confirmation")
@@ -1651,7 +1658,7 @@ final class ProductionUITests: ExerlyUITestCase {
         sets[0]["efforts"] = [["reps": 3, "load": ["unit": "kg", "value": 150]]]
         exercises[0]["sets"] = sets
         after["exercises"] = exercises
-        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic coach", "scopes": ["propose"], "expires_in_days": 7], token: token)
+        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic coach", "scopes": ["propose"], "expires_in_days": 7, "password": "Simulator-Test-123!"], token: token)
         let secret = try XCTUnwrap(created["token"] as? String)
         let envelope = try await request("POST", "/mcp", body: [
             "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "propose", "arguments": [

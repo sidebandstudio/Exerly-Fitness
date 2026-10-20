@@ -200,6 +200,7 @@ struct ExConfirmation: View {
     let confirm: String
     var cancelLabel = "Cancel"
     var destructive = false
+    var screenTitle = "Review change"
     let identifier: String
     let perform: () -> Void
     let cancel: () -> Void
@@ -215,7 +216,7 @@ struct ExConfirmation: View {
                 Button(role: destructive ? .destructive : nil, action: perform) { Text(confirm) }
                     .buttonStyle(ExActionStyle(destructive: destructive)).accessibilityIdentifier("\(identifier).confirm")
             }
-            .navigationTitle("Review change").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(screenTitle).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(cancelLabel, action: cancel).accessibilityIdentifier("\(identifier).confirmCancel")

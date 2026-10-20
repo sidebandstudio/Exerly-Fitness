@@ -1439,3 +1439,17 @@ then use a fresh Sign in with Apple to delete a password account. Now:
   rotate once more; reuse of one is recognised for 16 generations.
 - Forgot password answers before looking the address up and issues the code
   afterwards, so its timing says nothing about which addresses have accounts.
+
+## 2026-10-20: the app asks for the password to connect Apple or an agent, and confirms deletion on a sheet
+
+- Connect Apple asks for the password first, Disconnect Apple asks for it in
+  its alert, and Connect an agent has a "Confirm it's you" section: the
+  password, or Sign in with Apple for an account without one. Delete account
+  asks a password account for its password even when Apple is connected.
+- The last "Delete this account?" step is a sheet (ExConfirmation) instead of
+  an alert. At the largest text size the alert cut its warning off at
+  "perma-" while Delete stayed tappable; the sheet scrolls and keeps Cancel and
+  Delete reachable.
+- The export on the delete screen counts only once the share sheet finishes
+  sharing or saving it. Cancelling it used to count, which hid the "you
+  haven't exported" warning.

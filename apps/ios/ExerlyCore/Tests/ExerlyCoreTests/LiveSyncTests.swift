@@ -192,7 +192,7 @@ struct LiveSyncTests {
         // The person gives their agent a propose-only token.
         let access = try #require(try phone.credentials.load()).accessToken
         let account = try await phone.api.account()
-        let created = try await account.createAccessToken(name: "Synthetic agent", scopes: [.propose], expiresInDays: 30)
+        let created = try await account.createAccessToken(name: "Synthetic agent", scopes: [.propose], expiresInDays: 30, confirmation: .password(password))
         #expect(created.token.scopes == [.read, .propose] && created.token.expiresAt != nil)
         #expect(try await account.accessTokens().map(\.id) == [created.token.id])
         let token = created.secret
@@ -298,7 +298,7 @@ struct LiveSyncTests {
 
         let swiftPlan = try #require(phone.programs.nextWorkout(bodyweight: .kg(80)))
         let account = try await phone.api.account()
-        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: []).secret
+        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: [], confirmation: .password(password)).secret
         let server = try await tool("next_workout", [:], token: token)
         #expect(server["day"] as? String == "B")
         #expect(server["cycle"] as? Int == 2)
@@ -364,7 +364,7 @@ struct LiveSyncTests {
 
         let expected = EnergyBalance.estimate(phone.nutrition.energyBalanceDays(from: start, through: end), prior: (2500, 400))
         let account = try await phone.api.account()
-        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: []).secret
+        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: [], confirmation: .password(password)).secret
         let summary = try await tool("get_nutrition_summary", ["from": start.description, "through": end.description], token: token)
         let days = try #require(summary["days"] as? [[String: Any]])
         #expect(days.count == expected.count)
@@ -380,7 +380,7 @@ struct LiveSyncTests {
         let phone = try LiveDevice(base: base)
         _ = try await phone.signIn(email: email, password: password)
         let account = try await phone.api.account()
-        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: [.propose]).secret
+        let token = try await account.createAccessToken(name: "Synthetic agent", scopes: [.propose], confirmation: .password(password)).secret
         let entryID = UUID()
         let filed = try await tool("propose", [
             "title": "Log lunch: chicken and rice", "confidence": "medium",

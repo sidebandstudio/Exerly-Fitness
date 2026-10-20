@@ -247,14 +247,17 @@ try await api.signOut()
   is in flight.
 - `AccountAPI(accountID:transport:)` is one account's endpoints:
   - the document endpoints `SyncEngine` uses (it is a `DocumentAPI`);
-  - `connectApple(identityToken:rawNonce:)` and `disconnectApple()`;
+  - `connectApple(identityToken:rawNonce:confirmation:)` and
+    `disconnectApple(password:)`;
   - `exportAccount()`, which returns the JSON `Data`;
   - `deleteAccount(confirmation:)`, which deletes on the server once an
-    `AccountConfirmation` (`.password` or a fresh `.apple` authorization) shows
-    it's the owner. A refusal throws `wrongPassword`, `passwordRequired` or
+    `AccountConfirmation` shows it's the owner: `.password` for a password
+    account, even with Apple connected, otherwise a fresh `.apple`
+    authorization. Connecting Apple and creating a token need one too. A
+    refusal throws `wrongPassword`, `passwordRequired` or
     `appleReauthorizationRequired` and keeps the session. After a deletion the
     session owner forgets the session.
-  - `accessTokens()`, `createAccessToken(name:scopes:expiresInDays:)` and
+  - `accessTokens()`, `createAccessToken(name:scopes:expiresInDays:confirmation:)` and
     `revokeAccessToken(id:)` for the person's own agents. Every token can read;
     `.propose` files proposals, and `.write` changes data. The secret in
     `CreatedAccessToken.secret` is shown once and never again.

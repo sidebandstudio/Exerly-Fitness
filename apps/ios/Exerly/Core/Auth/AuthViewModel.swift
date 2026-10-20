@@ -264,19 +264,21 @@ final class AuthViewModel: ObservableObject {
         return account
     }
 
-    /// Connects Sign in with Apple. Throws `ExerlyCore.APIError.linkConflict` when
-    /// the Apple ID belongs to another account.
-    func linkApple(identityToken: String, rawNonce: String) async throws {
+    /// Connects Sign in with Apple once `confirmation` shows it's the owner.
+    /// Throws `ExerlyCore.APIError.linkConflict` when the Apple ID belongs to
+    /// another account, or `wrongPassword` for a wrong password.
+    func linkApple(identityToken: String, rawNonce: String, confirmation: AccountConfirmation) async throws {
         let account = try signedInAccount()
-        try await account.connectApple(identityToken: identityToken, rawNonce: rawNonce)
+        try await account.connectApple(identityToken: identityToken, rawNonce: rawNonce, confirmation: confirmation)
         if currentUser?.id == account.accountID { signInMethods?.apple = true }
     }
 
-    /// Disconnects Sign in with Apple. The server refuses when the account has no
-    /// password; `signInMethods` says so in advance.
-    func unlinkApple() async throws {
+    /// Disconnects Sign in with Apple, given the account's password. The server
+    /// refuses when the account has no password; `signInMethods` says so in
+    /// advance.
+    func unlinkApple(password: String) async throws {
         let account = try signedInAccount()
-        try await account.disconnectApple()
+        try await account.disconnectApple(password: password)
         if currentUser?.id == account.accountID { signInMethods?.apple = false }
     }
 

@@ -23,11 +23,16 @@ final class AgentConnectionsModel: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var isBusy = false
     @Published private(set) var isLoading = false
+    /// Whether the account confirms with Sign in with Apple, having no password.
+    @Published private(set) var confirmsWithApple: Bool
     private let api: AccountAPI
     private var secretGeneration = UUID()
     private var refreshGeneration = UUID()
 
-    init(api: AccountAPI) { self.api = api }
+    init(api: AccountAPI, hasPassword: Bool) {
+        self.api = api
+        confirmsWithApple = !hasPassword
+    }
 
     func refresh() async {
         let request = UUID()
@@ -45,21 +50,30 @@ final class AgentConnectionsModel: ObservableObject {
         }
     }
 
-    func create(name: String, permission: Permission, expiresInDays: Int) async {
-        guard !isBusy else { return }
+    /// Creates a token once `confirmation` shows it's the account's owner. A
+    /// token outlives this session, so the session alone isn't enough.
+    /// Returns whether it was created.
+    @discardableResult
+    func create(name: String, permission: Permission, expiresInDays: Int,
+                confirmation: AccountConfirmation) async -> Bool {
+        guard !isBusy else { return false }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { error = "Give this agent a name."; return }
+        guard !trimmed.isEmpty else { error = "Give this agent a name."; return false }
         let request = secretGeneration
         error = nil
         isBusy = true
         defer { isBusy = false }
         do {
-            let result = try await api.createAccessToken(name: trimmed, scopes: permission.scopes, expiresInDays: expiresInDays)
+            let result = try await api.createAccessToken(name: trimmed, scopes: permission.scopes,
+                                                         expiresInDays: expiresInDays, confirmation: confirmation)
             if secretGeneration == request, !Task.isCancelled { created = result }
             await refresh()
+            return true
         } catch {
-            guard secretGeneration == request, !Task.isCancelled else { return }
+            guard secretGeneration == request, !Task.isCancelled else { return false }
+            if case ExerlyCore.APIError.appleReauthorizationRequired = error { confirmsWithApple = true }
             self.error = error.localizedDescription
+            return false
         }
     }
 

@@ -142,13 +142,14 @@ final class AppAccountWorkspace: ObservableObject {
             }
             return training
         }
-        var actions = AccountManagementActions(signInMethods: { try await methods() }, connectApple: { payload in
+        var actions = AccountManagementActions(signInMethods: { try await methods() }, connectApple: { payload, confirmation in
             try checkAccount()
-            try await auth.linkApple(identityToken: payload.identityToken, rawNonce: payload.rawNonce)
+            try await auth.linkApple(identityToken: payload.identityToken, rawNonce: payload.rawNonce,
+                                     confirmation: confirmation)
             return try await methods()
-        }, disconnectApple: {
+        }, disconnectApple: { password in
             try checkAccount()
-            try await auth.unlinkApple()
+            try await auth.unlinkApple(password: password)
             return try await methods()
         }, exportAccount: {
             try checkAccount()

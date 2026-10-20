@@ -203,7 +203,7 @@ final class SessionBridgeTests: XCTestCase {
 
     // MARK: Account actions
 
-    func testLinkingAndUnlinkingAppleUpdatesSignInMethods() async throws {
+    func testLinkingAndUnlinkingAppleSendsThePasswordAndUpdatesSignInMethods() async throws {
         let auth = try await signedIn(password: true, apple: false)
         XCTAssertEqual(auth.signInMethods, SignInMethods(password: true, apple: false))
         var calls: [String] = []
@@ -213,13 +213,16 @@ final class SessionBridgeTests: XCTestCase {
                 let body = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
                 XCTAssertEqual(body?["identityToken"] as? String, "apple-jwt")
                 XCTAssertEqual(body?["nonce"] as? String, "raw-nonce")
+                XCTAssertEqual(body?["password"] as? String, "synthetic-password")
                 return (201, Self.json(["provider": "apple", "connected": true]))
             }
+            let body = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
+            XCTAssertEqual(body?["password"] as? String, "synthetic-password")
             return (200, Self.json(["provider": "apple", "connected": false]))
         }
-        try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce")
+        try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce", confirmation: .password("synthetic-password"))
         XCTAssertEqual(auth.signInMethods?.apple, true)
-        try await auth.unlinkApple()
+        try await auth.unlinkApple(password: "synthetic-password")
         XCTAssertEqual(auth.signInMethods?.apple, false)
         XCTAssertEqual(calls, ["POST /api/account/identities/apple", "DELETE /api/account/identities/apple"])
     }
@@ -228,7 +231,7 @@ final class SessionBridgeTests: XCTestCase {
         let auth = try await signedIn()
         StubURLProtocol.handler = { _ in (409, Self.json(["message": "This Apple ID is connected to another Exerly account"])) }
         do {
-            try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce")
+            try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce", confirmation: .password("synthetic-password"))
             XCTFail("Expected linkConflict")
         } catch ExerlyCore.APIError.linkConflict {}
         XCTAssertEqual(auth.signInMethods?.apple, false)

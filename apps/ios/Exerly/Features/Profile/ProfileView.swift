@@ -119,7 +119,7 @@ struct ProfileView: View {
             .accessibilityLabel("Apple Health")
             if let api = authVM.accountAPI {
                 NavigationLink {
-                    AgentConnectionsView(api: api).id(api.accountID)
+                    AgentConnectionsView(api: api, hasPassword: authVM.signInMethods?.password != false).id(api.accountID)
                 } label: {
                     ProfileRow(title: "Connected agents", icon: "key.fill", subtitle: "Let an AI assistant read and propose changes")
                 }

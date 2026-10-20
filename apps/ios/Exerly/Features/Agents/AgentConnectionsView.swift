@@ -9,7 +9,9 @@ struct AgentConnectionsView: View {
     @AccessibilityFocusState private var errorFocused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    init(api: AccountAPI) { _model = StateObject(wrappedValue: AgentConnectionsModel(api: api)) }
+    init(api: AccountAPI, hasPassword: Bool) {
+        _model = StateObject(wrappedValue: AgentConnectionsModel(api: api, hasPassword: hasPassword))
+    }
 
     var body: some View {
         ExList {
@@ -108,9 +110,12 @@ private struct NewAgentConnectionView: View {
     @State private var permission = AgentConnectionsModel.Permission.propose
     @State private var expiry = 30
     @State private var confirmingWrite = false
+    @State private var password = ""
+    @State private var pendingApple: AccountConfirmation?
     @State private var revealing = false
     @State private var copied = false
     @FocusState private var nameFocused: Bool
+    @FocusState private var passwordFocused: Bool
     @AccessibilityFocusState private var errorFocused: Bool
 
     var body: some View {
@@ -186,12 +191,36 @@ private struct NewAgentConnectionView: View {
                         }
                     }
                     Section {
-                        if model.isBusy { ProgressView("Creating access…") }
-                        Button("Create access token") {
-                            if permission == .write { confirmingWrite = true } else { create() }
+                        if model.confirmsWithApple {
+                            AppleAuthorizationButton { payload in
+                                guard !model.isBusy, !nameMissing else { return }
+                                pendingApple = .apple(identityToken: payload.identityToken, rawNonce: payload.rawNonce,
+                                                      authorizationCode: nil)
+                                if permission == .write { confirmingWrite = true } else { create() }
+                            }
+                            .disabled(model.isBusy || nameMissing)
+                        } else {
+                            SecureField("Password", text: $password)
+                                .textContentType(.password)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .focused($passwordFocused).submitLabel(.done)
+                                .onSubmit { passwordFocused = false }
+                                .accessibilityIdentifier("agents.password")
                         }
-                        .disabled(model.isBusy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .accessibilityIdentifier("agents.confirmCreate").buttonStyle(ExActionStyle())
+                        if model.isBusy { ProgressView("Creating access…") }
+                        if !model.confirmsWithApple {
+                            Button("Create access token") {
+                                if permission == .write { confirmingWrite = true } else { create() }
+                            }
+                            .disabled(model.isBusy || nameMissing || password.isEmpty)
+                            .accessibilityIdentifier("agents.confirmCreate").buttonStyle(ExActionStyle())
+                        }
+                    } header: {
+                        Text("Confirm it’s you")
+                    } footer: {
+                        Text(model.confirmsWithApple
+                             ? "The token keeps working after you sign out, so Sign in with Apple again to create it."
+                             : "The token keeps working after you sign out, so enter the password you sign in with.")
                     }
                 }
                 if let error = model.error {
@@ -206,7 +235,7 @@ private struct NewAgentConnectionView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
-                    Button("Done") { nameFocused = false }
+                    Button("Done") { nameFocused = false; passwordFocused = false }
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button(model.created == nil ? "Cancel" : "Close") { close() }
@@ -216,7 +245,7 @@ private struct NewAgentConnectionView: View {
             .onChange(of: scenePhase) { _, phase in if phase != .active { revealing = false } }
             .onDisappear { model.clearSecret() }
             .alert("Allow direct changes?", isPresented: $confirmingWrite) {
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) { pendingApple = nil }
                 Button("Allow direct write", role: .destructive) { create() }
             } message: {
                 Text("This agent can create, edit and delete your records without asking you to review a suggestion first. Choose Read and propose if you want to approve changes.")
@@ -232,8 +261,17 @@ private struct NewAgentConnectionView: View {
         }
     }
 
+    private var nameMissing: Bool { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     private func create() {
-        Task { await model.create(name: name, permission: permission, expiresInDays: expiry) }
+        passwordFocused = false
+        let confirmation = pendingApple ?? .password(password)
+        pendingApple = nil
+        Task {
+            let created = await model.create(name: name, permission: permission, expiresInDays: expiry,
+                                             confirmation: confirmation)
+            if !created, case .password = confirmation { password = "" }
+        }
     }
 
     private func close() { model.clearSecret(); dismiss() }

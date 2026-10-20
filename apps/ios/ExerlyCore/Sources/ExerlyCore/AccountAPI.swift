@@ -16,25 +16,38 @@ public protocol SessionTransport: Sendable {
               as accountID: String) async throws -> (status: Int, data: Data)
 }
 
-/// How the person shows it's them before their account is deleted. The server
-/// checks it as well as the session, so an unlocked phone or a copied session
-/// isn't enough.
+/// How the person shows it's them, not just someone holding the session,
+/// before the account is deleted, Apple is connected or disconnected, or an
+/// agent token is created. A password account always uses `.password`, even
+/// with Apple connected; an account without one uses `.apple`.
 public enum AccountConfirmation: Sendable, Equatable {
     /// The account's password.
     case password(String)
-    /// A Sign in with Apple authorization from moments ago: its identity token
-    /// and raw nonce, and its authorization code, with which the server revokes
-    /// Apple's authorization when it can.
+    /// A Sign in with Apple authorization from moments ago, as an Apple ID the
+    /// account already has: its identity token and raw nonce, and its
+    /// authorization code, with which the server revokes Apple's authorization
+    /// when the account is deleted.
     case apple(identityToken: String, rawNonce: String, authorizationCode: String?)
 
-    var body: [String: Any] {
+    var fields: [String: Any] {
         switch self {
-        case .password(let password):
-            return ["confirm": true, "password": password]
-        case let .apple(identityToken, rawNonce, authorizationCode):
-            var body: [String: Any] = ["confirm": true, "identityToken": identityToken, "nonce": rawNonce]
-            if let authorizationCode { body["appleAuthorizationCode"] = authorizationCode }
-            return body
+        case .password(let password): ["password": password]
+        case let .apple(identityToken, rawNonce, _): ["identityToken": identityToken, "nonce": rawNonce]
+        }
+    }
+
+    var body: [String: Any] {
+        var body = fields.merging(["confirm": true]) { current, _ in current }
+        if case .apple(_, _, let authorizationCode?) = self { body["appleAuthorizationCode"] = authorizationCode }
+        return body
+    }
+
+    /// Connecting Apple sends the new Apple ID as `identityToken`, so an Apple
+    /// confirmation travels as `currentIdentityToken`.
+    var linkFields: [String: Any] {
+        switch self {
+        case .password(let password): ["password": password]
+        case let .apple(identityToken, rawNonce, _): ["currentIdentityToken": identityToken, "currentNonce": rawNonce]
         }
     }
 }
@@ -80,20 +93,23 @@ public struct AccountAPI: DocumentAPI {
 
     // MARK: Account lifecycle
 
-    /// Connects Sign in with Apple to this account. Throws `linkConflict`
-    /// when that Apple ID belongs to another Exerly account.
-    public func connectApple(identityToken: String, rawNonce: String) async throws {
-        let (status, json) = try await sendJSON("POST", "/api/account/identities/apple",
-                                                body: ["identityToken": identityToken, "nonce": rawNonce])
+    /// Connects Sign in with Apple to this account, once `confirmation` shows
+    /// it's the account's owner. Throws `linkConflict` when that Apple ID
+    /// belongs to another Exerly account, and the confirmation errors
+    /// `deleteAccount(confirmation:)` describes.
+    public func connectApple(identityToken: String, rawNonce: String,
+                             confirmation: AccountConfirmation) async throws {
+        let body = confirmation.linkFields.merging(["identityToken": identityToken, "nonce": rawNonce]) { _, new in new }
+        let (status, json) = try await sendJSON("POST", "/api/account/identities/apple", body: body)
         if status == 409 { throw APIError.linkConflict }
-        guard status == 200 || status == 201 else { throw Wire.failure(status, json) }
+        guard status == 200 || status == 201 else { throw Self.confirmationFailure(status, json) }
     }
 
-    /// Disconnects Sign in with Apple. Refused for an account with no password,
-    /// which could not sign in again.
-    public func disconnectApple() async throws {
-        let (status, json) = try await sendJSON("DELETE", "/api/account/identities/apple", body: nil)
-        guard status == 200 else { throw Wire.failure(status, json) }
+    /// Disconnects Sign in with Apple, given the account's password. Refused
+    /// for an account with no password, which could not sign in again.
+    public func disconnectApple(password: String) async throws {
+        let (status, json) = try await sendJSON("DELETE", "/api/account/identities/apple", body: ["password": password])
+        guard status == 200 else { throw Self.confirmationFailure(status, json) }
     }
 
     /// The full JSON export.
@@ -132,13 +148,15 @@ public struct AccountAPI: DocumentAPI {
     /// deletion the session owner forgets the session.
     public func deleteAccount(confirmation: AccountConfirmation) async throws {
         let (status, json) = try await sendJSON("DELETE", "/api/account", body: confirmation.body)
-        guard status == 200 else {
-            switch (status, Wire.code(json)) {
-            case (400, "apple_reauthorization_required"): throw APIError.appleReauthorizationRequired
-            case (400, "password_required"): throw APIError.passwordRequired
-            case (403, "wrong_password"): throw APIError.wrongPassword
-            default: throw Wire.failure(status, json)
-            }
+        guard status == 200 else { throw Self.confirmationFailure(status, json) }
+    }
+
+    private static func confirmationFailure(_ status: Int, _ json: Any?) -> Error {
+        switch (status, Wire.code(json)) {
+        case (400, "apple_reauthorization_required"): APIError.appleReauthorizationRequired
+        case (400, "password_required"): APIError.passwordRequired
+        case (403, "wrong_password"): APIError.wrongPassword
+        default: Wire.failure(status, json)
         }
     }
 
@@ -153,16 +171,19 @@ public struct AccountAPI: DocumentAPI {
         return try rows.map(AccessToken.init(json:))
     }
 
-    /// Creates a token for the person's own agent. Every token can read;
-    /// `propose` lets it file proposals and `write` lets it change data. The
-    /// secret is returned here once and never again.
-    public func createAccessToken(name: String, scopes: Set<AccessToken.Scope>,
-                                  expiresInDays: Int? = nil) async throws -> CreatedAccessToken {
+    /// Creates a token for the person's own agent, once `confirmation` shows
+    /// it's the account's owner: a token outlives the session. Every token can
+    /// read; `propose` lets it file proposals and `write` lets it change data.
+    /// The secret is returned here once and never again. Throws the
+    /// confirmation errors `deleteAccount(confirmation:)` describes.
+    public func createAccessToken(name: String, scopes: Set<AccessToken.Scope>, expiresInDays: Int? = nil,
+                                  confirmation: AccountConfirmation) async throws -> CreatedAccessToken {
         let all = scopes.union([.read])
         var body: [String: Any] = ["name": name, "scopes": AccessToken.Scope.allCases.filter(all.contains).map(\.rawValue)]
         if let expiresInDays { body["expires_in_days"] = expiresInDays }
+        body.merge(confirmation.fields) { current, _ in current }
         let (status, json) = try await sendJSON("POST", "/v1/tokens", body: body)
-        guard status == 201, let row = json as? [String: Any] else { throw Wire.failure(status, json) }
+        guard status == 201, let row = json as? [String: Any] else { throw Self.confirmationFailure(status, json) }
         guard let secret = row["token"] as? String else {
             throw APIError.server(status: 409, message: "The token was created, but its secret can only be shown once. Revoke it and create another.")
         }
