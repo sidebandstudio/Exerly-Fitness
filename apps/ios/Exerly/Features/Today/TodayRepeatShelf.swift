@@ -10,13 +10,14 @@ struct TodayRepeatChip: View {
     let repeated: MealRepeat
     var logged = false
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: ExSpacing.small) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(2)
-                    Text(detail).font(.exSmall).foregroundStyle(Color.exTextSecondary).lineLimit(1)
+                    Text(title).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+                    Text(detail).font(.exSmall).foregroundStyle(Color.exTextSecondary).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 Image(systemName: logged ? "checkmark" : "arrow.counterclockwise").font(.system(size: 15, weight: .bold))
@@ -62,8 +63,11 @@ struct TodayRepeatDayButton: View {
         Button(action: action) {
             if row {
                 HStack(spacing: ExSpacing.item) {
-                    Image(systemName: "arrow.counterclockwise").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 32, height: 32).background(Color.exActionFill, in: Circle()).accessibilityHidden(true)
+                    // As Today's shortcuts do, the text takes the width at the largest sizes.
+                    if !typeSize.isAccessibilitySize {
+                        Image(systemName: "arrow.counterclockwise").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 32, height: 32).background(Color.exActionFill, in: Circle()).accessibilityHidden(true)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title).font(.exLabel).foregroundStyle(Color.exTextPrimary)
                         Text(detail).font(.exSmall).foregroundStyle(Color.exTextSecondary)
@@ -79,7 +83,9 @@ struct TodayRepeatDayButton: View {
                 Label(title, systemImage: "arrow.counterclockwise").font(.exLabel.weight(.semibold))
                     .foregroundStyle(Color.exPrimaryText).multilineTextAlignment(.leading)
                     .padding(.horizontal, ExSpacing.item).frame(minHeight: 36)
-                    .background(Color.exPrimary.opacity(0.16), in: Capsule())
+                    .padding(.vertical, typeSize.isAccessibilitySize ? ExSpacing.small : 0)
+                    .background(Color.exPrimary.opacity(0.16),
+                                in: typeSize.isAccessibilitySize ? AnyShape(RoundedRectangle(cornerRadius: 16, style: .continuous)) : AnyShape(Capsule()))
                     .frame(minHeight: 44).contentShape(Rectangle())
             }
         }

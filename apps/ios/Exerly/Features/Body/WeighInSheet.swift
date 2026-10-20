@@ -453,7 +453,7 @@ private struct WeighInDetent: CustomPresentationDetent {
 
 /// Tall enough for the number, the keypad and Save, without a gap under the keypad.
 private struct WeighInTypingDetent: CustomPresentationDetent {
-    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 600) }
+    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 560) }
 }
 
 extension PresentationDetent {
