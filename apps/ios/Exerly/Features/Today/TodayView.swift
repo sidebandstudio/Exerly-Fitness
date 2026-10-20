@@ -179,6 +179,17 @@ struct TodayView: View {
     private var currentMeal: String { store.suggestedMeal(at: .now, timeZone: timeZone) }
     private var layout: TodayLayout { TodayLayout(layoutText) }
 
+    /// The visible cards in order. At the largest text sizes the standard
+    /// order puts today's workout, with Start, right under the shortcuts and
+    /// Log again, above the ring; an order someone chose stays theirs.
+    private var cardOrder: [TodayLayout.Card] {
+        guard typeSize.isAccessibilitySize, layout.order == TodayLayout.standard.order else { return layout.visible }
+        var order = layout.order
+        order.removeAll { $0 == .training }
+        order.insert(.training, at: (order.firstIndex(of: .quickActions) ?? -1) + 1)
+        return order.filter { !layout.hidden.contains($0) }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ExSpacing.content) {
@@ -202,8 +213,12 @@ struct TodayView: View {
                 // first: under the ring, a check-in or a pinned nutrient put them
                 // behind an SE's tab bar (run 6). "Log again" follows the ring, or
                 // the shortcuts when the ring is hidden.
-                let visible = layout.visible
-                let logAgainAfter = visible.first { $0 == .nutrition } ?? visible.first { $0 == .quickActions }
+                let visible = cardOrder
+                // At the largest text sizes the ring and macros fill a screen
+                // and more, so the logging tools go above them.
+                let logAgainAfter = typeSize.isAccessibilitySize
+                    ? visible.first { $0 == .quickActions } ?? visible.first { $0 == .nutrition }
+                    : visible.first { $0 == .nutrition } ?? visible.first { $0 == .quickActions }
                 // A waiting check-in follows today's workout, so it doesn't push
                 // Start below the fold (code-blind run, 2026-10-20).
                 let checkInAfter = visible.first { $0 == .training } ?? logAgainAfter
@@ -427,22 +442,28 @@ struct TodayView: View {
 
     // MARK: Logging
 
-    private var quickActions: some View {
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: ExSpacing.small)) : AnyLayout(HStackLayout(spacing: ExSpacing.small))
-        return layout {
-            TodayQuickAction(title: "Search", icon: "magnifyingglass", identifier: "nutrition.addFood") {
-                destination = .add(defaultMeal)
+    /// A row of four, or two by two at the largest text sizes, where four
+    /// full-width rows pushed everything else a screen down.
+    @ViewBuilder private var quickActions: some View {
+        let search = TodayQuickAction(title: "Search", icon: "magnifyingglass", identifier: "nutrition.addFood") {
+            destination = .add(defaultMeal)
+        }
+        let scan = TodayQuickAction(title: "Scan", icon: "barcode.viewfinder", identifier: "nutrition.scanBarcodeDirect") {
+            destination = .scan(defaultMeal)
+        }
+        let quick = TodayQuickAction(title: "Quick add", icon: "bolt.fill", identifier: "today.quickAdd") {
+            destination = .quick(defaultMeal)
+        }
+        let weigh = TodayQuickAction(title: "Weigh in", icon: "scalemass.fill", identifier: "today.weighIn") {
+            destination = .weighIn
+        }
+        if typeSize.isAccessibilitySize {
+            Grid(horizontalSpacing: ExSpacing.small, verticalSpacing: ExSpacing.small) {
+                GridRow { search; scan }
+                GridRow { quick; weigh }
             }
-            TodayQuickAction(title: "Scan", icon: "barcode.viewfinder", identifier: "nutrition.scanBarcodeDirect") {
-                destination = .scan(defaultMeal)
-            }
-            TodayQuickAction(title: "Quick add", icon: "bolt.fill", identifier: "today.quickAdd") {
-                destination = .quick(defaultMeal)
-            }
-            TodayQuickAction(title: "Weigh in", icon: "scalemass.fill", identifier: "today.weighIn") {
-                destination = .weighIn
-            }
+        } else {
+            HStack(spacing: ExSpacing.small) { search; scan; quick; weigh }
         }
     }
 
