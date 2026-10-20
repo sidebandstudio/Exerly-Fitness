@@ -25,19 +25,13 @@ final class BodyUITests: ExerlyUITestCase {
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 5))
         XCTAssertEqual(value.label, "Weight, 184.6 pounds", "The sheet starts on the last reading")
-        let ruler = app.descendants(matching: .any)["weighIn.ruler"]
-        XCTAssertTrue(ruler.exists)
-        // One drag to the left moves the scale up about four ticks of 0.1 lb.
-        let start = ruler.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -41, dy: 0)), withVelocity: .slow,
-                    thenHoldForDuration: 0.1)
-        tapCount += 1
-        let entered = try XCTUnwrap(Double(value.label.replacingOccurrences(of: "Weight, ", with: "")
-            .replacingOccurrences(of: " pounds", with: "")))
-        XCTAssertGreaterThan(entered, 184.6)
-        XCTAssertLessThan(entered, 186)
+        XCTAssertTrue(app.buttons["exerly.keypadDone"].exists, "Ready to type the scale's number")
+        // Typed over the last reading. Typing isn't counted, for Exerly or
+        // MacroFactor, in docs/TAP_BUDGETS.md.
+        for key in ["1", "8", "5", Locale.current.decimalSeparator ?? ".", "2"] { app.buttons["exerly.keypad.\(key)"].tap() }
+        let entered = 185.2
         tap(app.buttons["weighIn.save"], in: app)
-        XCTAssertLessThanOrEqual(tapCount, 3, "A weigh-in takes at most three taps from its button")
+        XCTAssertLessThanOrEqual(tapCount, 2, "A weigh-in takes two taps from its button")
         XCTAssertTrue(app.buttons["Progress"].waitForExistence(timeout: 5))
         let today = Self.day(0).date
         XCTAssertTrue(app.descendants(matching: .any)["body.weighIn.\(today)"].waitForExistence(timeout: 10))
@@ -66,6 +60,8 @@ final class BodyUITests: ExerlyUITestCase {
         try await control(["offline": true])
         tap(app.buttons["body.weighIn"], in: app)
         XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.3 kilograms")
+        // Done puts the keypad away for the ruler and its steps.
+        tap(app.buttons["exerly.keypadDone"], in: app)
         tap(app.buttons["weighIn.increase"], in: app)
         tap(app.buttons["weighIn.increase"], in: app)
         XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.5 kilograms")
@@ -193,7 +189,6 @@ final class BodyUITests: ExerlyUITestCase {
         XCTAssertTrue(app.buttons["weighIn.value"].waitForExistence(timeout: 5))
         try await Task.sleep(for: .seconds(0.6))
         capture(app, "body-04-weigh-in")
-        app.buttons["weighIn.value"].tap()
         app.buttons["exerly.keypad.1"].tap()
         app.buttons["exerly.keypad.8"].tap()
         try await Task.sleep(for: .seconds(0.6))
@@ -201,6 +196,7 @@ final class BodyUITests: ExerlyUITestCase {
         app.buttons["exerly.keypadDone"].tap()
         app.buttons["weighIn.cancel"].tap()
         tap(app.buttons["body.weighIn"], in: app)
+        tap(app.buttons["exerly.keypadDone"], in: app)
         let ruler = app.descendants(matching: .any)["weighIn.ruler"]
         let start = ruler.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 31, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.1)

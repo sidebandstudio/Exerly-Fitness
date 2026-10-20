@@ -2,9 +2,10 @@ import ExerlyCore
 import SwiftUI
 import UIKit
 
-/// A weigh-in in three taps: open it on the last reading, drag the ruler once
-/// (or tap ±, or tap the number to type), then Save. Also edits a saved one:
-/// its weight, body fat, day and time.
+/// A weigh-in in two taps: it opens on the last reading with the keypad up,
+/// so the scale's number is typed straight over it, then Save (Save alone
+/// keeps the last reading). Done puts the keypad away for the ruler, ± and
+/// body fat. Also edits a saved one: its weight, body fat, day and time.
 struct WeighInSheet: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
@@ -55,8 +56,10 @@ struct WeighInSheet: View {
         _bodyFat = State(initialValue: editing?.bodyFat)
         _date = State(initialValue: editing?.date ?? date ?? LocalDate(Date(), in: timeZone))
         _time = State(initialValue: editing?.at ?? Date())
-        // An edit has more to show (day, time, Delete) and isn't the three-tap path.
-        _detent = State(initialValue: editing == nil ? .weighIn : .large)
+        // A new weigh-in is typed (docs/TAP_BUDGETS.md); an edit has more to
+        // show (day, time, Delete) and starts on its reading.
+        _typing = State(initialValue: editing == nil ? .weight : nil)
+        _detent = State(initialValue: .large)
     }
 
     private var range: ClosedRange<Double> { WeightRuler.range(for: unit) }
