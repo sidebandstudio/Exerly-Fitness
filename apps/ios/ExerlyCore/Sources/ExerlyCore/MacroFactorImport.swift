@@ -148,12 +148,19 @@ public struct MacroFactorImport {
         func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws -> PlannedWrite {
             PlannedWrite(kind: kind, id: id, before: nil, after: try ExerlyJSON.canonical(value))
         }
+        // A day's foods and the daily total they replace are saved, and undone, together.
+        func day(_ date: LocalDate) -> String { "food/\(date)" }
         var writes: [PlannedWrite] = []
         writes += try foods.map { try add(NutritionStore.foodKind, $0.id, $0) }
-        writes += try entries.map { try add(NutritionStore.entryKind, $0.id.uuidString, $0) }
+        writes += try entries.map { entry in
+            var write = try add(NutritionStore.entryKind, entry.id.uuidString, entry)
+            write.group = day(entry.date)
+            return write
+        }
         writes += try removedTotals.map { id in
-            PlannedWrite(kind: NutritionStore.entryKind, id: id.uuidString,
-                         before: try nutrition.payload(kind: NutritionStore.entryKind, id: id.uuidString), after: nil)
+            let before = try nutrition.payload(kind: NutritionStore.entryKind, id: id.uuidString)
+            let date = before.flatMap { try? ExerlyJSON.decoder.decode(FoodEntry.self, from: $0) }?.date
+            return PlannedWrite(kind: NutritionStore.entryKind, id: id.uuidString, before: before, after: nil, group: date.map(day))
         }
         writes += try totals.map { try add(NutritionStore.entryKind, $0.id.uuidString, $0) }
         writes += try days.map { day in

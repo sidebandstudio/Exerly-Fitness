@@ -67,6 +67,9 @@ public struct PlannedWrite: Sendable, Hashable {
     public var before: Data?
     /// The document to save; nil to remove `before`.
     public var after: Data?
+    /// Writes that only make sense together, such as a day's foods and the
+    /// daily total they replace, share a group.
+    public var group: String?
 }
 
 /// A file read and checked against what Exerly already has, before anything
@@ -131,6 +134,7 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
         public var before: Data?
         /// A fingerprint of what the import saved; nil when it removed the document.
         public var after: String?
+        public var group: String?
     }
 
     public var id: UUID
@@ -157,6 +161,8 @@ public struct HistoryImporter {
         public var kept: Int
         /// Custom exercises the import added, kept in the library.
         public var keptExercises: Int
+        /// Groups kept whole as imported, because one of their documents changed since.
+        public var keptGroups: [String] = []
 
         public init(undone: Int, kept: Int, keptExercises: Int = 0) {
             self.undone = undone
@@ -166,6 +172,8 @@ public struct HistoryImporter {
     }
 
     public enum ImportError: Error, Equatable {
+        /// What the plan expected changed since it was made: read the file again.
+        case stale
         case noStore(String)
         case invalid(String)
         case alreadyUndone
@@ -192,9 +200,9 @@ public struct HistoryImporter {
             .sorted { $0.importedAt > $1.importedAt }
     }
 
-    /// Saves everything in the plan, or nothing. A document that changed since
-    /// the plan was made, from a sync say, is left as it is now, so a stale
-    /// preview never overwrites newer data. Importing the same file again adds
+    /// Saves everything in the plan, or nothing. If any document changed since
+    /// the plan was made, from a sync say, it throws `stale` and saves nothing:
+    /// read the file again for a new plan. Importing the same file again adds
     /// nothing, not even a record: its documents are already there.
     @discardableResult
     public func commit(_ plan: HistoryImportPlan) throws -> ImportRecord {
@@ -205,11 +213,13 @@ public struct HistoryImporter {
                 var writes: [DocumentWrite] = []
                 for write in plan.writes where write.kind == kind {
                     let current = try host.payload(kind: kind, id: write.id)
-                    guard current == write.before else { continue }
+                    // Something changed since the preview, from a sync say. Saving part
+                    // of the plan could count a day twice, so none of it is saved.
+                    guard current == write.before else { throw ImportError.stale }
                     let after = try write.after.map { try host.canonicalize(kind: kind, payload: $0) }
                     guard after != current else { continue }
                     writes.append(DocumentWrite(kind: kind, id: write.id, payload: after))
-                    changes.append(.init(kind: kind, id: write.id, before: current, after: after.map(Self.fingerprint)))
+                    changes.append(.init(kind: kind, id: write.id, before: current, after: after.map(Self.fingerprint), group: write.group))
                 }
                 if !writes.isEmpty { batches.append((host, kind, writes)) }
             }
@@ -227,12 +237,22 @@ public struct HistoryImporter {
     }
 
     /// Removes what an import added and puts back what it replaced. A document
-    /// edited since the import is kept as it is now.
+    /// edited since the import is kept as it is now, and so is the rest of its
+    /// group: a day whose imported food was corrected keeps its imported foods
+    /// rather than getting back the daily total they replaced beside them.
     @discardableResult
     public func undo(_ id: UUID) throws -> UndoResult {
         guard var record = try records().first(where: { $0.id == id }) else { throw ImportError.invalid("That import isn't in this account") }
         guard record.undoneAt == nil else { throw ImportError.alreadyUndone }
         var result = UndoResult(undone: 0, kept: 0, keptExercises: 0)
+        // A document changed since the import keeps its whole group as imported.
+        var changedGroups = Set<String>()
+        for change in record.changes {
+            guard let group = change.group, let host = hosts.first(where: { $0.documentKinds.contains(change.kind) }) else { continue }
+            let current = try host.payload(kind: change.kind, id: change.id)
+            if current.map(Self.fingerprint) != change.after && current != change.before { changedGroups.insert(group) }
+        }
+        result.keptGroups = changedGroups.sorted()
         var batches: [(host: DocumentHost, kind: String, writes: [DocumentWrite])] = []
         for host in hosts {
             for kind in host.documentKinds {
@@ -241,6 +261,10 @@ public struct HistoryImporter {
                     // Custom exercises are never deleted: workouts may use them.
                     if kind == TrainingStore.exerciseKind && change.before == nil {
                         result.keptExercises += 1
+                        continue
+                    }
+                    if let group = change.group, changedGroups.contains(group) {
+                        result.kept += 1
                         continue
                     }
                     let current = try host.payload(kind: kind, id: change.id)
@@ -299,6 +323,7 @@ public struct HistoryImporter {
         case ImportError.invalid(let message): message
         case ImportError.noStore(let kind): "Exerly can't keep \(kind) documents on this device"
         case ImportError.alreadyUndone: "This import was already undone"
+        case ImportError.stale: "Your data changed since this preview, so it was read again"
         case let error as DocumentError: error.message
         case NutritionStore.StoreError.invalid(let problems): problems.joined(separator: "; ")
         case TrainingStore.StoreError.edit(let problem): "A workout isn't valid: \(problem)"

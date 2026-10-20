@@ -228,14 +228,17 @@ import Testing
         #expect(try importer.records().isEmpty, "No record of an import that didn't happen")
     }
 
-    @Test func aDocumentThatArrivedAfterThePreviewIsKept() throws {
+    @Test func aDocumentThatArrivedAfterThePreviewMakesItReadAgain() throws {
         let (_, nutrition, training, importer) = try stores()
         let preview = try plan(Self.strong, options: .init(timeZone: Fixture.utc, unit: .kilograms), hosts: [training, nutrition])
         // The same workout synced from another device in the meantime, with a note.
         var synced = try ExerlyJSON.decoder.decode(WorkoutSession.self, from: preview.writes[0].after!)
         synced.notes = "From the other phone"
         try training.importSessions([synced])
-        let record = try importer.commit(preview)
+        #expect(throws: HistoryImporter.ImportError.stale) { try importer.commit(preview) }
+        #expect(training.history.sessions.count == 1, "Nothing saved from the stale preview")
+        let again = try plan(Self.strong, options: .init(timeZone: Fixture.utc, unit: .kilograms), hosts: [training, nutrition])
+        let record = try importer.commit(again)
         #expect(record.added == 1 && training.history.session(synced.id)?.notes == "From the other phone")
     }
 
@@ -321,6 +324,67 @@ import Testing
         let again = try HistoryImportReader.plan(try HistoryImportReader.read([("exerly-export.json", first)], options: options, library: library),
                                                  files: [], options: options, hosts: [freshTraining, freshNutrition])
         #expect(again.isEmpty)
+    }
+
+    // MARK: A daily total and the foods that replace it
+
+    /// MacroFactor's Quick Export: Oct 1 as one daily total of 2000 kcal.
+    static let quickExport: [(name: String, rows: [[TestCell]])] = [
+        ("Calories & Macros", [[.s("Date"), .s("Calories (kcal)"), .s("Protein (g)")], [.date(46296), .n(2000), .n(140)]]),
+    ]
+    let october1 = LocalDate("2026-10-01")!
+
+    func macroFactorPlan(_ sheets: [(name: String, rows: [[TestCell]])], hosts: [DocumentHost]) throws -> HistoryImportPlan {
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        let parsed = try HistoryImportReader.read([("MacroFactor.xlsx", try XLSXBuilder(sheets).data())], options: options,
+                                                  library: library, now: Fixture.instant())
+        return try HistoryImportReader.plan(parsed, files: ["MacroFactor.xlsx"], options: options, hosts: hosts)
+    }
+
+    /// Changes an entry as a sync from another device would.
+    func edit(_ entry: FoodEntry, grams: Double, in nutrition: NutritionStore, _ persistence: InMemoryTrainingPersistence) throws {
+        var changed = entry
+        changed.grams = grams
+        try persistence.performAtomically {
+            try nutrition.prepareWrite(kind: "food_entry", id: entry.id.uuidString, payload: ExerlyJSON.canonical(changed))()
+        }
+    }
+
+    @Test func aPreviewMadeStaleBySyncIsRebuiltNotSavedOverTheChange() throws {
+        let (persistence, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        try importer.commit(try macroFactorPlan(Self.quickExport, hosts: hosts))
+        let granular = try macroFactorPlan(MacroFactorFixture.sheets, hosts: hosts)
+        #expect(granular.writes.contains { $0.after == nil && $0.group == "food/2026-10-01" }, "The food log replaces Oct 1's total")
+        // Another device changes Oct 1's total before this preview is imported.
+        let total = try #require(nutrition.entries(on: october1).first { $0.food.name == MacroFactorExport.dayTotalName })
+        try edit(total, grams: 110, in: nutrition, persistence)
+        let documents = persistence.documents
+        #expect(throws: HistoryImporter.ImportError.stale) { try importer.commit(granular) }
+        #expect(persistence.documents == documents, "Nothing saved from the stale preview")
+        // Read again, the import replaces the changed total too, so Oct 1 counts once.
+        try importer.commit(try macroFactorPlan(MacroFactorFixture.sheets, hosts: hosts))
+        #expect(!nutrition.entries(on: october1).contains { $0.food.name == MacroFactorExport.dayTotalName })
+        #expect(close(nutrition.summary(on: october1).totals.energy, 738))
+    }
+
+    @Test func undoNeverBringsBackATotalBesideFoodsThatReplacedIt() throws {
+        let (persistence, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        try importer.commit(try macroFactorPlan(Self.quickExport, hosts: hosts))
+        let granular = try importer.commit(try macroFactorPlan(MacroFactorFixture.sheets, hosts: hosts))
+        #expect(close(nutrition.summary(on: october1).totals.energy, 738))
+        // One of Oct 1's imported foods is corrected in Exerly.
+        let oats = try #require(nutrition.entries(on: october1).first { $0.food.name != MacroFactorExport.dayTotalName })
+        try edit(oats, grams: oats.grams * 2, in: nutrition, persistence)
+        let corrected = nutrition.summary(on: october1).totals.energy
+
+        let undone = try importer.undo(granular.id)
+        #expect(undone.keptGroups == ["food/2026-10-01"])
+        #expect(!nutrition.entries(on: october1).contains { $0.food.name == MacroFactorExport.dayTotalName },
+                "Oct 1 stays as imported, with the correction, and without its old total")
+        #expect(close(nutrition.summary(on: october1).totals.energy, corrected))
+        #expect(nutrition.entries.allSatisfy { $0.date == october1 }, "Other days are undone")
     }
 
     /// Every store an account has, sharing one database, as the app's workspace does.

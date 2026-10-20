@@ -25,6 +25,8 @@ struct HistoryImportFlow: View {
     @State private var remapping: ExerciseMatch?
     @State private var showAllExercises = false
     @State private var confirmUndo = false
+    /// Why the preview shows again, after the data changed under it.
+    @State private var notice: String?
 
     struct ImportFile: Sendable {
         var name: String
@@ -290,6 +292,10 @@ struct HistoryImportFlow: View {
             // The source is in the title; at the largest sizes the eyebrow leaves it out.
             ExEyebrow(plan.isEmpty ? "Nothing new" : typeSize.isAccessibilitySize ? "Ready to import" : "Ready to import · \(plan.source.name)",
                       color: .exPrimaryText)
+            if let notice {
+                Label(notice, systemImage: "arrow.triangle.2.circlepath").font(.exCaption).foregroundStyle(Color.exInfo)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("import.stale")
+            }
             Text(range(plan.dateRange) ?? "No dated history").font(.exH2).foregroundStyle(Color.exTextPrimary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
             // At the largest sizes the action comes first, as it does elsewhere in Exerly.
@@ -302,6 +308,7 @@ struct HistoryImportFlow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("import.preview")
+        .onDisappear { notice = nil }
         if !plan.exercises.isEmpty { exercises(plan) }
         unitsCard(plan)
         losses(plan)
@@ -530,6 +537,12 @@ struct HistoryImportFlow: View {
                 await workspace.synchronize()
             } catch {
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
+                if case HistoryImporter.ImportError.stale = error {
+                    // A sync changed what the preview was based on: read the file again and show it.
+                    notice = "Your data changed while you were looking, from another device perhaps. Here's the preview again; nothing was saved."
+                    read()
+                    return
+                }
                 withAnimation(.snappy) { phase = .failed(HistoryImporter.describe(error), plan) }
             }
         }

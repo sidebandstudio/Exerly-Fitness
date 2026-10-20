@@ -63,6 +63,14 @@ final class ImportExportPresentationTests: XCTestCase {
         XCTAssertFalse(BringHistory.take(accountID: "bring-a"), "Only once")
     }
 
+    func testUndoNamesTheDaysItKeptWholeAndTheExercisesItKept() {
+        let result = HistoryImporter.UndoResult(undone: 9, kept: 4, keptExercises: 1)
+        var days = result
+        days.keptGroups = ["food/2026-10-01"]
+        XCTAssertEqual(ImportCopy.undone(days), "9 items removed or put back. Food on Oct 1 stays as imported, because you changed it since; "
+                       + "the daily total it replaced isn't brought back beside it. 1 custom exercise stays in your library.")
+    }
+
     func testUndoSaysWhatItKept() {
         XCTAssertEqual(ImportCopy.undone(.init(undone: 2, kept: 0)), "2 items removed or put back.")
         XCTAssertEqual(ImportCopy.undone(.init(undone: 1, kept: 1)),

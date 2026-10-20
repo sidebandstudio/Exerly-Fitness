@@ -238,9 +238,25 @@ enum ImportCopy {
     }
 
     static func undone(_ result: HistoryImporter.UndoResult) -> String {
-        let removed = "\(result.undone.formatted()) \(result.undone == 1 ? "item" : "items") removed or put back."
-        guard result.kept > 0 else { return removed }
-        return removed + " \(result.kept.formatted()) you changed since \(result.kept == 1 ? "was" : "were") kept."
+        var text = "\(result.undone.formatted()) \(result.undone == 1 ? "item" : "items") removed or put back."
+        let days = result.keptGroups.compactMap { $0.hasPrefix("food/") ? LocalDate(String($0.dropFirst(5))) : nil }
+        let inDays = days.isEmpty ? 0 : result.kept
+        if !days.isEmpty {
+            let calendar = Calendar(identifier: .gregorian)
+            let names = days.compactMap { day in
+                calendar.date(from: DateComponents(year: day.year, month: day.month, day: day.day, hour: 12))?
+                    .formatted(.dateTime.month(.abbreviated).day())
+            }
+            text += " Food on \(names.formatted(.list(type: .and))) stays as imported, because you changed it since; "
+                + "the daily \(days.count == 1 ? "total" : "totals") it replaced \(days.count == 1 ? "isn't" : "aren't") brought back beside it."
+        }
+        // Groups are counted in `kept` along with single documents changed since.
+        let others = max(0, result.kept - inDays)
+        if days.isEmpty, others > 0 { text += " \(others.formatted()) you changed since \(others == 1 ? "was" : "were") kept." }
+        if result.keptExercises > 0 {
+            text += " \(result.keptExercises.formatted()) custom \(result.keptExercises == 1 ? "exercise stays" : "exercises stay") in your library."
+        }
+        return text
     }
 }
 
