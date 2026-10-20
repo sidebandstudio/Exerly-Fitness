@@ -24,7 +24,7 @@ final class BodyUITests: ExerlyUITestCase {
         tap(open, in: app)
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 5))
-        XCTAssertEqual(value.label, "Weight, 184.6 pounds", "The sheet starts on the last reading")
+        XCTAssertTrue(value.label.contains("184.6 pounds is a placeholder"), "The last reading, as a placeholder: \(value.label)")
         XCTAssertTrue(app.buttons["exerly.keypadDone"].exists, "Ready to type the scale's number")
         // Typed over the last reading. Typing isn't counted, for Exerly or
         // MacroFactor, in docs/TAP_BUDGETS.md.
@@ -59,7 +59,7 @@ final class BodyUITests: ExerlyUITestCase {
 
         try await control(["offline": true])
         tap(app.buttons["body.weighIn"], in: app)
-        XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.3 kilograms")
+        XCTAssertTrue(app.buttons["weighIn.value"].label.contains("72.3 kilograms is a placeholder"), app.buttons["weighIn.value"].label)
         // Done puts the keypad away for the ruler and its steps.
         tap(app.buttons["exerly.keypadDone"], in: app)
         tap(app.buttons["weighIn.increase"], in: app)

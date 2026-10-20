@@ -115,7 +115,7 @@ final class TapBudgetUITests: ExerlyUITestCase {
         tap(app.buttons["today.weighIn"], in: app)
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 5))
-        XCTAssertTrue(value.label.hasPrefix("Weight, 181.4"), "Opens on the last reading: \(value.label)")
+        XCTAssertTrue(value.label.contains("181.4"), "Opens showing the last reading: \(value.label)")
         XCTAssertTrue(app.buttons["exerly.keypadDone"].exists, "With the keypad up")
         // Typing isn't counted, as it isn't for MacroFactor.
         for key in ["1", "8", "0", Locale.current.decimalSeparator ?? ".", "6"] { app.buttons["exerly.keypad.\(key)"].tap() }

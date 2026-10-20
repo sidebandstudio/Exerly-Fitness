@@ -246,7 +246,7 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         tap(app.buttons["today.weighIn"], in: app)
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 10))
-        XCTAssertEqual(value.label, "Weight, 181.4 pounds")
+        XCTAssertTrue(value.label.contains("181.4 pounds is a placeholder"), value.label)
         capture(app, "notify-weight-after")
         tap(app.buttons["weighIn.cancel"], in: app)
         let synced = try await waitForWeighIn(token: token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 181.4 }

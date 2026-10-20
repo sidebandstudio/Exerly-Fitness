@@ -86,6 +86,8 @@ final class TodayUITests: ExerlyUITestCase {
         let app = launch(resetSession: true)
         signIn(app, email: person.email)
         tap(app.buttons["today.weighIn"], in: app)
+        // No reading yet to use again: one is typed.
+        for key in ["1", "8", "1"] { tap(app.buttons["exerly.keypad.\(key)"], in: app) }
         tap(app.buttons["weighIn.save"], in: app)
         let undo = app.buttons["today.undoWeighIn"]
         XCTAssertTrue(undo.waitForExistence(timeout: 5))

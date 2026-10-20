@@ -2,10 +2,12 @@ import ExerlyCore
 import SwiftUI
 import UIKit
 
-/// A weigh-in in two taps: it opens on the last reading with the keypad up,
-/// so the scale's number is typed straight over it, then Save (Save alone
-/// keeps the last reading). Done puts the keypad away for the ruler, ± and
-/// body fat. Also edits a saved one: its weight, body fat, day and time.
+/// A weigh-in in two taps: it opens with the keypad up and the last reading
+/// as a placeholder, so the scale's number is typed and saved, or "Same as
+/// last" saves that reading again. Nothing is saved until a weight is chosen:
+/// typed, set on the ruler or ±, or the last one picked again. Done puts the
+/// keypad away for the ruler, ± and body fat. Also edits a saved one: its
+/// weight, body fat, day and time.
 struct WeighInSheet: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
@@ -14,6 +16,8 @@ struct WeighInSheet: View {
     private let onDeleted: (WeightEntry) -> Void
     private let onSaved: (WeightEntry) -> Void
     private let initialValue: Double
+    /// The latest reading, in `unit`, that "Same as last" saves again.
+    private let lastReading: Double?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -30,6 +34,10 @@ struct WeighInSheet: View {
     @State private var error: String?
     @State private var context: String?
     @State private var detent: PresentationDetent = .weighIn
+    /// True once the weight to save is the person's choice: always for an
+    /// edit; for a new weigh-in once typed, moved on the ruler or ±, or the
+    /// last reading picked again. Until then the number is only a placeholder.
+    @State private var chosen: Bool
 
     private enum Field { case weight, bodyFat }
 
@@ -52,6 +60,8 @@ struct WeighInSheet: View {
             ?? WeightTrend.suggestedReading(latest: latest?.weight, trend: nil, unit: unit)
             ?? (unit == .pounds ? 165 : 75)
         initialValue = start
+        lastReading = WeightTrend.suggestedReading(latest: latest?.weight, trend: nil, unit: unit)
+        _chosen = State(initialValue: editing != nil)
         _value = State(initialValue: start)
         _bodyFat = State(initialValue: editing?.bodyFat)
         _date = State(initialValue: editing?.date ?? date ?? LocalDate(Date(), in: timeZone))
@@ -175,6 +185,11 @@ struct WeighInSheet: View {
         }
     }
 
+    /// Nothing typed or chosen yet: the number shown is a placeholder.
+    private var placeholder: Bool { !chosen && typed.isEmpty }
+
+    private var canSave: Bool { chosen || (typing == .weight && !typed.isEmpty) }
+
     private var reading: some View {
         // What's typed so far, once there is something, else the weight.
         let shown = typing == .weight && !typed.isEmpty ? typed : Self.display(value)
@@ -183,7 +198,7 @@ struct WeighInSheet: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(shown)
                         .font(.system(size: numberSize, weight: .bold, design: .rounded)).monospacedDigit()
-                        .foregroundStyle(typing == .weight && typed.isEmpty ? Color.exTextMuted : Color.exTextPrimary)
+                        .foregroundStyle(placeholder || (typing == .weight && typed.isEmpty) ? Color.exTextMuted : Color.exTextPrimary)
                         .contentTransition(.numericText(value: value))
                         .animation(.snappy(duration: 0.18), value: value)
                         .lineLimit(1).minimumScaleFactor(0.5)
@@ -196,14 +211,36 @@ struct WeighInSheet: View {
             }
             .buttonStyle(.plain)
             // While typing, what's typed so far, not a weight: "1" read as "1 pounds" in run 7.
-            .accessibilityLabel(typing == .weight
-                ? "Weight, typing \(typed.isEmpty ? "nothing yet" : typed), in \(BodyFormat.unitName(unit))"
+            // Before anything is typed, the shown weight is only a placeholder.
+            .accessibilityLabel(typing == .weight && !typed.isEmpty
+                ? "Weight, typing \(typed), in \(BodyFormat.unitName(unit))"
+                : placeholder
+                ? "Weight, nothing entered yet. \(shown) \(BodyFormat.unitName(unit)) is a placeholder\(lastReading == nil ? "" : " from your last reading")"
+                : typing == .weight ? "Weight, typing nothing yet, in \(BodyFormat.unitName(unit))"
                 : "Weight, \(shown) \(BodyFormat.unitName(unit))")
-            .accessibilityHint(fromHealth ? "" : "Double-tap to type a weight")
+            .accessibilityHint(fromHealth ? "" : placeholder ? "Type today's weight on the keypad" : "Double-tap to type a weight")
             .accessibilityIdentifier("weighIn.value")
             if let context {
                 Text(context).font(.exCaption).foregroundStyle(Color.exTextSecondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("weighIn.context")
+            }
+            if editing == nil, placeholder, let lastReading {
+                // Weighing the same is a choice of its own, not what an untouched Save does.
+                Button {
+                    value = lastReading
+                    chosen = true
+                    save()
+                } label: {
+                    Label("Same as last · \(Self.display(lastReading)) \(unit.rawValue)", systemImage: "equal")
+                        .font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                        .padding(.horizontal, ExSpacing.item).frame(minHeight: 36)
+                        .background(Color.exPrimary.opacity(0.16), in: Capsule())
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Same as last, \(Self.display(lastReading)) \(BodyFormat.unitName(unit))")
+                .accessibilityHint("Saves that weight again for today")
+                .accessibilityIdentifier("weighIn.sameAsLast")
             }
         }
         .padding(.top, ExSpacing.small)
@@ -213,12 +250,16 @@ struct WeighInSheet: View {
         HStack(spacing: ExSpacing.small) {
             stepButton("minus", ticks: -1, label: "Decrease")
             WeightRuler(value: $value, unit: unit, range: range)
+                .onChange(of: value) { chosen = true }
             stepButton("plus", ticks: 1, label: "Increase")
         }
     }
 
     private func stepButton(_ symbol: String, ticks: Int, label: String) -> some View {
-        Button { value = WeightRuler.nudged(value, by: ticks, unit: unit, range: range) } label: {
+        Button {
+            value = WeightRuler.nudged(value, by: ticks, unit: unit, range: range)
+            chosen = true
+        } label: {
             Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.exPrimaryText)
                 .frame(width: 48, height: 48).background(Color.exSurface2, in: Circle())
         }
@@ -271,12 +312,9 @@ struct WeighInSheet: View {
         }
     }
 
-    /// Until a digit is typed, what the grey number is: a run read it as
-    /// already entered.
     private var keypadTitle: String {
         if typing == .bodyFat { return "Body fat (%)" }
-        if editing == nil, typed.isEmpty { return "Type over it, or Save to keep it" }
-        return "Weight (\(unit.rawValue))"
+        return placeholder ? "Type today's weight (\(unit.rawValue))" : "Weight (\(unit.rawValue))"
     }
 
     @ViewBuilder
@@ -299,7 +337,9 @@ struct WeighInSheet: View {
             }
             if !fromHealth {
                 Button(action: save) { Text(editing == nil ? "Save" : "Save changes") }
-                    .buttonStyle(ExActionStyle()).accessibilityIdentifier("weighIn.save")
+                    .buttonStyle(ExActionStyle()).disabled(!canSave)
+                    .accessibilityHint(canSave ? "" : "Type a weight first")
+                    .accessibilityIdentifier("weighIn.save")
             }
         }
         .padding(.horizontal, ExSpacing.page).padding(.top, ExSpacing.small).padding(.bottom, ExSpacing.small)
@@ -361,6 +401,7 @@ struct WeighInSheet: View {
                 return false
             }
             value = (number * 100).rounded() / 100
+            chosen = true
         }
         error = nil
         return true
@@ -370,6 +411,8 @@ struct WeighInSheet: View {
 
     private func save() {
         if typing != nil, !commit() { return }
+        // An untouched placeholder is never saved as a reading.
+        guard chosen else { return }
         let store = workspace.nutrition
         var logged: WeightEntry?
         do {
