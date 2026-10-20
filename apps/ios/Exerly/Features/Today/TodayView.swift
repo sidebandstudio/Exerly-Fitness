@@ -78,6 +78,11 @@ struct TodayView: View {
     @State private var suggested: [FoodSuggestion]?
     /// Entries logged from those chips, by food.
     @State private var suggestionsLogged: [String: FoodEntry] = [:]
+    /// The meal those chips fill, as it was last logged: Log again's first
+    /// chip, taken with the chips. Nil once that meal has food.
+    @State private var mealRepeat: MealRepeat?
+    /// What that chip logged, until it's taken back.
+    @State private var mealRepeated: [FoodEntry]?
     /// This week's check-in when it waits for a decision, refreshed with "Log again".
     @State private var checkIn: TargetsCheckInCard.State?
     /// Foods chosen to copy or move together; nil when not choosing.
@@ -422,17 +427,36 @@ struct TodayView: View {
     /// The meal new food goes into: by habit and time today, Snacks on other days.
     private var defaultMeal: String { isToday ? currentMeal : "Snacks" }
 
+    /// Usual foods for now, led by the meal they make as last logged, and the
+    /// rest of an earlier day: every repeat on the first screen, not under
+    /// the meals (PARITY B01).
     @ViewBuilder private var suggestions: some View {
         let items = suggested ?? []
-        if !items.isEmpty {
+        let day = store.repeatableDay(for: today)
+        let rest = !store.entries(on: today).isEmpty
+        if !items.isEmpty || mealRepeat != nil {
             VStack(alignment: .leading, spacing: ExSpacing.small) {
-                HStack(alignment: .firstTextBaseline) {
+                let header = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                header {
                     Text("Log again").font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    Text("Usual for \(currentMeal.lowercased())").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    if !typeSize.isAccessibilitySize { Spacer() }
+                    if let day {
+                        TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest) { apply(day) }
+                    } else {
+                        Text("Usual for \(currentMeal.lowercased())").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    }
                 }
                 ScrollView(.horizontal) {
                     HStack(spacing: ExSpacing.small) {
+                        if let mealRepeat {
+                            TodayRepeatChip(title: mealTitle(mealRepeat), repeated: mealRepeat,
+                                            logged: mealRepeated != nil || store.remaining(mealRepeat, on: today) == nil) {
+                                repeatMeal(mealRepeat)
+                            }
+                            .containerRelativeFrame(.horizontal, count: typeSize.isAccessibilitySize ? 5 : 7,
+                                                    span: typeSize.isAccessibilitySize ? 4 : 3, spacing: ExSpacing.small)
+                        }
                         ForEach(items, id: \.food.foodID) { suggestion in
                             let logged = suggestionsLogged[suggestion.food.foodID]
                             TodaySuggestionChip(suggestion: suggestion, unit: unit, logged: logged != nil) {
@@ -453,7 +477,40 @@ struct TodayView: View {
                 .scrollIndicators(.hidden)
                 .padding(.horizontal, -ExSpacing.page)
             }
+        } else if let day {
+            TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, row: true) { apply(day) }
         }
+    }
+
+    /// "Yesterday's breakfast", "Sunday's lunch".
+    private func mealTitle(_ repeated: MealRepeat) -> String {
+        let day = dayName(repeated.source)
+        return day.prefix(1).uppercased() + day.dropFirst() + "'s " + (repeated.meal ?? "").lowercased()
+    }
+
+    /// Log again's meal chip: what of it isn't logged yet, or a second tap
+    /// takes back what it logged. A food from it logged on its own first
+    /// isn't logged twice.
+    private func repeatMeal(_ repeated: MealRepeat) {
+        if let copies = mealRepeated {
+            do {
+                // An entry edited since is left alone; the chip just resets.
+                for copy in copies where store.entries.first(where: { $0.id == copy.id }) == copy { try store.deleteEntry(copy.id) }
+                UISelectionFeedbackGenerator().selectionChanged()
+                withAnimation(.snappy) {
+                    mealRepeated = nil
+                    if case .remove(let ids) = toast?.undo, Set(ids) == Set(copies.map(\.id)) { toast = nil }
+                }
+                UIAccessibility.post(notification: .announcement, argument: "Removed \(mealTitle(repeated).lowercased())")
+                Task { await workspace.synchronize() }
+            } catch { show("Could not remove those foods. They are still logged.", failed: true) }
+            return
+        }
+        guard let remaining = store.remaining(repeated, on: today) else {
+            show("\(mealTitle(repeated)) is already logged")
+            return
+        }
+        if let copies = apply(remaining) { withAnimation(.snappy) { mealRepeated = copies } }
     }
 
     private func log(_ suggestion: FoodSuggestion) {
@@ -498,6 +555,8 @@ struct TodayView: View {
         let mealLogged = store.entries(on: today).contains { $0.meal == currentMeal }
         suggested = mealLogged ? [] : store.suggestions(at: .now, timeZone: timeZone, limit: 10)
         suggestionsLogged = [:]
+        mealRepeat = mealLogged ? nil : store.repeatable(currentMeal, for: today)
+        mealRepeated = nil
         refreshCheckIn()
     }
 
@@ -563,6 +622,7 @@ struct TodayView: View {
                 withAnimation(.snappy) {
                     self.toast = nil
                     suggestionsLogged = suggestionsLogged.filter { !ids.contains($0.value.id) }
+                    if mealRepeated?.contains(where: { ids.contains($0.id) }) == true { mealRepeated = nil }
                 }
                 Task { await workspace.synchronize() }
             } catch { show("Could not undo. The entries are still logged.", failed: true) }
@@ -731,7 +791,8 @@ struct TodayView: View {
                     .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
                     .accessibilityHint(selection == nil ? "Choose foods to copy or move" : "")
                     .accessibilityIdentifier("today.select")
-                } else if let day = store.repeatable(nil, for: date) {
+                } else if !isToday, let day = store.repeatable(nil, for: date) {
+                    // Today's is on Log again, at the top.
                     Button { apply(day) } label: {
                         Label("Repeat \(dayName(day.source))", systemImage: "arrow.counterclockwise")
                             .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
@@ -840,14 +901,19 @@ struct TodayView: View {
         } catch { show("Could not log \(recipe.food.name). Try again.", failed: true) }
     }
 
-    private func apply(_ repeated: MealRepeat) {
+    @discardableResult
+    private func apply(_ repeated: MealRepeat) -> [FoodEntry]? {
         do {
             let copied = try store.apply(repeated, to: date)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            let what = repeated.meal.map { "\($0.lowercased())" } ?? "the day"
+            let what = repeated.meal.map { "\($0.lowercased())" } ?? "food"
             show("Repeated \(dayName(repeated.source))'s \(what)", undo: .remove(copied.map(\.id)))
             Task { await workspace.synchronize() }
-        } catch { show("Could not repeat those foods. Nothing was logged.", failed: true) }
+            return copied
+        } catch {
+            show("Could not repeat those foods. Nothing was logged.", failed: true)
+            return nil
+        }
     }
 
     private func dayName(_ day: LocalDate) -> String {
