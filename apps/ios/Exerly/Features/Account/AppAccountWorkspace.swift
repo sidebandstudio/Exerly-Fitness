@@ -50,6 +50,14 @@ final class AppAccountWorkspace: ObservableObject {
         catch { openingError = "Your saved training could not open. Keep Exerly installed and try again." }
     }
 
+    /// Opens the account's saved data at once, at launch, when nothing is open
+    /// or closing; `configure` then finds it open. A failure is left for
+    /// `configure` to report.
+    func openNow(_ account: AccountAPI) {
+        guard training == nil, closing == nil, !isChangingAccount else { return }
+        training = try? open(account)
+    }
+
     func signOut(auth: AuthViewModel) async {
         guard !isChangingAccount else { return }
         isChangingAccount = true

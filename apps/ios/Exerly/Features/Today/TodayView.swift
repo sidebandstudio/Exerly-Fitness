@@ -83,6 +83,9 @@ struct TodayView: View {
     @State private var mealRepeat: MealRepeat?
     /// What that chip logged, until it's taken back.
     @State private var mealRepeated: [FoodEntry]?
+    /// False until Today's first frame is drawn: launch draws the top of
+    /// Today alone, then the cards below the fold.
+    @State private var drawsBelowFold = false
     /// What the day's repeat logged, until it's taken back: its button stays
     /// with a check, so its Undo outlasts the confirmation.
     @State private var dayRepeated: [FoodEntry]?
@@ -206,12 +209,15 @@ struct TodayView: View {
                 let checkInAfter = visible.first { $0 == .training } ?? logAgainAfter
                 if logAgainAfter == nil { logAgain }
                 if checkInAfter == nil { checkInBanner }
-                ForEach(visible) { card in
-                    self.card(card)
+                // The first frame draws the first three cards (the logging
+                // tools, the ring, today's workout); the rest, below the fold
+                // on every phone, follow a frame later (PARITY B03).
+                ForEach(Array(visible.enumerated()), id: \.element) { index, card in
+                    if index < 3 || drawsBelowFold { self.card(card) }
                     if card == logAgainAfter { logAgain }
                     if card == checkInAfter { checkInBanner }
                 }
-                dayFooter
+                if drawsBelowFold { dayFooter }
             }
             .frame(maxWidth: 700, alignment: .leading)
             .frame(maxWidth: .infinity)
@@ -272,7 +278,11 @@ struct TodayView: View {
         .onChange(of: showsTargets) { _, shown in if !shown { refreshCheckIn() } }
         .onAppear {
             if suggested == nil { refreshSuggestions() } else { refreshCheckIn() }
+            // Today's workout in the first frame, with Start, not "No workout
+            // planned" until the task below has run.
+            if plan == nil, isToday { plan = workspace.nextWorkout(bodyweight: bodyweight, unit: unit) }
             LaunchTiming.loggingReady()
+            if !drawsBelowFold { _ = NextFrame { drawsBelowFold = true } }
         }
         .task {
             await workspace.synchronize()

@@ -103,6 +103,24 @@ final class AuthViewModel: ObservableObject {
         defaults.set(accountsAwaitingLocalCleanup, forKey: Self.cleanupKey)
     }
 
+    /// The account saved on this device, shown at once while launch waits for
+    /// nothing: RootView opens Today from it in the first frame (PARITY B03),
+    /// and `checkAuth` confirms it with the server after.
+    func restoreCachedSession() {
+        guard authState == .loading, let token = keychain.getToken() else { return }
+        restore(token)
+    }
+
+    private func restore(_ token: String) {
+        guard let data = defaults.data(forKey: cacheKey(token)),
+              let cached = try? JSONDecoder().decode(UserDTO.self, from: data),
+              cached.id != nil, APIClient.accountID(in: token).map({ $0 == cached.id }) ?? true else { return }
+        currentUser = cached
+        let completeKey = cacheKey(token) + ".complete"
+        let complete = defaults.object(forKey: completeKey) == nil ? cached.onboardingCompleted == true : defaults.bool(forKey: completeKey)
+        authState = complete ? .authenticated : .onboarding
+    }
+
     private func cacheKey(_ token: String) -> String {
         APIClient.accountCacheKey(token)
     }
@@ -149,14 +167,7 @@ final class AuthViewModel: ObservableObject {
             return
         }
         let generation = sessionGeneration
-        if useCached, let data = defaults.data(forKey: cacheKey(token)),
-           let cached = try? JSONDecoder().decode(UserDTO.self, from: data),
-           cached.id != nil, APIClient.accountID(in: token).map({ $0 == cached.id }) ?? true {
-            currentUser = cached
-            let completeKey = cacheKey(token) + ".complete"
-            let complete = defaults.object(forKey: completeKey) == nil ? cached.onboardingCompleted == true : defaults.bool(forKey: completeKey)
-            authState = complete ? .authenticated : .onboarding
-        }
+        if useCached { restore(token) }
         do {
             let bootstrap: BootstrapResponse = try await api.get("/api/bootstrap")
             guard generation == sessionGeneration else { return }

@@ -25,6 +25,19 @@ struct RootView: View {
         .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         // Kept until the signed-in tabs can follow it, so a link that launched the app isn't lost.
         .onOpenURL { ExerlyLinkRouter.shared.pending = $0 }
+        .onAppear(perform: openFromCache)
+    }
+
+    /// A saved session draws Today from what's on this device in the first
+    /// frame (PARITY B03): the cached account, its saved entries and its
+    /// workspace open here, before anything is drawn, instead of in the tasks
+    /// below, each a frame later. The tasks then find them open, and the
+    /// server is asked after.
+    private func openFromCache() {
+        authVM.restoreCachedSession()
+        guard authVM.authState == .authenticated, let user = authVM.currentUser, let api = authVM.accountAPI else { return }
+        sync.configure(container: modelContext.container, accountID: user.id, timeZone: user.timezone)
+        account.openNow(api)
     }
 
     private var accountContent: some View {

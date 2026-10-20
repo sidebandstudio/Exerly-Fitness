@@ -84,6 +84,7 @@ let preferencesRoundTrip = null;
 const foodDatabaseRequests = [];
 // What the simulator's stand-in camera sees next: a synthetic code as `<symbology>:<data>`.
 let barcodeFeed = { id: 0, payload: null };
+const launchTimings = [];
 providers.searchOpenFoodFactsProducts = async (query, limit) => {
   foodDatabaseRequests.push({ type: 'search', query, limit });
   if (query === 'provider unavailable')
@@ -205,6 +206,25 @@ providers.lookupBarcode = async (identity) => ({
       payload: req.body.payload ? String(req.body.payload) : null,
     };
     res.json(barcodeFeed);
+  });
+  // A Debug build launched by the UI tests reports, once Today's first frame
+  // with its logging controls is on screen, how long that took from its
+  // process starting (LaunchToLoggingUITests).
+  app.post('/__test/launch-timings', (req, res) => {
+    const processMs = Number(req.body?.processToReadyMs);
+    const initMs = Number(req.body?.initToReadyMs);
+    if (!Number.isFinite(processMs) || !Number.isFinite(initMs)) return res.sendStatus(400);
+    launchTimings.push({ processToReadyMs: processMs, initToReadyMs: initMs });
+    res.sendStatus(204);
+  });
+  app.get('/__test/launch-timings', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    res.json({ timings: launchTimings });
+  });
+  app.delete('/__test/launch-timings', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    launchTimings.length = 0;
+    res.json({ cleared: true });
   });
   // Read by the API's own fetcher, which sends no fixture header; "plain" has no recipe data.
   app.get('/__test/recipe-pages/:slug', (req, res) => {
