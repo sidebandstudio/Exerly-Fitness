@@ -232,6 +232,39 @@ final class BarcodeScannerUITests: ExerlyUITestCase {
         XCTAssertEqual(entries("Synthetic cola multipack", in: app).count, 1)
     }
 
+    /// A ready offline scan added through a meal being built is consumed when
+    /// that meal logs: it isn't left "Ready to log" to log twice.
+    func testAMealBuiltFromAnOfflineScanConsumesIt() async throws {
+        let (app, _) = try await launchScanner(prefix: "scan-meal-builder")
+        try await control(["offline": true])
+        openScanner(app)
+        try await scan("ean13:\(Self.juice)", in: app)
+        XCTAssertTrue(app.staticTexts["nutrition.barcodeQueued"].waitForExistence(timeout: 10))
+        leaveScanner(app)
+        try await control([:])
+        tap(app.buttons["nutrition.addFood"], in: app)
+        tap(app.buttons["nutrition.moreFoodOptions"], in: app)
+        let build = app.buttons["nutrition.buildMeal"]
+        XCTAssertTrue(build.waitForExistence(timeout: 5))
+        build.tap()
+        tap(app.buttons["Choose foods"], in: app)
+        tap(app.buttons["nutrition.plateBarcode"], in: app)
+        let add = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.scanRelog.\("0" + Self.juice).")).firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "The ready scan is offered")
+        tap(add, in: app)
+        let confirm = app.buttons["nutrition.pickPortionConfirm"]
+        if confirm.waitForExistence(timeout: 5) { tap(confirm, in: app) }
+        tap(app.buttons["nutrition.reviewPlate"], in: app)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.plateRow.off:\(Self.juice).")).firstMatch
+            .waitForExistence(timeout: 5))
+        tap(app.buttons["nutrition.savePlate"], in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+        XCTAssertEqual(entries("Synthetic apple juice", in: app).count, 1)
+        openScanner(app)
+        XCTAssertFalse(app.staticTexts["nutrition.barcodeReady"].waitForExistence(timeout: 3), "Nothing is left ready to log")
+        XCTAssertFalse(add.exists, "The scan the meal logged is consumed")
+    }
+
     // MARK: Not found
 
     /// A miss is never a dead end: the code is shown with search, entry

@@ -9,6 +9,8 @@ struct NutritionPlateView: View {
     let onLogged: () -> Void
     let onLoggedEntries: (([FoodEntry]) -> Void)?
     @StateObject private var draft: NutritionPlateDraft
+    /// Offline scans picked into this meal, consumed when it logs.
+    @StateObject private var staging: BarcodeStaging
     @State private var choosingFood = false
     @State private var editing: NutritionPlateDraft.Row?
     @State private var discarding = false
@@ -27,6 +29,7 @@ struct NutritionPlateView: View {
         self.onLoggedEntries = onLoggedEntries
         _draft = StateObject(wrappedValue: NutritionPlateDraft(store: workspace.nutrition, date: date, meal: meal, unit: unit,
                                                                timeZone: timeZone))
+        _staging = StateObject(wrappedValue: BarcodeStaging(library: workspace.barcodes))
     }
 
     var body: some View {
@@ -96,7 +99,7 @@ struct NutritionPlateView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Log meal") {
-                        if let entries = draft.save() {
+                        if let entries = draft.save(consuming: staging.library, scope: staging.scope) {
                             UINotificationFeedbackGenerator().notificationOccurred(.success)
                             onLogged()
                             onLoggedEntries?(entries)
@@ -112,6 +115,7 @@ struct NutritionPlateView: View {
                                     pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map { $0.food.id }), onPick: { food, amount in
                                         draft.add(food, amount: amount) ? draft.rows.count : nil
                                     }, pickError: { draft.error })
+                    .environment(\.barcodeStagingScope, staging.scope)
             }
             .sheet(item: $editing) { row in
                 NutritionPlatePortionEditor(workspace: workspace, plate: draft, row: row)

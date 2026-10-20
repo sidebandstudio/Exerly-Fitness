@@ -1630,3 +1630,12 @@ Review round 1 of the barcode slice changed four earlier calls:
   plate can't be logged while an accepted scan is still being looked up.
 - A pack accepted before the camera pauses stays held when it resumes and must leave the
   frame to count again.
+
+## 2026-10-20: An offline scan is consumed in the transaction that logs it
+
+Review round 2: an offline scan put on a plate was deleted before the plate logged, so a
+discarded plate lost it. Now a plate only stages it, in memory and by scope (the scanner's
+plate, or a meal being built, whose scope reaches the scanner through the environment).
+The record is removed inside the same SQLite transaction as the entries that log it. A
+crash, discard or cancel leaves it ready. While a scan is still being looked up, a past
+scan always joins the plate, so nothing logs ahead of it.

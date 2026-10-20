@@ -67,8 +67,15 @@ remembered for that code on this account, so the next scan finds it, offline too
 Offline, a new code shows "Saved for when you're online" with the code. Each such scan is
 kept apart from the history (`BarcodeLibrary.Pending`) with its own meal, day and time, so
 scanning the same bar for Lunch and again for Dinner keeps both. Once online, each comes
-back as "Ready to log" to where it was scanned for. With foods on the plate, a past scan's
-button reads "Add to plate" and joins them instead of logging alone.
+back as "Ready to log" to where it was scanned for. With foods on the plate, or a scan
+still being looked up, a past scan's button reads "Add to plate" and joins them instead of
+logging alone.
+
+An offline scan put on a plate, the scanner's or a meal being built, is only staged there
+(`BarcodeLibrary.stage`, in memory). Its record is removed in the same transaction as the
+log that uses it (`BarcodeLibrary.consume`, nested in the store's own transaction), so
+discarding the plate, cancelling the meal, a food that can't join, or quitting the app
+before logging all leave it ready, with its meal and time.
 
 Open Food Facts's ODbL attribution is shown under the plate, Recent scans and the history,
 wherever its foods appear.

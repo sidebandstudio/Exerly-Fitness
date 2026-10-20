@@ -55,7 +55,9 @@ struct BarcodeViewfinder: View {
                         .position(x: window.midX, y: window.midY).allowsHitTesting(false)
                 }
             }
-            .frame(height: typeSize.isAccessibilitySize ? (compact ? 200 : 260) : 330)
+            // At the largest sizes it narrows to a strip once there's something to read,
+            // still scanning, so the plate and its foods fit above Log.
+            .frame(height: typeSize.isAccessibilitySize ? (compact ? 150 : 260) : 330)
             .clipShape(RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
             // Over the camera the controls stop growing at xxLarge, so the window
             // stays clear; VoiceOver hears the status in full.
@@ -215,9 +217,9 @@ struct BarcodeTray: View {
         let energy = (session.plate.summary?.totals.energy).map { "\(FoodFormat.kcal($0)) kcal" }
         ExCard(accent: true) {
             if typeSize.isAccessibilitySize {
-                // One plain line, so the foods themselves are on screen at the largest sizes.
+                // One small line, so the foods themselves are on screen at the largest sizes.
                 Text(["\(count) \(count == 1 ? "food" : "foods")", energy].compactMap { $0 }.joined(separator: " · "))
-                    .font(.exLabel).foregroundStyle(Color.exTextPrimary).accessibilityIdentifier("nutrition.scanPlate")
+                    .font(.exCaption.weight(.semibold)).foregroundStyle(Color.exPrimaryText).accessibilityIdentifier("nutrition.scanPlate")
             } else {
                 HStack(alignment: .firstTextBaseline) {
                     ExEyebrow("Your plate · \(count) \(count == 1 ? "food" : "foods")", color: .exPrimaryText)
@@ -227,17 +229,37 @@ struct BarcodeTray: View {
             }
             ForEach(session.plate.rows) { row in
                 BarcodeTrayRow(session: session, row: row, edit: edit)
-                Divider().overlay(Color.exBorder.opacity(0.3))
+                if !typeSize.isAccessibilitySize || row.id != session.plate.rows.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
             }
-            Menu {
-                Picker("Meal", selection: Binding(get: { session.plate.meal }, set: { session.plate.meal = $0 })) {
-                    ForEach(meals, id: \.self) { Text($0).tag($0) }
-                }
-            } label: {
-                Label("Into \(session.plate.meal)", systemImage: "fork.knife").font(.exLabel).frame(minHeight: 44)
-            }.accessibilityIdentifier("nutrition.scanMeal")
+            // At the largest sizes the meal is chosen in the navigation bar.
+            if !typeSize.isAccessibilitySize { BarcodeMealMenu(session: session) }
             BarcodeAttribution(lines: session.plateAttributions)
         }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+    }
+}
+
+/// Which meal the plate logs to.
+struct BarcodeMealMenu: View {
+    @ObservedObject var session: BarcodeScanSession
+    var compact = false
+
+    var body: some View {
+        Menu {
+            Picker("Meal", selection: Binding(get: { session.plate.meal }, set: { session.plate.meal = $0 })) {
+                ForEach(meals, id: \.self) { Text($0).tag($0) }
+            }
+        } label: {
+            if compact {
+                HStack(spacing: ExSpacing.tight) {
+                    Text("Into \(session.plate.meal)")
+                    Image(systemName: "chevron.down").font(.caption.weight(.semibold)).accessibilityHidden(true)
+                }.font(.exLabel)
+            } else {
+                Label("Into \(session.plate.meal)", systemImage: "fork.knife").font(.exLabel).frame(minHeight: 44)
+            }
+        }
+        .accessibilityLabel("Meal, \(session.plate.meal)").accessibilityIdentifier("nutrition.scanMeal")
     }
 
     private var meals: [String] {
@@ -264,9 +286,34 @@ private struct BarcodeTrayRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small)) : AnyLayout(HStackLayout(spacing: ExSpacing.small))
-        layout {
+        if typeSize.isAccessibilitySize { compactRow } else { fullRow }
+    }
+
+    /// The largest sizes: a list of names and amounts. The amount and Remove
+    /// are a tap away in the portion sheet, and VoiceOver adjusts and removes
+    /// from the row.
+    private var compactRow: some View {
+        Button { edit(row) } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(row.food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).multilineTextAlignment(.leading).lineLimit(2)
+                Text("\(session.portion(of: row)) · \(FoodFormat.kcal(row.amount.nutrients.energy)) kcal")
+                    .font(.exCaption).foregroundStyle(Color.exTextSecondary).lineLimit(2)
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).accessibilityHint("Changes the amount or removes it")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: session.step(row, more: true)
+            case .decrement: session.step(row, more: false)
+            @unknown default: break
+            }
+        }
+        .accessibilityAction(named: "Remove") { session.plate.remove(row) }
+        .accessibilityIdentifier("nutrition.scanRow.\(row.food.id)")
+    }
+
+    private var fullRow: some View {
+        HStack(spacing: ExSpacing.small) {
             Button { edit(row) } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).multilineTextAlignment(.leading)
@@ -276,13 +323,12 @@ private struct BarcodeTrayRow: View {
             }
             .buttonStyle(.plain).accessibilityHint("Changes the amount")
             .accessibilityIdentifier("nutrition.scanRow.\(row.food.id)")
-            HStack(spacing: typeSize.isAccessibilitySize ? ExSpacing.small : 0) {
+            HStack(spacing: 0) {
                 if session.stepped(row, more: true) != nil {
                     stepButton("minus", "One less", more: false, enabled: session.stepped(row, more: false) != nil,
                                identifier: "nutrition.scanLess.\(row.food.id)")
                     stepButton("plus", "One more", more: true, enabled: true, identifier: "nutrition.scanMore.\(row.food.id)")
                 }
-                if typeSize.isAccessibilitySize { Spacer() }
                 Button("Remove \(row.food.name)", systemImage: "xmark.circle.fill") { session.plate.remove(row) }
                     .labelStyle(.iconOnly).font(.title3).foregroundStyle(Color.exTextMuted).frame(minWidth: 44, minHeight: 44)
                     .accessibilityIdentifier("nutrition.scanRemove.\(row.food.id)")
@@ -293,7 +339,7 @@ private struct BarcodeTrayRow: View {
     private func stepButton(_ icon: String, _ title: String, more: Bool, enabled: Bool, identifier: String) -> some View {
         Button { session.step(row, more: more) } label: {
             Image(systemName: icon).font(.body.weight(.semibold)).frame(minWidth: 40, minHeight: 40)
-                .padding(typeSize.isAccessibilitySize ? 6 : 0).background(Color.exSurface2, in: Circle())
+                .background(Color.exSurface2, in: Circle())
         }
         .buttonStyle(.plain).foregroundStyle(enabled ? Color.exPrimaryText : Color.exTextMuted).disabled(!enabled)
         .frame(minWidth: 44, minHeight: 44).accessibilityLabel("\(title) \(row.food.name)").accessibilityIdentifier(identifier)
@@ -328,6 +374,8 @@ struct BarcodeRecentScans: View {
                 BarcodeAttribution(lines: session.attributions(for: scans))
             }
         }
+        // A list: at the largest sizes it stops growing with the tray's.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
     }
 }
 
@@ -371,6 +419,7 @@ struct BarcodeHistoryView: View {
             }
             BarcodeAttribution(lines: session.attributions(for: all))
         }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .navigationTitle("Scan history").navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -416,7 +465,7 @@ struct BarcodeScanRow: View {
 
     /// With foods on the plate, a past scan joins them instead of logging alone.
     private var actionTitle: String {
-        if picking || !session.plate.rows.isEmpty { return picking ? "Add" : "Add to plate" }
+        if picking || session.pastScansJoinThePlate { return picking ? "Add" : "Add to plate" }
         if case .pending(let scan) = past { return "Log to \(scan.meal)" }
         return "Log"
     }

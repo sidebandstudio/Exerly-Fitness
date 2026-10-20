@@ -36,6 +36,8 @@ struct NutritionBarcodeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// Building a meal: the plate an offline scan picked here joins.
+    @Environment(\.barcodeStagingScope) private var stagingScope
 
     init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions,
@@ -88,6 +90,9 @@ struct NutritionBarcodeView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") { discarding = true }.accessibilityIdentifier("nutrition.scanCancel")
                 }
+            }
+            if typeSize.isAccessibilitySize, !picking, !session.plate.rows.isEmpty {
+                ToolbarItem(placement: .principal) { BarcodeMealMenu(session: session, compact: true) }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Scan history", systemImage: "clock.arrow.circlepath") { showingHistory = true }
@@ -235,6 +240,10 @@ struct NutritionBarcodeView: View {
     /// A past scan: added to the meal being built or the plate, else logged.
     private func usePast(_ past: BarcodeScanSession.PastScan) {
         if let onPicked, let product = session.library.usable(past.gtin) {
+            // The meal being built consumes an offline scan only when it logs.
+            if case .pending(let scan) = past, let stagingScope {
+                session.library.stage(scan.id, scope: stagingScope, foodID: product.food.id)
+            }
             onPicked(product.food)
             dismiss()
             return
@@ -389,6 +398,7 @@ struct NutritionBarcodeView: View {
                     }
                 }
                 .buttonStyle(ExActionStyle()).disabled(!session.canLog)
+                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                 .accessibilityIdentifier("nutrition.scanLogAll")
             }
             .padding(ExSpacing.page).background(Color.exBackground)

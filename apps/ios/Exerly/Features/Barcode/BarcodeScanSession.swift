@@ -47,6 +47,8 @@ final class BarcodeScanSession: ObservableObject {
     @Published private(set) var warnings = 0
     let plate: NutritionPlateDraft
     let library: BarcodeLibrary
+    /// Offline scans put on this plate, consumed only when it logs.
+    let staging: BarcodeStaging
     private let api: AccountAPI
     private let store: NutritionStore
     private var plateChanges: AnyCancellable?
@@ -55,6 +57,7 @@ final class BarcodeScanSession: ObservableObject {
         self.api = api
         store = workspace.nutrition
         library = workspace.barcodes
+        staging = BarcodeStaging(library: workspace.barcodes)
         plate = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: meal, unit: unit, timeZone: timeZone)
         // The tray redraws as the plate changes.
         plateChanges = plate.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -122,16 +125,19 @@ final class BarcodeScanSession: ObservableObject {
     }
 
     /// Adds a food at the amount the person logs it at, or its default; the
-    /// same food again adds one more of it.
-    func add(_ food: ExerlyCore.Food) {
+    /// same food again adds one more of it. False when it couldn't join.
+    @discardableResult
+    func add(_ food: ExerlyCore.Food) -> Bool {
         if let row = plate.rows.first(where: { $0.food.id == food.id }), let more = usualAmount(of: food),
            let total = try? ScanTrayAmount.adding(more, to: row.amount, of: food), plate.stage(food, amount: total, replacing: row) {
             show(.again(name: food.name))
+            return true
         } else if plate.add(food) {
             show(.added(name: food.name))
-        } else {
-            show(nil, warning: true)
+            return true
         }
+        show(nil, warning: true)
+        return false
     }
 
     /// The row with one usual portion more or fewer: one bar, one 100 ml.
@@ -206,9 +212,10 @@ final class BarcodeScanSession: ObservableObject {
     /// The plate logs once every accepted scan has been looked up.
     var canLog: Bool { lookingUp == 0 && !plate.rows.isEmpty }
 
+    /// Logs the plate, and with it the offline scans staged on it.
     func logAll() -> [FoodEntry]? {
         guard lookingUp == 0 else { return nil }
-        return plate.save()
+        return plate.save(consuming: library, scope: staging.scope)
     }
 
     /// A past scan, as Recent scans and the history list it.
@@ -235,7 +242,9 @@ final class BarcodeScanSession: ObservableObject {
     /// Offline scans ready to log first, then those waiting or not found,
     /// then every other code scanned, latest first.
     var pastScans: [PastScan] {
-        let offline = library.ready + library.waiting + library.pending.filter { $0.state == .missing }
+        // A scan already on a plate isn't offered again until that plate goes away.
+        let offline = (library.ready + library.waiting + library.pending.filter { $0.state == .missing })
+            .filter { library.staged[$0.id] == nil }
         let codes = Set(library.pending.map(\.gtin))
         return offline.map(PastScan.pending) + library.history.filter { !codes.contains($0.gtin) }.map(PastScan.scan)
     }
@@ -246,22 +255,26 @@ final class BarcodeScanSession: ObservableObject {
         case failed
     }
 
-    /// One tap on a past scan. With foods on the plate it joins them, so the
-    /// plate isn't lost; otherwise it logs at once, an offline scan to the
-    /// meal, day and time it was scanned for.
+    /// Whether a past scan joins the plate rather than logging alone: with
+    /// foods on it, or a scan still being looked up that will join it.
+    var pastScansJoinThePlate: Bool { !plate.rows.isEmpty || lookingUp > 0 }
+
+    /// One tap on a past scan. With foods on the plate, or one on its way, it
+    /// joins them, so nothing is left behind; an offline scan joining is kept
+    /// until the plate logs. Otherwise it logs at once, an offline scan to the
+    /// meal, day and time it was scanned for, and is consumed with that entry.
     func use(_ past: PastScan) -> PastScanResult {
         guard let product = library.usable(past.gtin) else { return .failed }
-        if !plate.rows.isEmpty {
-            add(product.food)
-            if case .pending(let scan) = past { library.acknowledge(scan.id) }
+        if pastScansJoinThePlate {
+            guard add(product.food) else { return .failed }
+            if case .pending(let scan) = past { library.stage(scan.id, scope: staging.scope, foodID: product.food.id) }
             return .addedToPlate
         }
         guard let portion = store.quickPortion(for: product.food, unit: unit) else { return .failed }
         do {
             let entry: FoodEntry
             if case .pending(let scan) = past {
-                entry = try store.log(portion, on: scan.date, meal: scan.meal, at: scan.scannedAt)
-                library.acknowledge(scan.id)
+                entry = try library.consume([scan.id]) { try store.log(portion, on: scan.date, meal: scan.meal, at: scan.scannedAt) }
             } else {
                 entry = try store.log(portion, on: plate.date, meal: plate.meal)
             }
