@@ -549,3 +549,20 @@ public struct LowLightAdvisor: Sendable {
         return suggesting
     }
 }
+
+/// The short credit shown with a database food, and where its full terms are.
+public enum FoodDataCredit {
+    /// "Open Food Facts · ODbL" for Open Food Facts's attribution line, with a
+    /// link to it; any other line as it is, with the first web address in it.
+    public static func short(_ attribution: String) -> (label: String, url: URL?) {
+        if attribution.localizedCaseInsensitiveContains("Open Food Facts") {
+            return ("Open Food Facts · ODbL", URL(string: "https://world.openfoodfacts.org"))
+        }
+        if attribution.localizedCaseInsensitiveContains("FoodData Central") || attribution.contains("USDA") {
+            return ("USDA FoodData Central", URL(string: "https://fdc.nal.usda.gov"))
+        }
+        let address = attribution.split(whereSeparator: { $0 == " " || $0 == "(" || $0 == ")" || $0 == "," })
+            .first { $0.hasPrefix("https://") || $0.hasPrefix("http://") }
+        return (attribution, address.flatMap { URL(string: String($0)) })
+    }
+}

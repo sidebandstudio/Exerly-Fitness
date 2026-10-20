@@ -677,3 +677,14 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(ScanTrayAmount.stepping(grams, by: grams, of: food, more: false) == nil)
     }
 }
+
+@Suite struct FoodDataCreditTests {
+    @Test func openFoodFactsIsCreditedInOneShortLineWithItsLink() {
+        let credit = FoodDataCredit.short("Data from Open Food Facts (https://world.openfoodfacts.org), available under the Open Database License.")
+        #expect(credit.label == "Open Food Facts · ODbL" && credit.url?.host == "world.openfoodfacts.org")
+        #expect(FoodDataCredit.short("Includes USDA FoodData Central data (public domain).").label == "USDA FoodData Central")
+        let other = FoodDataCredit.short("Synthetic source, see https://example.test/terms, used with permission")
+        #expect(other.label.hasPrefix("Synthetic source") && other.url?.host == "example.test")
+        #expect(FoodDataCredit.short("Your food").url == nil)
+    }
+}

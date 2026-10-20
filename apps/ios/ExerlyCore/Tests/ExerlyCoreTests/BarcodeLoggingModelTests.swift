@@ -21,10 +21,16 @@ final class CommitFailingPersistence: TrainingPersistence, DocumentPersistence {
     func saveDocument(kind: String, id: String, payload: Data) throws { try disk.saveDocument(kind: kind, id: id, payload: payload) }
     func deleteDocument(kind: String, id: String) throws { try disk.deleteDocument(kind: kind, id: id) }
 
+    private var depth = 0
+
+    /// Nested transactions are savepoints; only the outermost commits, so
+    /// only it can fail to.
     func performAtomically(_ body: () throws -> Void) throws {
+        depth += 1
+        defer { depth -= 1 }
         try disk.performAtomically {
             try body()
-            if failNextCommit {
+            if depth == 1, failNextCommit {
                 failNextCommit = false
                 throw CommitFailed()
             }

@@ -267,15 +267,38 @@ struct BarcodeMealMenu: View {
     }
 }
 
-/// The licence lines for database foods shown, as Open Food Facts's ODbL requires.
+/// The credit for database foods shown, as Open Food Facts's ODbL requires:
+/// one short line, with a link to the source and its terms.
 struct BarcodeAttribution: View {
     let lines: [String]
 
     var body: some View {
-        if !lines.isEmpty {
-            Text(lines.joined(separator: "\n")).font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("nutrition.scanAttribution")
+        let credits = lines.map(FoodDataCredit.short)
+        if let first = credits.first {
+            HStack(spacing: ExSpacing.tight) {
+                Text(credits.map(\.label).joined(separator: " · ")).lineLimit(1)
+                if let url = first.url {
+                    Link(destination: url) { Image(systemName: "info.circle") }
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("About the food data: \(lines.joined(separator: " "))")
+                }
+            }
+            .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("nutrition.scanAttribution")
         }
+    }
+}
+
+/// A row's amount, marked as the thing to tap to change it.
+private struct BarcodeAmountLink: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: ExSpacing.tight) {
+            Image(systemName: "pencil").font(.exCaption.weight(.semibold)).accessibilityHidden(true)
+            Text(text).font(.exCaption).multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(Color.exPrimaryText)
     }
 }
 
@@ -296,11 +319,10 @@ private struct BarcodeTrayRow: View {
         Button { edit(row) } label: {
             VStack(alignment: .leading, spacing: 0) {
                 Text(row.food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).multilineTextAlignment(.leading).lineLimit(2)
-                Text("\(session.portion(of: row)) · \(FoodFormat.kcal(row.amount.nutrients.energy)) kcal")
-                    .font(.exCaption).foregroundStyle(Color.exTextSecondary).lineLimit(2)
+                BarcodeAmountLink(text: "\(session.portion(of: row)) · \(FoodFormat.kcal(row.amount.nutrients.energy)) kcal").lineLimit(2)
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
         }
-        .buttonStyle(.plain).accessibilityHint("Changes the amount or removes it")
+        .buttonStyle(.plain).accessibilityHint("Edits the portion or removes it")
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: session.step(row, more: true)
@@ -317,11 +339,10 @@ private struct BarcodeTrayRow: View {
             Button { edit(row) } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.food.name).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary).multilineTextAlignment(.leading)
-                    Text("\(session.portion(of: row)) · \(FoodFormat.kcal(row.amount.nutrients.energy)) kcal")
-                        .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    BarcodeAmountLink(text: "\(session.portion(of: row)) · \(FoodFormat.kcal(row.amount.nutrients.energy)) kcal")
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).accessibilityHint("Changes the amount")
+            .buttonStyle(.plain).accessibilityHint("Edits the portion")
             .accessibilityIdentifier("nutrition.scanRow.\(row.food.id)")
             HStack(spacing: 0) {
                 if session.stepped(row, more: true) != nil {
