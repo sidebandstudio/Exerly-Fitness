@@ -115,8 +115,11 @@ import Testing
         #expect(total.loggedAt == WeightTrend.noon(on: LocalDate("2026-09-29")!, in: newYork))
     }
 
-    /// PARITY N21-N27: each micronutrient column of the export arrives in its
-    /// own nutrient, in Exerly's unit, and none is left over.
+    /// PARITY N21-N27: a column for each of Exerly's 51 micronutrients arrives
+    /// in its own nutrient, in Exerly's unit, and none is left over. Only a few
+    /// of MacroFactor's real headers are known (MacroFactorColumns.swift:72-75);
+    /// the others are common spellings, so this tests the matching, not the
+    /// real export's 50 columns.
     @Test func everyMicronutrientColumnArrivesInItsOwnNutrientAndUnit() throws {
         let columns: [(header: String, nutrient: Nutrient, cell: Double, expected: Double)] = [
             ("B1, Thiamine (mg)", .thiamin, 1.2, 1.2), ("B2, Riboflavin (mg)", .riboflavin, 1.3, 1.3),
@@ -156,6 +159,20 @@ import Testing
         }
         // The omega-3 total is its own column, not the sum of its parts added again.
         #expect(amounts[.omega3] == 2)
+    }
+
+    /// PARITY S06: a weight goal's starting and ending scale and trend weights
+    /// aren't kept. Exerly draws the start of a goal's path from its own trend.
+    @Test func aWeightGoalsStartAndEndWeightsAreLeftOut() throws {
+        let export = try read([("Weight Goals", [
+            MacroFactorFixture.header(["Goal", "Start Date", "End Date", "Goal Weight (kg)", "Goal Rate per Week (%)",
+                                       "Starting Scale Weight (kg)", "Starting Trend Weight (kg)", "Ending Scale Weight (kg)",
+                                       "Ending Trend Weight (kg)"]),
+            [.s("Lose"), .date(MacroFactorFixture.serial(LocalDate("2026-09-01")!)), .date(MacroFactorFixture.serial(LocalDate("2026-09-28")!)),
+             .n(78), .n(0.5), .n(83), .n(82.6), .n(81), .n(81.2)],
+        ])])
+        #expect(export.report.unusedColumns["Weight Goals"] == ["Starting Scale Weight (kg)", "Starting Trend Weight (kg)",
+                                                                "Ending Scale Weight (kg)", "Ending Trend Weight (kg)"])
     }
 
     /// PARITY N31: a day total, or a row without a time, has no time of day.

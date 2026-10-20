@@ -168,6 +168,22 @@ import Testing
         #expect(nutrition.nutrientDays([.caffeine], on: monday).first?.goal == NutrientGoal(ceiling: 400))
     }
 
+    /// PARITY N27: two litres of water logged as drinks meet a 2 L goal on
+    /// Today's water card, and should meet a water nutrient goal too.
+    @Test func drinksCountTowardAWaterNutrientGoal() throws {
+        let nutrition = try store()
+        let today = monday.adding(days: 2)
+        try nutrition.setGoal(NutrientGoal(floor: 2000), for: .water, timeZone: utc)
+        try nutrition.log(Food(name: "Synthetic cucumber", per100g: NutrientAmounts([.energy: 15, .water: 95])), grams: 100,
+                          on: today, meal: "Lunch")
+        let card = nutrition.water(on: today, drinks: 2000, goal: 2000)
+        #expect(card.remaining == 0 && card.fraction == 1, "The water card counts the drinks")
+        let goal = try #require(nutrition.nutrientDays([.water], on: today).first)
+        withKnownIssue("NutrientGoals.swift:111-118 totals only water in foods; drinks never reach it, so this reads short") {
+            #expect(goal.standing == .met(left: nil))
+        }
+    }
+
     @Test func aGoalEditKeepsTheWeeksCheckInDue() throws {
         // Monday is the check-in day of a plan from two weeks before.
         let nutrition = try store(days: 0, start: monday.adding(days: -14))

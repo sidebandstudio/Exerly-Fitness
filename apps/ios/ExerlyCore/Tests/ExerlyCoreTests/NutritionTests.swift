@@ -321,4 +321,28 @@ enum Foods {
         #expect(phone.day(monday) == tablet.day(monday))
         #expect(phone.day(monday).status == .partial && phone.day(monday).notes == "Travel day, hotel breakfast")
     }
+
+    /// PARITY I03 and N08: when two devices change one entry before syncing,
+    /// the entry merges as a whole value and the device that syncs second wins.
+    /// Nothing records the other edit or asks which to keep; a review would.
+    @Test func twoDevicesEditingOneEntryKeepOneEditWithoutAReview() async throws {
+        let server = FakeDocumentServer()
+        let phoneStore = InMemoryTrainingPersistence(), tabletStore = InMemoryTrainingPersistence()
+        let phone = try store(phoneStore), tablet = try store(tabletStore)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneStore, api: server)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletStore, api: server)
+        let logged = try phone.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var onPhone = try #require(phone.entries(on: monday).first), onTablet = try #require(tablet.entries(on: monday).first)
+        onPhone.grams = 60
+        onTablet.grams = 90
+        try phone.saveEntry(onPhone)
+        try tablet.saveEntry(onTablet)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        try await phoneSync.sync()
+        #expect(phone.entries(on: monday).map(\.grams) == [90] && tablet.entries(on: monday).map(\.grams) == [90])
+        #expect(phone.entries(on: monday).first?.id == logged.id, "One entry, the phone's 60 g gone")
+    }
 }
