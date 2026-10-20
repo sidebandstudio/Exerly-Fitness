@@ -2057,3 +2057,65 @@ the water goal and could replace another device's change without review.
   they hold one choice each and the person just made it. Your details' draft,
   its base revision and its conflict review are never touched, so an
   unfinished edit there still asks before replacing another device's save.
+## 2026-10-20: Every repeat on Today's first screen, and a typed weigh-in in two taps
+
+Counted against MacroFactor's public material (docs/TAP_BUDGETS.md), two flows
+were in budget but not on the first screen, or not ahead of it:
+
+- Repeating a meal or a day sat under the meals, past the training, weight
+  and water cards: one tap, after scrolling, and a first-time user had to know
+  to look there. Log again, under the calorie ring, now leads with the meal
+  being eaten now as it was last logged ("Yesterday's breakfast · 2 foods"),
+  one tap, a check after it, and a second tap takes it back like a food chip.
+  Its title row carries "Repeat yesterday" for the whole day. Once today has
+  food, that button repeats only the meals today hasn't logged ("Rest of
+  yesterday"), never doubling one, and when the current meal is logged and
+  the chips are gone it stands as a row of its own. A food from the meal
+  logged on its own first is left out when the meal is repeated
+  (`NutritionStore.repeatableDay` and `remaining`). Each meal's own Repeat
+  row stays for the other meals; the meals header's Repeat button now shows
+  only on other days, where it plans ahead.
+- A typed weigh-in was three taps (Weigh in, the number, Save) against
+  MacroFactor's two from a customised toolbar. A new weigh-in now opens on
+  the last reading with the keypad up: the scale's number is typed over it,
+  then Save, two taps; Save alone keeps the last reading. Done puts the
+  keypad away for the ruler, ± and body fat. Editing a saved weigh-in opens
+  on its reading as before. The ruler stays because a nudge of 0.1 is a
+  single drag; it's no longer the first thing shown because people read a
+  number off a scale and type it, as Apple Health asks.
+- CI's tap-budget step now runs `TapBudgetUITests`, one counted test per
+  budget, each from Today's top for a person with history, counting taps and
+  scroll drags and passing only once the entry is on the server (a set:
+  once it survives a relaunch, as PARITY B02 asks, because sets sync with
+  the workout). `TodayUITests` joins the full local suite like
+  `TodayDiaryUITests`, keeping the job inside its hour.
+- Launch to logging is a signpost interval (`LaunchTiming`, app start to
+  Today on screen) measured with XCTOSSignpostMetric and
+  XCTApplicationLaunchMetric in `LaunchToLoggingUITests`, run locally, not on
+  CI's shared runners.
+
+## 2026-10-20: Fixes from a code-blind run of the five logging budgets
+
+A fresh agent that hadn't seen the code logged a past food, yesterday's lunch,
+the rest of yesterday, a weigh-in, and today's first set on a 17 Pro Max with
+four weeks of history, without instructions. Every task took the budgeted taps;
+these are what it hesitated over or got wrong, and what changed:
+
+- One lunch food logged from a chip made "Rest of yesterday" skip the rest of
+  lunch. A meal holding only foods from yesterday's same meal is now finished
+  from it; a meal with anything else was eaten differently and is left alone.
+- "Yesterday's lunch · 3 foods · 522 kcal" logged two foods (the third was in)
+  and the ring moved less than promised. The chip shows what a tap will log,
+  and every repeat's confirmation names it: "Repeated yesterday's lunch: 2
+  foods, 290 kcal"; "the rest of yesterday" or "all of yesterday" for days.
+- The day's button read as a "See all" link; it's a filled capsule now. "Usual
+  for lunch" no longer shows once lunch has food.
+- A waiting weekly check-in, above the ring, pushed Today's Start below the
+  fold. It now follows the workout card (or Log again when training is hidden).
+- The grey last reading, with a caret, read as a value already typed. The
+  keypad's title says "Type over it, or Save to keep it", and the sheet opens
+  at a height that fits the keypad and Save instead of full height with a gap.
+
+Left for their owners: the workout screen doesn't mark which values are the
+suggestion, nor explain RIR; Previous is low-contrast; the confirmation covers
+the bottom of Today for six seconds.

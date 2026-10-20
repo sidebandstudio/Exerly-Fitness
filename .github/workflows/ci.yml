@@ -127,7 +127,8 @@ jobs:
     name: iOS build and tests
     runs-on: macos-15
     # The full UI suite takes hours on one runner; it runs locally, sharded,
-    # before each landing. CI runs the unit tests and the tap-budget checks.
+    # before each landing. CI runs the unit tests and the tap budgets
+    # (TapBudgetUITests, published in docs/TAP_BUDGETS.md).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -150,7 +151,7 @@ jobs:
       - name: Unit tests and tap budgets
         run: >-
           bash scripts/ios.sh test -resultBundlePath artifacts/ios-tests.xcresult
-          -only-testing:ExerlyTests -only-testing:ExerlyUITests/TodayUITests
+          -only-testing:ExerlyTests -only-testing:ExerlyUITests/TapBudgetUITests
       - name: Upload native test evidence
         if: always()
         uses: actions/upload-artifact@v7

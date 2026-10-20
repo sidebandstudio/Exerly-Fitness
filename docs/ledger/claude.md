@@ -29,6 +29,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   by density, drained cans; Customize Today and the water goal kept offline, sent alone, one writer
   per session, replays reconciled (QuickPreferences); Next in each form's order (iPad layout test);
   weigh-ins read with time, fat, source; water's Undo in a row under its chips, which never move.
+- claude/taps (7 commits, not landed): budgets in TapBudgetUITests (CI) and TAP_BUDGETS.md;
+  repeats lead Log again; keypad-first weigh-in; B03 launch 1.19 s p50 (sim), not < 1 s.
 
 ## Current outcome
 

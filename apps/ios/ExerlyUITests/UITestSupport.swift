@@ -8,6 +8,9 @@ class ExerlyUITestCase: XCTestCase {
     /// Taps delivered through `tap(_:in:)` since the test began. Reset it before
     /// a task to count that task's taps the way a person would make them.
     var tapCount = 0
+    /// Drags `reveal(_:in:)` made to bring a control into view since the test
+    /// began. A tap budget that holds only after scrolling says so.
+    var scrollCount = 0
 
     // Let async test bodies finish or throw before XCTest starts the next test.
     // Aborting at an assertion can leave their fixture requests running.
@@ -164,6 +167,7 @@ class ExerlyUITestCase: XCTestCase {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (top + height * 0.16) / app.frame.height))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (top + height * 0.84) / app.frame.height))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            scrollCount += 1
         }
         reveal(element, in: app)
     }
@@ -260,6 +264,7 @@ class ExerlyUITestCase: XCTestCase {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? low : high) / app.frame.height))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? high : low) / app.frame.height))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            scrollCount += 1
         }
     }
     /// The bottom of Progress's section picker, a bar the tabs scroll under,
