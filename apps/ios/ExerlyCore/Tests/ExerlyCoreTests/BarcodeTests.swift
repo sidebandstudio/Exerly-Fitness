@@ -150,7 +150,7 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
 
 @Suite struct GTINKindTests {
     @Test func productsAreLookedUp() {
-        for code in ["036000291452", "4006381333931", "96385074", "20123451", "10012345678902", "0012345678905"] {
+        for code in ["036000291452", "4006381333931", "96385074", "76543210", "10012345678902", "0012345678905"] {
             #expect(gtin(code).kind == .product, "\(code)")
         }
     }
@@ -169,6 +169,17 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(leadingZero.kind == .variableMeasure(itemReference: "87654", embeddedValue: "00250"))
         // Indicator 9 marks a variable-measure trade item.
         if case .variableMeasure = gtin(checked("9950600013435")).kind {} else { Issue.record("Indicator 9 is variable measure") }
+    }
+
+    /// GS1 reserves EAN-8s starting 0 or 2 for numbers a company issues for
+    /// itself, so two retailers can use one for different foods.
+    @Test func restrictedEAN8sAreAStoresOwnNumbers() {
+        #expect(gtin("20123451").kind == .storeInternal)
+        #expect(gtin(checked("0123456")).kind == .storeInternal)
+        #expect(gtin(checked("2987654")).kind == .storeInternal)
+        for first in ["1", "3", "4", "5", "6", "7", "8", "9"] {
+            #expect(gtin(checked(first + "123456")).kind == .product, "\(first)")
+        }
     }
 
     @Test func storeCouponAndPublicationCodesAreNotProducts() {
@@ -251,11 +262,14 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(GTIN.candidates(typed: "425261") == [gtin("042100005264")])
         #expect(GTIN.candidates(typed: "036000291453").isEmpty)
         #expect(GTIN.candidates(typed: "12345").isEmpty)
-        // An eight-digit code valid both ways is tried both ways, EAN-8 first.
+        // An eight-digit code valid both ways is tried both ways, a product first:
+        // starting 0, the EAN-8 would be a store's own number.
         let both = try #require((0..<10_000_000).lazy.map { "0" + String(format: "%07ld", $0) }
             .first { code in GTIN(code) != nil && GTIN.expandUPCE(code).flatMap { GTIN($0) }.map { $0 != GTIN(code) } == true })
-        #expect(GTIN.candidates(typed: both) == [gtin(both), gtin(GTIN.expandUPCE(both)!)])
-        #expect(try BarcodePayload.read(both, as: .typed).get().gtin == gtin(both))
+        #expect(GTIN.candidates(typed: both) == [gtin(GTIN.expandUPCE(both)!), gtin(both)])
+        #expect(try BarcodePayload.read(both, as: .typed).get().gtin == gtin(GTIN.expandUPCE(both)!))
+        let ean8 = try #require((10_000_000..<20_000_000).lazy.map { String($0) }.first { GTIN($0) != nil && GTIN.expandUPCE($0) != nil })
+        #expect(GTIN.candidates(typed: ean8).first == gtin(ean8))
     }
 }
 
@@ -315,6 +329,29 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
 
     /// A pack held in view is added once; shown again after leaving the
     /// frame, it's added again.
+    /// The portion sheet pauses frames with the pack still in view: back from
+    /// it, the pack isn't added again until it has left the frame.
+    @Test func aPauseKeepsAcceptedCodesHeld() {
+        var consensus = BarcodeConsensus()
+        let first = consensus.observe([oat], at: start) + consensus.observe([oat], at: start + 0.033)
+        #expect(first == [oat])
+        consensus.pause()
+        let back = start + 20
+        var accepted: [ScannedCode] = []
+        for frame in 0..<60 { accepted += consensus.observe([oat], at: back + Double(frame) / 30) }
+        #expect(accepted.isEmpty, "Still in view after the pause")
+        // Out of view for over a second, then shown again: one more pack.
+        let gone = back + 2 + 1.1
+        for frame in 0..<35 { accepted += consensus.observe([], at: back + 2 + Double(frame) / 30) }
+        accepted += consensus.observe([oat], at: gone) + consensus.observe([oat], at: gone + 0.033)
+        #expect(accepted == [oat])
+        // Unseen when frames resume, it still has to be seen gone a second first.
+        consensus.pause()
+        let later = gone + 30
+        accepted = consensus.observe([], at: later) + consensus.observe([oat], at: later + 0.5) + consensus.observe([oat], at: later + 0.53)
+        #expect(accepted.isEmpty)
+    }
+
     @Test func acceptedCodesAreHeldWhileInView() {
         var consensus = BarcodeConsensus()
         var accepted = 0
@@ -464,10 +501,10 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         let reopened = BarcodeLibrary(persistence: persistence, now: { clock })
         #expect(reopened.waiting.map(\.gtin) == [oat])
         let resolved = await reopened.resolveWaiting(fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
-        #expect(resolved.map(\.gtin) == [oat] && resolved.first?.state == .found)
+        #expect(resolved.map(\.gtin) == [oat] && resolved.first?.state == .ready)
         #expect(reopened.waiting.isEmpty && reopened.ready.map(\.gtin) == [oat])
         #expect(reopened.product(oat)?.food.name == "Synthetic oat bar")
-        reopened.acknowledge(oat)
+        reopened.acknowledge(resolved[0].id)
         #expect(reopened.ready.isEmpty)
         #expect(BarcodeLibrary(persistence: persistence, now: { clock }).ready.isEmpty)
     }
@@ -480,7 +517,7 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(library.waiting.map(\.gtin) == codes)
         var answers: [BarcodeLibrary.Fetched] = [.found(food(), attribution: "OFF"), .missing, .unavailable]
         let resolved = await library.resolveWaiting { gtin in counter.calls.append(gtin); return answers.removeFirst() }
-        #expect(resolved.map(\.state) == [.found, .missing])
+        #expect(resolved.map(\.state) == [.ready, .missing])
         #expect(library.waiting.map(\.gtin) == [gtin("96385074")])
     }
 
@@ -499,7 +536,7 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         let library = BarcodeLibrary(persistence: persistence, now: { clock })
         let counter = Counter()
         #expect(await library.resolve(oat, meal: "Lunch", date: day, fetch: fetch(.missing, counter: counter)) == .missing)
-        library.remember(food("Synthetic oat bar, typed in"), for: oat, attribution: "Your food", meal: "Lunch", date: day)
+        library.remember(food("Synthetic oat bar, typed in"), for: oat, attribution: "Your food")
         #expect(library.history.map(\.state) == [.found])
         let again = await BarcodeLibrary(persistence: persistence, now: { clock })
             .resolve(gtin("012345678905"), meal: "Lunch", date: day, fetch: fetch(.unavailable, counter: counter))
@@ -516,6 +553,59 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(counter.calls.isEmpty && library.history.isEmpty)
     }
 
+    /// Scanned offline for Lunch, then for Dinner: each keeps its own meal,
+    /// day and time, across a relaunch, and each logs where it was meant to.
+    @Test mutating func everyOfflineScanKeepsItsOwnLoggingIntent() async {
+        var now = clock
+        let persistence = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: persistence, now: { now })
+        let counter = Counter()
+        let dinnerDay = LocalDate(year: 2026, month: 10, day: 21)!
+        _ = await library.resolve(oat, meal: "Lunch", date: day, fetch: fetch(.unavailable, counter: counter))
+        now += 6 * 3600
+        _ = await library.resolve(gtin("012345678905"), meal: "Dinner", date: dinnerDay, fetch: fetch(.unavailable, counter: counter))
+        let reopened = BarcodeLibrary(persistence: persistence, now: { now })
+        #expect(reopened.waiting.map(\.meal) == ["Lunch", "Dinner"])
+        #expect(reopened.waiting.map(\.date) == [day, dinnerDay])
+        #expect(reopened.waiting.map(\.scannedAt) == [clock, clock + 6 * 3600])
+        #expect(Set(reopened.waiting.map(\.id)).count == 2 && reopened.history.count == 1)
+        let resolved = await reopened.resolveWaiting(fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+        #expect(resolved.map(\.meal) == ["Lunch", "Dinner"] && counter.calls.count == 3, "One lookup for both")
+        reopened.acknowledge(resolved[0].id)
+        #expect(reopened.ready.map(\.meal) == ["Dinner"])
+    }
+
+    /// Scanning a code again, online, doesn't clear a scan still to be logged.
+    @Test func rescanningKeepsAnOfflineScanReady() async {
+        let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence(), now: { clock })
+        let counter = Counter()
+        _ = await library.resolve(oat, meal: "Lunch", date: day, fetch: fetch(.unavailable, counter: counter))
+        await library.resolveWaiting(fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+        _ = await library.resolve(oat, meal: "Snacks", date: day, fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+        #expect(library.ready.map(\.meal) == ["Lunch"])
+        // A second offline scan, then the code resolves online: both are ready.
+        let other = gtin("036000291452")
+        _ = await library.resolve(other, meal: "Dinner", date: day, fetch: fetch(.unavailable, counter: counter))
+        _ = await library.resolve(other, meal: "Dinner", date: day, fetch: fetch(.found(food("Synthetic tea"), attribution: "OFF"), counter: counter))
+        #expect(library.ready.map(\.meal) == ["Lunch", "Dinner"] && library.waiting.isEmpty)
+    }
+
+    /// A store's own EAN-8 is never looked up, nor answered from a product
+    /// another store's code cached; the person's own food for it still is.
+    @Test func aStoresOwnCodeAnswersOnlyWithTheirOwnFood() async {
+        let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence(), now: { clock })
+        let counter = Counter()
+        let store = gtin("20123451")
+        #expect(await library.resolve(store, meal: "Lunch", date: day, fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+                == .notProduct(.storeInternal))
+        #expect(counter.calls.isEmpty)
+        library.remember(food("Synthetic deli salad"), for: store, attribution: "Your food")
+        let mine = await library.resolve(store, meal: "Lunch", date: day, fetch: fetch(.missing, counter: counter))
+        guard case .found(let product, cached: true) = mine else { Issue.record("\(mine)"); return }
+        #expect(product.food.name == "Synthetic deli salad" && product.own && counter.calls.isEmpty)
+        #expect(!library.isStale(product))
+    }
+
     @Test mutating func historyIsLatestFirstBoundedAndKeepsWaitingScans() async {
         let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence(), now: { [clock] in clock })
         let counter = Counter()
@@ -524,11 +614,12 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
             let code = gtin(checked(String(format: "4%011ld", index + 1)))
             _ = await library.resolve(code, meal: "Lunch", date: day, fetch: fetch(.missing, counter: counter))
         }
-        #expect(library.history.count == BarcodeLibrary.historyLimit + 1)
-        #expect(library.history.last?.gtin == oat && library.history.last?.state == .waiting)
+        #expect(library.history.count == BarcodeLibrary.historyLimit)
         #expect(library.history.first?.gtin == gtin(checked(String(format: "4%011ld", BarcodeLibrary.historyLimit + 5))))
+        // The code fell out of the history; its offline scan didn't.
+        #expect(!library.history.contains { $0.gtin == oat } && library.waiting.map(\.gtin) == [oat])
         library.remove(oat)
-        #expect(library.waiting.isEmpty)
+        #expect(library.waiting.map(\.gtin) == [oat])
     }
 
     @Test func refreshKeepsTheCachedProductWhenOffline() async {

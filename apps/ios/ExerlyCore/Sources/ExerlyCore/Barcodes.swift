@@ -142,7 +142,10 @@ public struct GTIN: Hashable, Comparable, Codable, Sendable, CustomStringConvert
         /// An in-store label for a weighed or priced item: the item number is
         /// the store's own, and the rest carries its price or weight.
         case variableMeasure(itemReference: String, embeddedValue: String)
-        /// A number a company issues for use in its own stores (prefixes 040–049).
+        /// A number a company issues for use in its own stores: GTIN-13 prefixes
+        /// 040–049, and EAN-8s starting 0 or 2 (GS1 General Specifications,
+        /// restricted circulation numbers). Two retailers can use one for
+        /// different foods.
         case storeInternal
         /// A coupon or refund receipt (050–059, 980–984, 99).
         case coupon
@@ -155,9 +158,7 @@ public struct GTIN: Hashable, Comparable, Codable, Sendable, CustomStringConvert
             // Indicator 9 marks a variable-measure trade item.
             return key.first == "9" ? .variableMeasure(itemReference: String(key.dropFirst().prefix(12)), embeddedValue: "") : .product
         }
-        // An 8-digit code has no prefix in this sense; restricted EAN-8s are stable
-        // within their retailer and do appear in food databases.
-        guard gtin8 == nil else { return .product }
+        if let eight = gtin8 { return eight.first == "0" || eight.first == "2" ? .storeInternal : .product }
         let digits = Array(thirteen)
         let prefix = Int(String(digits[0...2]))!
         switch prefix {
@@ -179,11 +180,11 @@ public struct GTIN: Hashable, Comparable, Codable, Sendable, CustomStringConvert
 
     // MARK: Typed digits
 
-    /// Every product a person could mean by typing these digits under a
-    /// barcode, most likely first. Leading zeros may be left off. Eight digits
-    /// can be an EAN-8 or a UPC-E, so both are tried when both check out; six
-    /// or seven digits are read as a UPC-E printed without its check digit or
-    /// number system.
+    /// Every code a person could mean by typing these digits under a
+    /// barcode, most likely first, and products before any other kind. Leading
+    /// zeros may be left off. Eight digits can be an EAN-8 or a UPC-E, so both
+    /// are tried when both check out; six or seven digits are read as a UPC-E
+    /// printed without its check digit or number system.
     public static func candidates(typed text: String) -> [GTIN] {
         let digits = text.filter { !$0.isWhitespace && $0 != "-" }
         guard digits.allSatisfy(\.isASCIIDigit), (6...14).contains(digits.count) else { return [] }
@@ -192,7 +193,7 @@ public struct GTIN: Hashable, Comparable, Codable, Sendable, CustomStringConvert
         if (6...8).contains(digits.count), let expanded = expandUPCE(digits), let gtin = GTIN(expanded), !found.contains(gtin) {
             found.append(gtin)
         }
-        return found
+        return found.filter(\.isProduct) + found.filter { !$0.isProduct }
     }
 }
 
@@ -433,6 +434,7 @@ public struct BarcodeConsensus: Sendable {
     public var rearm: TimeInterval
     private var reads: [GTIN: [Date]] = [:]
     private var held: [GTIN: Date] = [:]
+    private var resuming = false
 
     public init(required: Int = 2, window: TimeInterval = 1.2, rearm: TimeInterval = 1.0) {
         self.required = required
@@ -442,6 +444,12 @@ public struct BarcodeConsensus: Sendable {
 
     /// Feed every code one frame decoded. Returns the codes this frame accepted.
     public mutating func observe(_ codes: [ScannedCode], at time: Date) -> [ScannedCode] {
+        if resuming {
+            // Frames stopped while paused, so an absence wasn't seen: held codes
+            // count as in view now, and must leave the frame to count again.
+            for gtin in held.keys { held[gtin] = time }
+            resuming = false
+        }
         var accepted: [ScannedCode] = []
         var seen = Set<GTIN>()
         for code in codes where seen.insert(code.gtin).inserted {
@@ -463,7 +471,15 @@ public struct BarcodeConsensus: Sendable {
         return accepted
     }
 
-    /// Forgets every read and held code, as when scanning resumes after a pause.
+    /// Frames stop for a while, as under a sheet. Accepted codes stay held,
+    /// so a pack still in view when frames resume isn't added again; it
+    /// counts again only once it has been seen out of view.
+    public mutating func pause() {
+        reads = [:]
+        resuming = true
+    }
+
+    /// Forgets every read and held code.
     public mutating func reset() {
         reads = [:]
         held = [:]
