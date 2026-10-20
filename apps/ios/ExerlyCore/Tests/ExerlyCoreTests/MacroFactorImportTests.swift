@@ -115,6 +115,62 @@ import Testing
         #expect(total.loggedAt == WeightTrend.noon(on: LocalDate("2026-09-29")!, in: newYork))
     }
 
+    /// PARITY N21-N27: each micronutrient column of the export arrives in its
+    /// own nutrient, in Exerly's unit, and none is left over.
+    @Test func everyMicronutrientColumnArrivesInItsOwnNutrientAndUnit() throws {
+        let columns: [(header: String, nutrient: Nutrient, cell: Double, expected: Double)] = [
+            ("B1, Thiamine (mg)", .thiamin, 1.2, 1.2), ("B2, Riboflavin (mg)", .riboflavin, 1.3, 1.3),
+            ("B3, Niacin (mg)", .niacin, 16, 16), ("B5, Pantothenic Acid (mg)", .pantothenicAcid, 5, 5),
+            ("B6, Pyridoxine (mg)", .vitaminB6, 1.7, 1.7), ("B12, Cobalamin (mcg)", .vitaminB12, 2.4, 2.4),
+            ("Folate (mcg DFE)", .folate, 400, 400),
+            ("Vitamin A (mcg)", .vitaminA, 900, 900), ("Vitamin C (mg)", .vitaminC, 90, 90), ("Vitamin D (mcg)", .vitaminD, 15, 15),
+            ("Vitamin E (mg)", .vitaminE, 15.5, 15.5), ("Vitamin K (mcg)", .vitaminK, 120, 120),
+            ("Calcium (mg)", .calcium, 1000, 1000), ("Copper (mg)", .copper, 0.9, 0.9), ("Iron (mg)", .iron, 8, 8),
+            ("Magnesium (mg)", .magnesium, 420, 420), ("Manganese (mg)", .manganese, 2.3, 2.3),
+            ("Phosphorus (mg)", .phosphorus, 700, 700), ("Potassium (mg)", .potassium, 3400, 3400),
+            ("Selenium (mcg)", .selenium, 55, 55), ("Sodium (mg)", .sodium, 2300, 2300), ("Zinc (mg)", .zinc, 11, 11),
+            ("Histidine (g)", .histidine, 1.1, 1.1), ("Isoleucine (g)", .isoleucine, 1.4, 1.4), ("Leucine (g)", .leucine, 2.7, 2.7),
+            ("Lysine (g)", .lysine, 2.1, 2.1), ("Methionine (g)", .methionine, 0.7, 0.7), ("Phenylalanine (g)", .phenylalanine, 1.3, 1.3),
+            ("Threonine (g)", .threonine, 1.1, 1.1), ("Tryptophan (g)", .tryptophan, 0.3, 0.3), ("Valine (g)", .valine, 1.6, 1.6),
+            ("Cysteine (mg)", .cystine, 450, 0.45), ("Tyrosine (g)", .tyrosine, 1.2, 1.2),
+            ("Monounsaturated Fat (g)", .monounsaturatedFat, 25, 25), ("Polyunsaturated Fat (g)", .polyunsaturatedFat, 15, 15),
+            ("Saturated Fat (g)", .saturatedFat, 20, 20), ("Trans Fat (g)", .transFat, 0.5, 0.5),
+            ("Omega-3 Total (g)", .omega3, 2, 2), ("Omega-3 ALA (g)", .omega3ALA, 1.5, 1.5), ("Omega-3 EPA (g)", .omega3EPA, 0.25, 0.25),
+            ("Omega-3 DHA (g)", .omega3DHA, 0.25, 0.25), ("Omega-6 (g)", .omega6, 12, 12),
+            ("Fiber (g)", .fiber, 30, 30), ("Starch (g)", .starch, 90, 90), ("Sugars (g)", .sugars, 50, 50),
+            ("Sugars Added (g)", .addedSugars, 20, 20),
+            ("Alcohol (g)", .alcohol, 14, 14), ("Caffeine (mg)", .caffeine, 95, 95), ("Cholesterol (mg)", .cholesterol, 250, 250),
+            ("Choline (mg)", .choline, 550, 550), ("Water (g)", .water, 2500, 2500),
+        ]
+        #expect(Set(columns.map(\.nutrient)).count == columns.count, "One column per nutrient")
+        let date = TestCell.date(MacroFactorFixture.serial(LocalDate("2026-09-29")!))
+        let export = try read([
+            ("Calories & Macros", [MacroFactorFixture.header(["Date", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"]),
+                                   [date, .n(2200), .n(150), .n(240), .n(70)]]),
+            ("Micronutrients", [MacroFactorFixture.header(["Date"] + columns.map(\.header)), [date] + columns.map { TestCell.n($0.cell) }]),
+        ])
+        #expect(export.report.unknownColumns["Micronutrients"] == nil && export.report.unusedColumns["Micronutrients"] == nil)
+        let amounts = try #require(export.dayTotals.first).nutrients
+        for column in columns {
+            #expect(close(amounts[column.nutrient], column.expected), "\(column.header) → \(column.nutrient): \(String(describing: amounts[column.nutrient]))")
+        }
+        // The omega-3 total is its own column, not the sum of its parts added again.
+        #expect(amounts[.omega3] == 2)
+    }
+
+    /// PARITY N31: a day total, or a row without a time, has no time of day.
+    /// It is stamped at noon, so timing counts it as eaten at 12:00.
+    @Test func importedDayTotalsAreLeftOutOfTimingByHour() throws {
+        let (_, nutrition, training) = try stores()
+        let export = try read()
+        #expect(MacroFactorImport(export, nutrition: nutrition, training: training).save(nutrition: nutrition, training: training)
+            .failures.isEmpty)
+        let timing = nutrition.timing(from: LocalDate("2026-09-29")!, through: LocalDate("2026-09-30")!, timeZone: newYork)
+        withKnownIssue("MacroFactorExport.swift:1048-1049 stamps day totals at noon, which timing reads as eaten at 12:00") {
+            #expect(timing.hours[12].entries == 0 && timing.untimedEntries == export.dayTotals.count)
+        }
+    }
+
     @Test func dayFlagsGiveFastingPartialAndCompleteDaysWithNotes() throws {
         let days = try read().days
         #expect(days.map(\.date.description) == ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-03"])

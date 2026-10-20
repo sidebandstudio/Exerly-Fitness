@@ -38,8 +38,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 
 1. Code-blind run 7 on a 17 Pro covering recipe import, body goal and measurements,
    water and Customize Today; fix what it finds.
-2. Outcome 3: remaining PARITY rows (S08 profile fields, S11 steps, S12 period
-   calendar, N22–N27 nutrient coverage); waist ratios and hiding unused measurements.
+2. Outcome 3 from PARITY.md, reconciled (40 Built, 66 Partial, 5 Missing): rows whose Core
+   is tested but unused (T13, T16-T18, I13, B07); waist ratios, hiding unused measurements.
 3. Outcome 4: widgets and watch complications once Ali registers the App Group;
    HealthKit background delivery (entitlement and profile).
 

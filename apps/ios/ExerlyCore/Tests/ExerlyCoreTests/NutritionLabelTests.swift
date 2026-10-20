@@ -100,4 +100,15 @@ import Testing
         let label = try #require(NutritionLabel.read(["Calories 120", "Protein 4g", "Total Fat --"]))
         #expect(label.unread == ["total fat --"] && label.amounts[.fat] == nil)
     }
+
+    /// PARITY N22: older US labels print vitamin D in IU. 400 IU is 10 mcg.
+    @Test func vitaminDInInternationalUnitsIsConvertedOrLeftUnread() throws {
+        let lines = ["Nutrition Facts", "Serving size 1 cup (240mL)", "Calories 120", "Total Fat 5g", "Protein 8g",
+                     "Total Carbohydrate 12g", "Vitamin D 400 IU 100%"]
+        let label = try #require(NutritionLabel.read(lines))
+        #expect(label.amounts[.protein] == 8)
+        withKnownIssue("NutritionLabel.swift:166-197 reads the 400 with no unit and keeps it as 400 mcg, 40 times too much") {
+            #expect(label.amounts[.vitaminD] == 10 || label.amounts[.vitaminD] == nil && label.unread.contains { $0.contains("vitamin d") })
+        }
+    }
 }

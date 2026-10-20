@@ -76,6 +76,19 @@ import Testing
         #expect(keto.targets[1] == DailyTargets(energy: 2060, protein: 144, fat: 151, carbohydrate: 30))
     }
 
+    /// PARITY S02: high-carb (low fat) and low-carb split the same budget by fat's share.
+    @Test func lowFatKeepsTheFatFloorAndLowCarbGivesFatTwoFifths() throws {
+        // 20 % of 2060 / 9 is 45.8 g, under the 0.6 g/kg floor of 48 g; carbs take the rest: (2060 − 576 − 432) / 4.
+        let lowFat = try plan(NutritionGoal(.lose, weeklyRate: 0.005), diet: .lowFat).computed(from: basis)
+        #expect(lowFat.targets[1] == DailyTargets(energy: 2060, protein: 144, fat: 48, carbohydrate: 263))
+        // 40 % of 2060 / 9 is 91.6 g; (2060 − 576 − 828) / 4 = 164.
+        let lowCarb = try plan(NutritionGoal(.lose, weeklyRate: 0.005), diet: .lowCarb).computed(from: basis)
+        #expect(lowCarb.targets[1] == DailyTargets(energy: 2060, protein: 144, fat: 92, carbohydrate: 164))
+        // More protein comes out of carbohydrate, not fat.
+        let high = try plan(NutritionGoal(.lose, weeklyRate: 0.005), diet: .lowCarb, protein: .high).computed(from: basis)
+        #expect(high.targets[1].fat == 92 && high.targets[1].protein > 144 && high.targets[1].carbohydrate < 164)
+    }
+
     @Test func unsafeRatesLowBudgetsAndCrowdedMacrosAreRefusedWithReasons() {
         #expect(invalid { _ = try plan(NutritionGoal(.lose, weeklyRate: 0.015)).computed(from: basis) }
             == ["Losing needs a rate above 0 and up to 1 % of bodyweight a week"])
@@ -216,6 +229,27 @@ import Testing
         #expect(try #require(nutrition.targets(on: monday.adding(days: 21))).energy < current.targets[1].energy)
         try agent.undo(proposal.id)
         #expect(nutrition.plans == [current])
+    }
+
+    /// PARITY S05: keeping the current targets changes nothing and isn't asked
+    /// again that week; the next week's check-in still comes.
+    @Test func decliningACheckInKeepsThePlanUntilTheNextWeek() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
+        let agent = try AgentStore(persistence: persistence, hosts: [nutrition], now: { Fixture.instant(days: 21) })
+        let current = try plan()
+        try nutrition.savePlan(current, timeZone: .gmt)
+        let proposal = try #require(try review(current, steadyDays(), today: monday.adding(days: 21)).proposal)
+        try agent.file(proposal)
+        try agent.reject(proposal.id)
+        #expect(nutrition.plans == [current])
+        let declined = try #require(agent.proposal(proposal.id))
+        #expect(declined.status == .rejected && declined.decidedAt == Fixture.instant(days: 21))
+        #expect(throws: (any Error).self) { try agent.accept(proposal.id) }
+        #expect(throws: (any Error).self) { try agent.undo(proposal.id) }
+        #expect(try review(current, steadyDays(), today: monday.adding(days: 22), existing: [declined]).outcome == .notDue)
+        let next = try review(current, steadyDays(28), today: monday.adding(days: 28), existing: [declined])
+        #expect(next.outcome == .proposed && next.proposal?.id != proposal.id)
     }
 }
 

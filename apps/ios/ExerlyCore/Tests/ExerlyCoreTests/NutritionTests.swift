@@ -45,6 +45,36 @@ enum Foods {
         #expect(close(iron.reduce(0) { $0 + $1.share }, 1))
     }
 
+    /// PARITY N25: an omega-3 total and its parts are separate fields. A day's
+    /// total adds only the totals foods report, never the parts again.
+    @Test func omega3TotalsAndTheirPartsAddUpSeparately() throws {
+        let nutrition = try store()
+        let salmon = Food(name: "Synthetic salmon", per100g: NutrientAmounts([
+            .energy: 200, .fat: 12, .omega3: 2, .omega3ALA: 0.1, .omega3EPA: 0.7, .omega3DHA: 1.2, .saturatedFat: 2.5,
+        ]))
+        let flax = Food(name: "Synthetic flax", per100g: NutrientAmounts([.energy: 530, .fat: 42, .omega3ALA: 22]))
+        try nutrition.log(salmon, grams: 100, on: monday, meal: "Dinner")
+        try nutrition.log(flax, grams: 10, on: monday, meal: "Breakfast")
+        let summary = nutrition.summary(on: monday)
+        #expect(summary.totals[.omega3] == 2, "Flax reports only ALA, so the total isn't 4.3")
+        #expect(close(summary.totals[.omega3ALA], 2.3) && summary.totals[.omega3EPA] == 0.7 && summary.totals[.omega3DHA] == 1.2)
+        #expect(summary.reporting[.omega3] == 1 && summary.reporting[.omega3ALA] == 2)
+        #expect(summary.totals[.omega6] == nil && summary.totals[.monounsaturatedFat] == nil, "Unreported fats stay unknown")
+        #expect(summary.totals[.saturatedFat] == 2.5)
+    }
+
+    /// PARITY N05: a quick add is removed like any entry, and the day's totals follow.
+    @Test func aRemovedQuickAddLeavesTheDaysTotals() throws {
+        let nutrition = try store()
+        try nutrition.log(Foods.oats, grams: 80, on: monday, meal: "Breakfast")
+        let quick = try nutrition.quickAdd(NutrientAmounts([.energy: 450, .protein: 30]), name: "Restaurant lunch", on: monday, meal: "Lunch")
+        #expect(close(nutrition.summary(on: monday).totals.energy, 304 + 450))
+        try nutrition.deleteEntry(quick.id)
+        let summary = nutrition.summary(on: monday)
+        #expect(summary.entries == 1 && close(summary.totals.energy, 304) && summary.byMeal["Lunch"] == nil)
+        #expect(nutrition.foods.isEmpty && nutrition.recentFoods().map(\.foodID) == [Foods.oats.id])
+    }
+
     @Test func recipesComputeTheirNutrientsFromIngredientsAndYield() throws {
         let porridge = Food.recipe(name: "Porridge", ingredients: [RecipeIngredient(food: Foods.oats.snapshot, grams: 80),
                                                                    RecipeIngredient(food: Foods.milk.snapshot, grams: 300)],

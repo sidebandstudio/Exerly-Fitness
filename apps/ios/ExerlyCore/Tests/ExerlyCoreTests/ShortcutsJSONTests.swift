@@ -72,4 +72,19 @@ import Testing
         #expect(remaining["energy"] == ["target": 1350] && remaining["carbs"] == ["target": 60])
         #expect(remaining["sodium"] == ["maximum": 2300], "Reference intakes for the rest")
     }
+
+    /// PARITY I08: one shortcut, such as a recipe app's, logs many different
+    /// foods under the same source. Each stays its own recent food.
+    @Test func twoFoodsFromOneSourceStayTwoRecentFoods() throws {
+        let nutrition = try store()
+        for name in ["Synthetic oatmeal", "Synthetic omelette"] {
+            try nutrition.logShortcutFood(Data("""
+            { "name": "\(name)", "source": "synthetic-recipes", "nutrients": { "energy": 300 }, "serving": "one" }
+            """.utf8), on: monday, meal: "Breakfast")
+        }
+        #expect(nutrition.entries(on: monday).count == 2)
+        withKnownIssue("ShortcutsJSON.swift:112 gives every food from a source the foodID shortcut:<source>, so recents keep only the last") {
+            #expect(Set(nutrition.recentFoods().map(\.name)) == ["Synthetic oatmeal", "Synthetic omelette"])
+        }
+    }
 }

@@ -43,6 +43,14 @@ import Testing
         #expect(IntakeRange.quarter.barDays == 1 && IntakeRange.year.barDays == 7)
     }
 
+    /// PARITY N28: 1 month is 30 days and 3 months is 13 whole weeks, 91 days.
+    @Test func aMonthIsThirtyDaysAndAQuarterThirteenWeeks() {
+        for (range, days) in [(IntakeRange.yesterday, 1), (.week, 7), (.month, 30), (.quarter, 91), (.year, 365)] {
+            let span = range.span(today: monday)
+            #expect(span.upperBound == monday.adding(days: -1) && span.lowerBound.days(until: span.upperBound) + 1 == days, "\(range)")
+        }
+    }
+
     @Test func thisMonthRunsFromTheFirstThroughToday() {
         #expect(IntakeRange.thisMonth.span(today: monday) == LocalDate("2026-10-01")!...monday)
         let first = LocalDate("2026-11-01")!
