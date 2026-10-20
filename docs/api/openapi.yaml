@@ -129,9 +129,10 @@ paths:
       tags: [Sessions]
       summary: Email a password reset code
       description: |
-        Always answers 202 with the same message, whether or not an account uses
-        the address. A new code ends earlier ones. 5 requests per 15 minutes per
-        address, 3 per hour per email.
+        Always answers 202 with the same message, at once, before the address is
+        looked up; the code is issued and mailed afterwards. A new code ends
+        earlier ones. 5 requests per 15 minutes per address, 3 per hour per
+        email.
       security: []
       requestBody:
         required: true
@@ -191,6 +192,13 @@ paths:
       operationId: connectApple
       tags: [Account]
       summary: Connect Sign in with Apple to the signed-in account
+      description: |
+        `identityToken` and `nonce` are the Apple ID to connect. The session
+        alone isn't enough: send `password` for a password account, or for an
+        account without one, `currentIdentityToken` and `currentNonce` from a
+        Sign in with Apple in the last ten minutes as an Apple ID it already
+        has. Errors are as for deleting the account. Five attempts per account
+        per hour.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -203,18 +211,37 @@ paths:
               properties:
                 identityToken: { type: string }
                 nonce: { type: string }
+                password: { type: string }
+                currentIdentityToken: { type: string }
+                currentNonce: { type: string }
       responses:
         '200': { description: Already connected }
         '201': { description: Connected }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: disconnectApple
       tags: [Account]
       summary: Disconnect Sign in with Apple
-      description: Refused when the account has no password, because the person could not sign in again.
+      description: |
+        Needs `password`. Refused when the account has no password, because the
+        person could not sign in again. Five attempts per account per hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
       responses:
         '200': { description: Disconnected }
         '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 
   /api/account:
     delete:
@@ -223,8 +250,9 @@ paths:
       summary: Delete the account and all of its data
       description: |
         Needs proof of identity as well as the session: `password` for a
-        password account, or `identityToken` and raw `nonce` from a Sign in with
-        Apple authorization in the last ten minutes for the connected Apple ID.
+        password account, even one with Apple connected; for an account without
+        a password, `identityToken` and raw `nonce` from a Sign in with Apple
+        authorization in the last ten minutes for an Apple ID connected to it.
         Five attempts per account per hour. Removes every row the account owns,
         including every session and token, in one transaction. When the account
         uses Sign in with Apple and the server can revoke Apple tokens, also
@@ -323,7 +351,10 @@ paths:
         (file pending proposals) and `write` (change documents directly). A
         token reaches only `/v1/*` and `/mcp`, never token management or
         the account, and can never decide a proposal. Every token write and
-        filed proposal adds an audit event.
+        filed proposal adds an audit event. A token outlives the session, so
+        creating one needs the same proof as deleting the account: `password`,
+        or for an account without one, `identityToken` and `nonce` from a
+        fresh Sign in with Apple. 30 per account per hour.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -340,6 +371,9 @@ paths:
                   minItems: 1
                   items: { type: string, enum: [read, propose, write] }
                 expires_in_days: { type: integer, minimum: 1, maximum: 3650 }
+                password: { type: string }
+                identityToken: { type: string }
+                nonce: { type: string }
       responses:
         '201':
           description: The token, including its secret, shown only now.
@@ -353,7 +387,9 @@ paths:
                     properties:
                       token: { type: string, example: exr_... }
         '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 
   /v1/tokens/{id}:
     delete:

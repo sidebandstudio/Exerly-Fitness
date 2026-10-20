@@ -4,7 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { randomBytes } = require('node:crypto');
+const { createHash, createHmac, randomBytes } = require('node:crypto');
 const { startServer, signUp } = require('./helpers/server');
 const { reset: resetRateLimits } = require('../lib/ratelimit');
 const accounts = require('./helpers/accounts');
@@ -116,6 +116,7 @@ test('after deletion every session, refresh credential, token and reset code is 
   const tablet = await loginModern(api, user.email, user.password);
   const agent = await personalToken(api, user);
   assert.equal((await forgot(api, user.email)).status, 202);
+  await mailedCode(user.email);
 
   assert.equal((await deleteAccount(phone.token, { password: user.password })).status, 200);
 
@@ -167,8 +168,13 @@ test('one account cannot reach another through the account and auth routes', asy
   const bPhone = await loginModern(api, b.email, b.password);
   const bApple = appleSubject();
   assert.equal(
-    (await api.post('/api/account/identities/apple', appleCredential(bApple), { token: b.token }))
-      .status,
+    (
+      await api.post(
+        '/api/account/identities/apple',
+        { ...appleCredential(bApple), password: b.password },
+        { token: b.token }
+      )
+    ).status,
     201
   );
 
@@ -179,16 +185,21 @@ test('one account cannot reach another through the account and auth routes', asy
   assert.equal((await api.get('/api/me', { token: bPhone.token })).status, 200);
 
   // Apple: A can't take B's Apple ID, and disconnecting touches only A.
-  const taken = await api.post('/api/account/identities/apple', appleCredential(bApple), {
-    token: a.token,
-  });
+  const taken = await api.post(
+    '/api/account/identities/apple',
+    { ...appleCredential(bApple), password: a.password },
+    { token: a.token }
+  );
   assert.equal(taken.status, 409);
-  await api.del('/api/account/identities/apple', { token: a.token });
+  await api.del('/api/account/identities/apple', {
+    token: a.token,
+    body: { password: a.password },
+  });
   assert.equal(await api.store.count('account_identities', { subject: bApple }), 1);
 
   // Reset codes are bound to their account.
   await forgot(api, a.email);
-  const aCode = mailedCode(a.email);
+  const aCode = await mailedCode(a.email);
   assert.equal((await resetPassword(api, b.email, aCode)).status, 400);
   assert.equal((await api.post('/login', { email: b.email, password: b.password })).status, 200);
   resetRateLimits();
@@ -205,4 +216,170 @@ test('one account cannot reach another through the account and auth routes', asy
   assert.equal((await api.get('/api/me', { token: bPhone.token })).status, 200);
   const exported = await api.get('/api/export', { token: b.token });
   assert.ok(!JSON.stringify(exported.body).includes(a.email));
+});
+
+// ---------- What a session alone can't do ----------
+
+test('a stolen session cannot link its own Apple ID and then delete a password account', async () => {
+  const victim = await signUp(api);
+  const attackerApple = appleSubject();
+  const linked = await api.post('/api/account/identities/apple', appleCredential(attackerApple), {
+    token: victim.token,
+  });
+  assert.notEqual(linked.status, 201, 'linking needs more than a session');
+  assert.notEqual(linked.status, 200);
+  assert.equal(await api.store.count('account_identities', { subject: attackerApple }), 0);
+
+  const deleted = await deleteAccount(victim.token, appleCredential(attackerApple));
+  assert.notEqual(deleted.status, 200);
+  assert.equal(await api.store.count('users', { email: victim.email }), 1);
+});
+
+test('a password account connected to Apple still needs its password to delete', async () => {
+  const person = await signUp(api);
+  const sub = appleSubject();
+  const linked = await api.post(
+    '/api/account/identities/apple',
+    { ...appleCredential(sub), password: person.password },
+    { token: person.token }
+  );
+  assert.equal(linked.status, 201, JSON.stringify(linked.body));
+
+  const withApple = await deleteAccount(person.token, appleCredential(sub));
+  assert.equal(withApple.status, 400);
+  assert.equal(withApple.body.details.code, 'password_required');
+  assert.equal(await api.store.count('users', { email: person.email }), 1);
+  assert.equal((await deleteAccount(person.token, { password: person.password })).status, 200);
+});
+
+test('connecting or disconnecting Apple needs the password', async () => {
+  const person = await signUp(api);
+  const link = (body) => api.post('/api/account/identities/apple', body, { token: person.token });
+  const missing = await link(appleCredential(appleSubject()));
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.details.code, 'password_required');
+  const wrong = await link({ ...appleCredential(appleSubject()), password: 'not-the-password' });
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body.details.code, 'wrong_password');
+  assert.equal(await api.store.count('account_identities', { account_id: person.user._id }), 0);
+  assert.equal(
+    (await link({ ...appleCredential(appleSubject()), password: person.password })).status,
+    201
+  );
+
+  const unlink = (body) => api.del('/api/account/identities/apple', { token: person.token, body });
+  assert.equal((await unlink({})).status, 400);
+  assert.equal((await unlink({ password: 'not-the-password' })).status, 403);
+  assert.equal(await api.store.count('account_identities', { account_id: person.user._id }), 1);
+  assert.equal((await unlink({ password: person.password })).status, 200);
+  assert.equal(await api.store.count('account_identities', { account_id: person.user._id }), 0);
+});
+
+test('an Apple-only account adds another Apple ID only with a fresh token for the linked one', async () => {
+  const account = await appleAccount(api);
+  const link = (body) => api.post('/api/account/identities/apple', body, { token: account.token });
+  const second = appleSubject();
+  const missing = await link(appleCredential(second));
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.details.code, 'apple_reauthorization_required');
+
+  const other = appleCredential(appleSubject());
+  const foreign = await link({
+    ...appleCredential(second),
+    currentIdentityToken: other.identityToken,
+    currentNonce: other.nonce,
+  });
+  assert.equal(foreign.status, 403);
+  assert.equal(await api.store.count('account_identities', { subject: second }), 0);
+
+  const current = appleCredential(account.sub);
+  const done = await link({
+    ...appleCredential(second),
+    currentIdentityToken: current.identityToken,
+    currentNonce: current.nonce,
+  });
+  assert.equal(done.status, 201, JSON.stringify(done.body));
+});
+
+test('an agent token needs the password, or a fresh Sign in with Apple without one', async () => {
+  const person = await signUp(api);
+  const create = (token, extra) =>
+    api.post(
+      '/v1/tokens',
+      { name: 'Synthetic agent', scopes: ['read', 'write'], ...extra },
+      { token, headers: { 'Idempotency-Key': `token-${randomBytes(6).toString('hex')}` } }
+    );
+  const missing = await create(person.token, {});
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.details.code, 'password_required');
+  const wrong = await create(person.token, { password: 'not-the-password' });
+  assert.equal(wrong.status, 403);
+  assert.equal(wrong.body.details.code, 'wrong_password');
+  assert.equal(await api.store.count('personal_access_tokens', { account_id: person.user._id }), 0);
+  assert.equal((await create(person.token, { password: person.password })).status, 201);
+
+  const account = await appleAccount(api);
+  const unconfirmed = await create(account.token, {});
+  assert.equal(unconfirmed.status, 400);
+  assert.equal(unconfirmed.body.details.code, 'apple_reauthorization_required');
+  const foreign = await create(account.token, appleCredential(appleSubject()));
+  assert.equal(foreign.status, 403);
+  assert.equal(await api.store.count('personal_access_tokens', { account_id: account.id }), 0);
+  const confirmed = await create(account.token, appleCredential(account.sub));
+  assert.equal(confirmed.status, 201, JSON.stringify(confirmed.body));
+});
+
+test('an Apple token without an issue time does not confirm a deletion', async () => {
+  const account = await appleAccount(api);
+  const undated = await deleteAccount(
+    account.token,
+    appleCredential(account.sub, { withoutIssuedAt: true })
+  );
+  assert.equal(undated.status, 403);
+  assert.equal(undated.body.details.code, 'apple_not_confirmed');
+  assert.equal(await api.store.count('users', { id: account.id }), 1);
+});
+
+test('rejecting a forged refresh credential costs the same however often the session rotated', async () => {
+  const user = await signUp(api);
+  const session = await loginModern(api, user.email, user.password);
+  // As if the session had rotated three million times.
+  await api.store.update('sessions', { session_id: session.sessionId }, { generation: 3_000_000 });
+  const forged = [];
+  for (let i = 0; i < 10; i++) {
+    forged.push(`${session.sessionId}.${randomBytes(32).toString('base64url')}`);
+    forged.push(`${session.sessionId}.2999999.${randomBytes(32).toString('base64url')}`);
+  }
+  const started = Date.now();
+  for (const [i, credential] of forged.entries()) {
+    assert.equal((await refresh(api, credential, `forged-operation-${i}`)).status, 401);
+  }
+  const elapsed = Date.now() - started;
+  // Recomputing every earlier credential took minutes here.
+  assert.ok(elapsed < 15000, `20 forged credentials took ${elapsed} ms`);
+  const stored = await api.store.findOne('sessions', { session_id: session.sessionId });
+  assert.equal(stored.revoked_at, null, 'a forgery proves nothing and ends nothing');
+});
+
+test('a refresh credential issued before it carried its generation still rotates once', async () => {
+  const user = await signUp(api);
+  const session = await loginModern(api, user.email, user.password);
+  const [id, generation] = session.refreshToken.split('.');
+  assert.equal(generation, '0');
+  const legacy = (n) =>
+    `${id}.${createHmac('sha256', process.env.JWT_SECRET).update(`refresh:${id}:${n}`).digest('base64url')}`;
+  await api.store.update(
+    'sessions',
+    { session_id: id },
+    { refresh_hash: createHash('sha256').update(legacy(0)).digest('hex') }
+  );
+  const upgraded = await refresh(api, legacy(0), 'legacy-operation-1');
+  assert.equal(upgraded.status, 200, JSON.stringify(upgraded.body));
+  assert.equal(upgraded.body.refreshToken.split('.').length, 3);
+  const forged = `${id}.${randomBytes(32).toString('base64url')}`;
+  assert.equal((await refresh(api, forged, 'legacy-forged')).status, 401);
+  assert.equal((await api.store.findOne('sessions', { session_id: id })).revoked_at, null);
+  const reused = await refresh(api, legacy(0), 'legacy-operation-2');
+  assert.equal(reused.status, 401);
+  assert.match(reused.body.message, /used from two places/);
 });

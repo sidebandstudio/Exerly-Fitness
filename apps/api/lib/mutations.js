@@ -14,6 +14,16 @@ function canonicalJSON(value) {
   return JSON.stringify(value);
 }
 
+// Operation receipts are kept for years. A fast hash of a body holding a
+// password would let anyone with the database test guesses against it.
+const PASSWORD_FIELDS = ['password', 'currentPassword', 'newPassword'];
+function withoutPasswords(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body ?? null;
+  const copy = { ...body };
+  for (const field of PASSWORD_FIELDS) delete copy[field];
+  return copy;
+}
+
 // Keep acknowledgement and data in the same transaction. Responses leave the
 // process only after commit; a lost response can be read again with the same key.
 // Operation keys are retained until account deletion, including old offline work.
@@ -29,7 +39,7 @@ async function executeMutation(req, res, fn) {
       canonicalJSON({
         method: req.method,
         path: req.originalUrl,
-        body: req.body ?? null,
+        body: withoutPasswords(req.body),
         revision: req.get('If-Match') ?? null,
       })
     )

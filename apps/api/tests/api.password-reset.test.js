@@ -32,6 +32,7 @@ test('a reset request says the same thing whether or not the account exists', as
     assert.equal(res.status, 202, email);
     answers.push(res.body);
   }
+  await passwordReset.settle();
   assert.deepEqual(answers[1], answers[0]);
   assert.deepEqual(answers[2], answers[0]);
   assert.deepEqual(
@@ -53,7 +54,7 @@ test('a reset code is stored hashed, works once, and ends every session and toke
   const phone = await loginModern(api, user.email, user.password);
   const agent = await personalToken(api, user);
   await forgot(api, user.email);
-  const code = mailedCode(user.email);
+  const code = await mailedCode(user.email);
 
   const rows = await api.store.find('password_resets', { account_id: user.user._id });
   assert.equal(rows.length, 1);
@@ -85,7 +86,7 @@ test('a reset code is stored hashed, works once, and ends every session and toke
 test('five wrong guesses, a newer code or expiry end a code', async () => {
   const user = await signUp(api);
   await forgot(api, user.email);
-  const guessed = mailedCode(user.email);
+  const guessed = await mailedCode(user.email);
   for (let i = 0; i < 5; i++) {
     const wrong = passwordReset.newCode();
     if (wrong === guessed.replace('-', '')) continue;
@@ -95,9 +96,9 @@ test('five wrong guesses, a newer code or expiry end a code', async () => {
 
   resetRateLimits();
   await forgot(api, user.email);
-  const first = mailedCode(user.email);
+  const first = await mailedCode(user.email);
   await forgot(api, user.email);
-  const second = mailedCode(user.email);
+  const second = await mailedCode(user.email);
   assert.notEqual(first, second);
   assert.equal(
     (await resetPassword(api, user.email, first)).status,
@@ -107,7 +108,7 @@ test('five wrong guesses, a newer code or expiry end a code', async () => {
 
   resetRateLimits();
   await forgot(api, user.email);
-  const late = mailedCode(user.email);
+  const late = await mailedCode(user.email);
   await api.store.updateMany(
     'password_resets',
     { account_id: user.user._id, used_at: null },
@@ -133,4 +134,77 @@ test('reset requests and attempts are rate limited', async () => {
     assert.equal((await resetPassword(api, 'nobody-here@exerly.test', 'ABCD-EFGH')).status, 400);
   }
   assert.equal((await resetPassword(api, 'nobody-here@exerly.test', 'ABCD-EFGH')).status, 429);
+});
+
+// ---------- Timing and concurrency ----------
+
+test('a reset request is answered before the account is looked up', async () => {
+  const user = await signUp(api);
+  const original = api.store.findOne;
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  let lookedUp = false;
+  api.store.findOne = async (collection, filter, ...rest) => {
+    if (collection === 'users' && filter?.email === user.email) {
+      lookedUp = true;
+      await gate;
+    }
+    return original(collection, filter, ...rest);
+  };
+  try {
+    const answered = await Promise.race([
+      forgot(api, user.email),
+      new Promise((resolve) => setTimeout(() => resolve('timed out'), 3000)),
+    ]);
+    assert.notEqual(answered, 'timed out', 'the response waited for the account lookup');
+    assert.equal(answered.status, 202);
+    assert.equal(mail.sent(user.email).length, 0, 'nothing account-dependent ran first');
+    release();
+    await passwordReset.settle();
+    assert.ok(lookedUp);
+    assert.equal(mail.sent(user.email).length, 1);
+  } finally {
+    release();
+    api.store.findOne = original;
+  }
+});
+
+test('one reset code used by several requests at once changes the password once', async () => {
+  const user = await signUp(api);
+  await forgot(api, user.email);
+  const code = await mailedCode(user.email);
+  const passwords = Array.from({ length: 5 }, (_, i) => `concurrent-passphrase-${i}`);
+  const results = await Promise.all(passwords.map((p) => resetPassword(api, user.email, code, p)));
+  assert.deepEqual(
+    results.map((r) => r.status).sort(),
+    [200, 400, 400, 400, 400],
+    JSON.stringify(results.map((r) => r.body))
+  );
+  const winner = passwords[results.findIndex((r) => r.status === 200)];
+  resetRateLimits();
+  for (const p of passwords) {
+    const login = await api.post('/login', { email: user.email, password: p });
+    assert.equal(login.status, p === winner ? 200 : 401, p);
+  }
+});
+
+test('wrong guesses made at once cannot add up to more than five', async () => {
+  const user = await signUp(api);
+  await forgot(api, user.email);
+  const code = await mailedCode(user.email);
+  const guesses = [];
+  while (guesses.length < 10) {
+    const guess = passwordReset.newCode();
+    if (guess !== code.replace('-', '')) guesses.push(guess);
+  }
+  const results = await Promise.all(guesses.map((g) => resetPassword(api, user.email, g)));
+  assert.ok(
+    results.every((r) => r.status === 400),
+    JSON.stringify(results.map((r) => r.status))
+  );
+  const [row] = await api.store.find('password_resets', { account_id: user.user._id });
+  assert.equal(row.attempts, 5, 'exactly five guesses counted');
+  assert.ok(row.used_at, 'the code is used up');
+  resetRateLimits();
+  assert.equal((await resetPassword(api, user.email, code)).status, 400);
 });

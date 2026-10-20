@@ -46,6 +46,29 @@ function matches(stored, accountID, code) {
 /** Addresses that can receive mail; Sign in with Apple placeholders can't. */
 const deliverable = (email) => !email.endsWith('.invalid');
 
+// Anything that depends on whether an address has an account runs after the
+// response has gone, so how long the response takes says nothing about it.
+const pending = new Set();
+
+/** Runs `work` for `email` after the current response. Failures are logged without the address. */
+function afterResponse(email, work) {
+  const job = new Promise((resolve) => setImmediate(resolve))
+    .then(work)
+    .catch((error) =>
+      console.error(
+        'Password reset not sent:',
+        String(error?.message ?? error).replaceAll(email, '<address>')
+      )
+    )
+    .finally(() => pending.delete(job));
+  pending.add(job);
+}
+
+/** Resolves once every queued request has finished. For tests and shutdown. */
+async function settle() {
+  while (pending.size) await Promise.all(pending);
+}
+
 module.exports = {
   newCode,
   display,
@@ -53,6 +76,8 @@ module.exports = {
   digest,
   matches,
   deliverable,
+  afterResponse,
+  settle,
   TTL_MS,
   MAX_ATTEMPTS,
 };

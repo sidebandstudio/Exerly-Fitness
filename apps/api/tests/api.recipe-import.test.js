@@ -341,7 +341,7 @@ test('import needs the app’s session, a link, and stays under the hourly limit
   assert.equal((await api.post('/v1/recipes/import', { url: `${base}/recipe` })).status, 401);
   const token = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read', 'propose', 'write'] },
+    { name: 'Synthetic agent', scopes: ['read', 'propose', 'write'], password: user.password },
     { token: user.token, headers: { 'Idempotency-Key': randomUUID() } }
   );
   const byToken = await api.post(

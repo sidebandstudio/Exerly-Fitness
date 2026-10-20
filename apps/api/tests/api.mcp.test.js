@@ -31,7 +31,7 @@ const key = () => ({ 'Idempotency-Key': randomUUID() });
 async function token(user, scopes) {
   const res = await api.post(
     '/v1/tokens',
-    { name: `Synthetic agent (${scopes.join('+')})`, scopes },
+    { name: `Synthetic agent (${scopes.join('+')})`, scopes, password: user.password },
     { token: user.token, headers: key() }
   );
   assert.equal(res.status, 201, JSON.stringify(res.body));

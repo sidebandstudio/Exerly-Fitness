@@ -1417,3 +1417,25 @@ file timestamp reason C617.1 for the label-photo import. The watch app gets its
 own manifest for its UserDefaults, and release_checks.py requires it. Health
 reads and writes that stay in Health or on the device aren't collected data.
 The audit and the label table are in docs/release/privacy-review.md.
+
+## 2026-10-20: a session alone never adds a way in, and password accounts always confirm with the password
+
+The security review found a stolen session could connect its own Apple ID and
+then use a fresh Sign in with Apple to delete a password account. Now:
+
+- A password account confirms with its password, whatever else is connected.
+  An account without one confirms with a fresh Sign in with Apple as an Apple
+  ID it already has (lib/reauth.js).
+- That proof is needed to delete the account, connect Apple, disconnect Apple
+  and create a personal access token, since a token outlives the session that
+  made it. Changing the password already needed the current one; there is no
+  email change. Exporting stays session-only: a session can read everything
+  the export holds anyway.
+- Password fields are left out of the fingerprint kept with an idempotency
+  receipt, so the receipts table holds nothing to test password guesses
+  against.
+- Refresh credentials carry their generation inside the MAC, so refusing a
+  forged one is one HMAC, not one per rotation. Older two-part credentials
+  rotate once more; reuse of one is recognised for 16 generations.
+- Forgot password answers before looking the address up and issues the code
+  afterwards, so its timing says nothing about which addresses have accounts.

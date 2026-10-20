@@ -111,7 +111,7 @@ test('an account with a plan of its own, or without targets, is left alone', asy
 
   const minted = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read', 'write'] },
+    { name: 'Synthetic agent', scopes: ['read', 'write'], password: fresh.password },
     { token: fresh.token, headers: { 'Idempotency-Key': randomUUID() } }
   );
   assert.equal((await adopt({ token: minted.body.token })).status, 403);

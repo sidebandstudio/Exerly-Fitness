@@ -247,7 +247,7 @@ test('an export imports into another account whole, and twice changes nothing', 
   assert.equal((await api.post('/v1/import', { hello: 1 }, { token: to.token })).status, 400);
   const minted = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read', 'write'] },
+    { name: 'Synthetic agent', scopes: ['read', 'write'], password: to.password },
     { token: to.token, headers: key() }
   );
   assert.equal((await api.post('/v1/import', exported, { token: minted.body.token })).status, 403);
@@ -266,7 +266,7 @@ test("an import's body is read only for the signed-in app", async () => {
   const user = await signUp(api);
   const minted = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read', 'write'] },
+    { name: 'Synthetic agent', scopes: ['read', 'write'], password: user.password },
     { token: user.token, headers: key() }
   );
   assert.equal((await raw({ Authorization: `Bearer ${minted.body.token}` })).status, 403);

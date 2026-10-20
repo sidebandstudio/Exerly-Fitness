@@ -152,11 +152,50 @@ router.post(
   })
 );
 
-// Password recovery by a code sent to the account's email. The request always
-// gets the same answer, sent before any mail goes out, so it never says
-// whether an address has an account.
+// Password recovery by a code sent to the account's email. Every valid
+// request gets the same answer straight away, before the address is even
+// looked up, so neither the answer nor its timing says whether an address has
+// an account. The code is issued and mailed afterwards.
 const RESET_REQUESTED =
   'If an Exerly account uses that email, we sent it a code. It works for 15 minutes.';
+
+async function issueResetCode(email) {
+  if (!passwordReset.deliverable(email)) return;
+  const code = passwordReset.newCode();
+  const issued = await store.transaction(async () => {
+    const user = await store.findOne('users', { email });
+    if (!user) return false;
+    const now = new Date();
+    // A new code ends every earlier one.
+    await store.updateMany(
+      'password_resets',
+      { account_id: user.id, used_at: null },
+      { used_at: now }
+    );
+    await store.insert('password_resets', {
+      account_id: user.id,
+      code_hash: passwordReset.digest(user.id, code),
+      attempts: 0,
+      created_at: now,
+      expires_at: new Date(now.getTime() + passwordReset.TTL_MS),
+    });
+    return true;
+  });
+  if (!issued) return;
+  await mail.send({
+    to: email,
+    subject: 'Your Exerly password reset code',
+    text: [
+      `Your code is ${passwordReset.display(code)}.`,
+      '',
+      'Enter it in Exerly within 15 minutes to choose a new password. Changing it signs you out on every device.',
+      '',
+      'If you didn’t ask for this, ignore this email. Your password hasn’t changed.',
+      '',
+      'Exerly by Sideband · https://sideband.studio',
+    ].join('\n'),
+  });
+}
 
 router.post(
   '/auth/password/forgot',
@@ -173,43 +212,8 @@ router.post(
   }),
   asyncHandler(async (req, res) => {
     const email = v.email(req.body.email);
-    const user = await store.findOne('users', { email });
-    if (user && passwordReset.deliverable(email)) {
-      const code = passwordReset.newCode();
-      const now = new Date();
-      await store.transaction(async () => {
-        // A new code ends every earlier one.
-        await store.updateMany(
-          'password_resets',
-          { account_id: user.id, used_at: null },
-          { used_at: now }
-        );
-        await store.insert('password_resets', {
-          account_id: user.id,
-          code_hash: passwordReset.digest(user.id, code),
-          attempts: 0,
-          created_at: now,
-          expires_at: new Date(now.getTime() + passwordReset.TTL_MS),
-        });
-      });
-      mail
-        .send({
-          to: email,
-          subject: 'Your Exerly password reset code',
-          text: [
-            `Your code is ${passwordReset.display(code)}.`,
-            '',
-            'Enter it in Exerly within 15 minutes to choose a new password. Changing it signs you out on every device.',
-            '',
-            'If you didn’t ask for this, ignore this email. Your password hasn’t changed.',
-            '',
-            'Exerly by Sideband · https://sideband.studio',
-          ].join('\n'),
-        })
-        // The address stays out of the log.
-        .catch((error) => console.error('Password reset email not sent:', error.message));
-    }
     res.status(202).json({ message: RESET_REQUESTED });
+    passwordReset.afterResponse(email, () => issueResetCode(email));
   })
 );
 

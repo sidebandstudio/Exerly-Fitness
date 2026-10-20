@@ -142,7 +142,7 @@ test("a token's webhooks are its own and stop when it is revoked; accounts don't
   const other = await signUp(api);
   const minted = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic dashboard', scopes: ['read'] },
+    { name: 'Synthetic dashboard', scopes: ['read'], password: user.password },
     { token: user.token, headers: key() }
   );
   const agent = minted.body.token;

@@ -27,26 +27,28 @@ return a generic message in production and include the stack in development.
 
 ## Auth
 
-| Method | Path                    | Notes                                                                                                                            |
-| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/signup`               | `{name, email, password, timezone?}` → `{token, user}`. Password must be 8+ characters. 5 per hour per IP                        |
-| POST   | `/login`                | `{email, password}` → `{token, user}`. 8 attempts per 10 minutes per IP                                                          |
-| POST   | `/auth/refresh`         | Compatibility exchange. Modern clients use it only when upgrading an older saved credential                                      |
-| POST   | `/auth/token`           | `{refreshToken}` with a persisted `Idempotency-Key`; rotates a modern session                                                    |
-| POST   | `/auth/logout`          | Revokes the current server session                                                                                               |
-| GET    | `/api/sessions`         | Lists this account's active sessions without credentials                                                                         |
-| DELETE | `/api/sessions/:id`     | Revokes an owned session                                                                                                         |
-| POST   | `/api/change-password`  | `{currentPassword, newPassword}`                                                                                                 |
-| POST   | `/auth/password/forgot` | `{email}` → 202 with the same message whether or not the account exists; mails a code. 5 per 15 min per IP, 3 per hour per email |
-| POST   | `/auth/password/reset`  | `{email, code, newPassword}`; 400 `reset_code_invalid` for any wrong, used, expired or unknown case. 10 per 15 min per IP        |
+| Method | Path                    | Notes                                                                                                                                         |
+| ------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/signup`               | `{name, email, password, timezone?}` → `{token, user}`. Password must be 8+ characters. 5 per hour per IP                                     |
+| POST   | `/login`                | `{email, password}` → `{token, user}`. 8 attempts per 10 minutes per IP                                                                       |
+| POST   | `/auth/refresh`         | Compatibility exchange. Modern clients use it only when upgrading an older saved credential                                                   |
+| POST   | `/auth/token`           | `{refreshToken}` with a persisted `Idempotency-Key`; rotates a modern session                                                                 |
+| POST   | `/auth/logout`          | Revokes the current server session                                                                                                            |
+| GET    | `/api/sessions`         | Lists this account's active sessions without credentials                                                                                      |
+| DELETE | `/api/sessions/:id`     | Revokes an owned session                                                                                                                      |
+| POST   | `/api/change-password`  | `{currentPassword, newPassword}`                                                                                                              |
+| POST   | `/auth/password/forgot` | `{email}` → 202 at once, before the address is looked up; the code is issued and mailed afterwards. 5 per 15 min per IP, 3 per hour per email |
+| POST   | `/auth/password/reset`  | `{email, code, newPassword}`; 400 `reset_code_invalid` for any wrong, used, expired or unknown case. 10 per 15 min per IP                     |
 
 Signup, login and the compatibility refresh route accept `X-Session-Protocol: 2`. These clients receive a 15-minute access token and a rotating refresh credential with a 90-day session lifetime. They persist the refresh operation key until the replacement credential is saved. A lost acknowledgement can be retried using the same prior credential and operation. Password changes revoke all sessions. Clients without the protocol header receive the compatibility 30-day access token. Both native and browser clients use protocol 2. The browser stores its session under the configured API URL and assigns each refresh credential an operation key before use. Tabs replay the same credential/key pair; a successful rotation atomically replaces both. Fresh launches read `/api/me` without creating another session. Older scoped browser credentials upgrade once through the compatibility endpoint. An old unscoped browser token is adopted only for its original production API. Compatibility refresh remains limited to 60 calls per account per ten minutes.
 
-A refresh credential this session already rotated past, presented again (not a retry of a lost acknowledgement with its own operation key), ends the session: one of its two holders copied it, and the server can't tell which.
+A refresh credential this session already rotated past, presented again (not a retry of a lost acknowledgement with its own operation key), ends the session: one of its two holders copied it, and the server can't tell which. Credentials are `session.generation.mac`, with the generation inside the MAC, so recognising an earlier one is a single HMAC however often the session rotated. Credentials issued before that, `session.mac`, rotate once more into the new form; reuse of one is recognised for the 16 generations before the current one.
 
 Password reset codes are 8 characters (shown `ABCD-EFGH`), last 15 minutes, work once, and stop working after five wrong guesses or when a newer code is requested. Only an HMAC keyed with the server secret and the account is stored. A successful reset revokes every session and personal access token. Mail goes through `lib/mail.js`: `MAIL_TRANSPORT=memory` in tests and the simulator fixture, `log` in development; production has no transport until an email provider is chosen.
 
-`DELETE /api/account` needs `{confirm: true}` and proof of identity: `password` for a password account, or a Sign in with Apple `identityToken` and raw `nonce` from the last ten minutes for the connected Apple ID. A missing proof is 400 (`password_required` or `apple_reauthorization_required`); a wrong one is 403 (`wrong_password` or `apple_not_confirmed`), never 401, so clients keep the session. Five attempts per account per hour.
+`DELETE /api/account` needs `{confirm: true}` and proof of identity: `password` for a password account, always, even with Apple connected; for an account without a password, a Sign in with Apple `identityToken` and raw `nonce` from the last ten minutes for an Apple ID already connected to it. A missing proof is 400 (`password_required` or `apple_reauthorization_required`); a wrong one is 403 (`wrong_password` or `apple_not_confirmed`), never 401, so clients keep the session. Five attempts per account per hour.
+
+The same proof is needed to connect Apple (`POST /api/account/identities/apple` with `password`, or `currentIdentityToken` and `currentNonce` alongside the new `identityToken` and `nonce`), to disconnect it (`DELETE` with `{password}`), and to create a personal access token (`POST /v1/tokens` with `password`, or `identityToken` and `nonce`). Five connect and five disconnect attempts per account per hour, and 30 token creations. Password fields are left out of the request fingerprint kept with an `Idempotency-Key` receipt.
 
 ## Bootstrap and setup
 

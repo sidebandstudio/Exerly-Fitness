@@ -3,8 +3,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { startServer, signUp } = require('./helpers/server');
+const { canonicalJSON } = require('../lib/mutations');
 
 let api;
 test.before(async () => {
@@ -19,7 +20,7 @@ const key = () => ({ 'Idempotency-Key': randomUUID() });
 async function token(user, scopes, extra = {}) {
   const res = await api.post(
     '/v1/tokens',
-    { name: `Synthetic ${scopes.join('+')}`, scopes, ...extra },
+    { name: `Synthetic ${scopes.join('+')}`, scopes, password: user.password, ...extra },
     {
       token: user.token,
       headers: key(),
@@ -275,7 +276,7 @@ test('scopes and names are validated, and accounts hold at most 20 tokens', asyn
     (
       await api.post(
         '/v1/tokens',
-        { name: 'one more', scopes: ['read'] },
+        { name: 'one more', scopes: ['read'], password: user.password },
         { token: user.token, headers: key() }
       )
     ).status,
@@ -302,7 +303,7 @@ test('deleting the account removes its tokens', async () => {
 test('a token secret is never kept in an idempotency receipt; a replay says it was shown once', async () => {
   const user = await signUp(api);
   const headers = { 'Idempotency-Key': `create-${randomUUID()}` };
-  const body = { name: 'Synthetic agent', scopes: ['read'] };
+  const body = { name: 'Synthetic agent', scopes: ['read'], password: user.password };
   const created = await api.post('/v1/tokens', body, { token: user.token, headers });
   assert.equal(created.status, 201);
   assert.match(created.body.token, /^exr_/);
@@ -314,4 +315,23 @@ test('a token secret is never kept in an idempotency receipt; a replay says it w
   assert.equal(replay.body.id, created.body.id);
   assert.equal(replay.body.token, null);
   assert.equal(replay.body.token_shown_once, true);
+});
+
+test('a password sent to create a token never reaches the stored receipt', async () => {
+  const user = await signUp(api);
+  const headers = { 'Idempotency-Key': `create-${randomUUID()}` };
+  const body = { name: 'Synthetic agent', scopes: ['read'], password: user.password };
+  assert.equal((await api.post('/v1/tokens', body, { token: user.token, headers })).status, 201);
+  const [receipt] = await api.store.find('operations', {
+    account_id: user.user._id,
+    key: headers['Idempotency-Key'],
+  });
+  const withPassword = createHash('sha256')
+    .update(canonicalJSON({ method: 'POST', path: '/v1/tokens', body, revision: null }))
+    .digest('hex');
+  assert.notEqual(receipt.fingerprint, withPassword);
+  assert.ok(!JSON.stringify(receipt).includes(user.password));
+  // A retry of the same request is still recognised as the same operation.
+  const replay = await api.post('/v1/tokens', body, { token: user.token, headers });
+  assert.equal(replay.headers.get('idempotency-replayed'), 'true');
 });

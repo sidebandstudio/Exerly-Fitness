@@ -7,6 +7,7 @@ const { generateKeyPairSync, randomBytes } = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const apple = require('../../lib/apple');
 const mail = require('../../lib/mail');
+const passwordReset = require('../../lib/passwordReset');
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const KID = 'local-test-key';
@@ -17,21 +18,25 @@ function trustLocalAppleKey() {
 }
 
 /** A Sign in with Apple identity token and its raw nonce. */
-function appleCredential(sub, { issuedSecondsAgo = 0, lifetime = 600 } = {}) {
+function appleCredential(
+  sub,
+  { issuedSecondsAgo = 0, lifetime = 600, withoutIssuedAt = false } = {}
+) {
   const nonce = randomBytes(16).toString('hex');
   const iat = Math.floor(Date.now() / 1000) - issuedSecondsAgo;
-  const identityToken = jwt.sign(
-    {
-      iss: 'https://appleid.apple.com',
-      aud: 'com.exerly.fitness',
-      sub,
-      nonce: apple.sha256(nonce),
-      iat,
-      exp: iat + lifetime,
-    },
-    privateKey,
-    { algorithm: 'RS256', keyid: KID }
-  );
+  const claims = {
+    iss: 'https://appleid.apple.com',
+    aud: 'com.exerly.fitness',
+    sub,
+    nonce: apple.sha256(nonce),
+    exp: iat + lifetime,
+  };
+  if (!withoutIssuedAt) claims.iat = iat;
+  const identityToken = jwt.sign(claims, privateKey, {
+    algorithm: 'RS256',
+    keyid: KID,
+    noTimestamp: withoutIssuedAt,
+  });
   return { identityToken, nonce };
 }
 
@@ -63,7 +68,7 @@ const refresh = (api, refreshToken, key) =>
 async function personalToken(api, user) {
   const res = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read'] },
+    { name: 'Synthetic agent', scopes: ['read'], password: user.password },
     {
       token: user.token,
       headers: { 'Idempotency-Key': `token-${randomBytes(6).toString('hex')}` },
@@ -73,8 +78,9 @@ async function personalToken(api, user) {
   return res.body.token;
 }
 
-/** The latest reset code mailed to `email`. */
-function mailedCode(email) {
+/** The latest reset code mailed to `email`, once queued reset requests have run. */
+async function mailedCode(email) {
+  await passwordReset.settle();
   const message = mail.sent(email).at(-1);
   assert.ok(message, `no mail to ${email}`);
   const match = message.text.match(/code is ([A-Z0-9]{4}-[A-Z0-9]{4})/);

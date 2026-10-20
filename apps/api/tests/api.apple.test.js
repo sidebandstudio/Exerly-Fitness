@@ -138,7 +138,7 @@ test('an existing password account must link Apple itself before Apple can sign 
 
   const linked = await api.post(
     '/api/account/identities/apple',
-    credential({ sub, email: 'shared@exerly.test' }),
+    { ...credential({ sub, email: 'shared@exerly.test' }), password: existing.password },
     {
       token: existing.token,
     }
@@ -151,13 +151,18 @@ test('an existing password account must link Apple itself before Apple can sign 
 
   // The same Apple ID cannot be attached to a second account.
   const other = await signUp(api);
-  const stolen = await api.post('/api/account/identities/apple', credential({ sub }), {
-    token: other.token,
-  });
+  const stolen = await api.post(
+    '/api/account/identities/apple',
+    { ...credential({ sub }), password: other.password },
+    { token: other.token }
+  );
   assert.equal(stolen.status, 409);
 
   // Unlinking needs a password, which this account has.
-  const unlinked = await api.del('/api/account/identities/apple', { token: existing.token });
+  const unlinked = await api.del('/api/account/identities/apple', {
+    token: existing.token,
+    body: { password: existing.password },
+  });
   assert.equal(unlinked.status, 200);
   assert.equal((await signIn(credential({ sub, email: 'shared@exerly.test' }))).status, 409);
 });
@@ -185,9 +190,16 @@ test('bootstrap reports which sign-in methods the account has', async () => {
   const person = await signUp(api);
   assert.deepEqual(await methods(person.token), { password: true, apple: false });
   const sub = '001234.methods.0001';
-  await api.post('/api/account/identities/apple', credential({ sub }), { token: person.token });
+  await api.post(
+    '/api/account/identities/apple',
+    { ...credential({ sub }), password: person.password },
+    { token: person.token }
+  );
   assert.deepEqual(await methods(person.token), { password: true, apple: true });
-  await api.del('/api/account/identities/apple', { token: person.token });
+  await api.del('/api/account/identities/apple', {
+    token: person.token,
+    body: { password: person.password },
+  });
   assert.deepEqual(await methods(person.token), { password: true, apple: false });
 
   const appleOnly = await signIn(credential());

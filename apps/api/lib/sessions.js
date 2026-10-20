@@ -12,9 +12,30 @@ function equal(a, b) {
     timingSafeEqual(Buffer.from(a), Buffer.from(b))
   );
 }
-function credential(sessionID, generation) {
+function refreshMAC(sessionID, generation) {
   const { resolveSecret } = require('./auth');
-  return `${sessionID}.${createHmac('sha256', resolveSecret()).update(`refresh:${sessionID}:${generation}`).digest('base64url')}`;
+  return createHmac('sha256', resolveSecret())
+    .update(`refresh:${sessionID}:${generation}`)
+    .digest('base64url');
+}
+// `session.generation.mac`. The generation is covered by the MAC, so a
+// presented credential says which rotation it came from and checking it is
+// one HMAC however many rotations the session has had.
+function credential(sessionID, generation) {
+  return `${sessionID}.${generation}.${refreshMAC(sessionID, generation)}`;
+}
+// Credentials issued before the generation was included were
+// `session.mac`. They stay valid until their next rotation.
+const legacyCredential = (sessionID, generation) =>
+  `${sessionID}.${refreshMAC(sessionID, generation)}`;
+const LEGACY_REUSE_WINDOW = 16;
+
+/** The session's current credential, in the form it was issued in. */
+function currentCredential(session) {
+  const legacy = legacyCredential(session.session_id, session.generation);
+  return equal(session.refresh_hash, hash(legacy))
+    ? legacy
+    : credential(session.session_id, session.generation);
 }
 
 function isActive(session, user) {
@@ -33,7 +54,7 @@ function response(user, session, { modern = true } = {}) {
       sid: session.session_id,
       version: session.credentials_version ?? 0,
     }),
-    refreshToken: modern ? credential(session.session_id, session.generation) : undefined,
+    refreshToken: modern ? currentCredential(session) : undefined,
     expiresIn: modern ? 900 : 2592000,
     sessionId: session.session_id,
     user: serializeUser(user),
@@ -200,10 +221,22 @@ async function rotate(refreshToken, operation) {
 
 const REUSED = Symbol('reused refresh credential');
 
-/** Whether `presented` is this session's credential from an earlier generation. */
+/**
+ * Whether `presented` is this session's credential from an earlier
+ * generation. A forged credential costs at most LEGACY_REUSE_WINDOW HMACs to
+ * refuse, never one per rotation.
+ */
 function rotatedEarlier(presented, sessionID, generation) {
-  for (let earlier = generation - 1; earlier >= 0; earlier--) {
-    if (equal(credential(sessionID, earlier), presented)) return true;
+  const parts = presented.split('.');
+  if (parts.length === 3) {
+    if (!/^\d{1,15}$/.test(parts[1])) return false;
+    const earlier = Number(parts[1]);
+    return earlier < generation && equal(refreshMAC(sessionID, earlier), parts[2]);
+  }
+  if (parts.length !== 2) return false;
+  const oldest = Math.max(0, generation - LEGACY_REUSE_WINDOW);
+  for (let earlier = generation - 1; earlier >= oldest; earlier--) {
+    if (equal(legacyCredential(sessionID, earlier), presented)) return true;
   }
   return false;
 }
