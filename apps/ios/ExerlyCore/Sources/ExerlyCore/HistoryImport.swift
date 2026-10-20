@@ -23,17 +23,30 @@ public struct ImportLine: Sendable, Codable, Hashable, Identifiable {
     public var new: Int
     /// Already in Exerly, and left as it is.
     public var existing: Int
+    /// In Exerly from an earlier import, and changed in the file since: the
+    /// import updates them.
+    public var updated: Int
 
     public var id: String { key }
 
     /// Lines that break another down, such as a workout's sets.
     public static let breakdowns: Set<String> = ["exercises", "sets"]
 
-    public init(key: String, title: String, new: Int, existing: Int = 0) {
+    public init(key: String, title: String, new: Int, existing: Int = 0, updated: Int = 0) {
         self.key = key
         self.title = title
         self.new = new
         self.existing = existing
+        self.updated = updated
+    }
+
+    enum CodingKeys: String, CodingKey { case key, title, new, existing, updated }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(key: try c.decode(String.self, forKey: .key), title: try c.decode(String.self, forKey: .title),
+                  new: try c.decode(Int.self, forKey: .new), existing: try c.decode(Int.self, forKey: .existing),
+                  updated: try c.decodeIfPresent(Int.self, forKey: .updated) ?? 0)
     }
 }
 
@@ -99,9 +112,9 @@ public struct HistoryImportPlan: Sendable {
 
     /// Nothing to save: the file is empty or already in Exerly.
     public var isEmpty: Bool { writes.isEmpty }
-    /// What the import adds, counting workouts rather than the exercises
-    /// and sets inside them.
-    public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new } }
+    /// What the import adds or updates, counting workouts rather than the
+    /// exercises and sets inside them.
+    public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new + $1.updated } }
 
     public init(source: ImportSource, files: [String], timeZone: TimeZone) {
         self.source = source

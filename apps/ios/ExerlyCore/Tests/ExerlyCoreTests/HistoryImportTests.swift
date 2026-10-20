@@ -62,10 +62,11 @@ import Testing
         return (persistence, nutrition, training, HistoryImporter(hosts: [training, nutrition], persistence: persistence, now: { Fixture.instant() }))
     }
 
-    func plan(_ text: String, name: String = "export.csv", options: HistoryImportReader.Options, hosts: [DocumentHost]) throws -> HistoryImportPlan {
+    func plan(_ text: String, name: String = "export.csv", options: HistoryImportReader.Options, hosts: [DocumentHost],
+              records: [ImportRecord] = []) throws -> HistoryImportPlan {
         let files = [(name: name, data: Data(text.utf8))]
         let parsed = try HistoryImportReader.read(files, options: options, library: library, now: Fixture.instant())
-        return try HistoryImportReader.plan(parsed, files: [name], options: options, hosts: hosts)
+        return try HistoryImportReader.plan(parsed, files: [name], options: options, hosts: hosts, records: records)
     }
 
     // MARK: Detection
@@ -324,6 +325,69 @@ import Testing
         let again = try HistoryImportReader.plan(try HistoryImportReader.read([("exerly-export.json", first)], options: options, library: library),
                                                  files: [], options: options, hosts: [freshTraining, freshNutrition])
         #expect(again.isEmpty)
+    }
+
+    // MARK: Corrected workouts
+
+    /// The same Hevy account exported again after the push day was renamed and
+    /// its end time corrected, with a new legs day.
+    static let hevyCorrected = WorkoutImportTests.hevy
+        .replacingOccurrences(of: #""Push day","5 Oct 2026, 18:00","5 Oct 2026, 19:05""#,
+                              with: #""Push day (heavy)","5 Oct 2026, 18:00","5 Oct 2026, 19:20""#)
+        + #"""
+        "Legs","9 Oct 2026, 07:00","9 Oct 2026, 08:00","","Squat (Barbell)",,"",0,"normal",140,5,,,8
+
+        """#
+
+    @Test func aWorkoutCorrectedInHevyIsUpdatedNotAddedAgain() throws {
+        let (_, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
+        let benchSets = training.history.sets(of: "barbell-bench-press").count
+
+        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 1, updated: 1))
+        let record = try importer.commit(corrected)
+        #expect(training.history.sessions.map(\.name) == ["Push day (heavy)", "Pull day", "Legs"])
+        #expect(training.history.sets(of: "barbell-bench-press").count == benchSets, "No set is added twice")
+        let push = try #require(training.history.sessions.first)
+        #expect(push.endedAt == Date(timeIntervalSince1970: 1_791_237_600 + 80 * 60))
+
+        // Undo puts the first import's version back.
+        try importer.undo(record.id)
+        #expect(training.history.sessions.map(\.name) == ["Push day", "Pull day"])
+    }
+
+    @Test func aStrongWorkoutRenamedWithANewDurationIsUpdated() throws {
+        let (_, nutrition, training, importer) = try stores()
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds, leftOut: ["Synthetic Landmine Twist"])
+        try importer.commit(try plan(Self.strong, options: options, hosts: [training, nutrition]))
+        let renamed = Self.strong.replacingOccurrences(of: "Synthetic Upper,1h 5m", with: "Synthetic Upper Body,1h 20m")
+        let corrected = try plan(renamed, options: options, hosts: [training, nutrition], records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 0, existing: 1, updated: 1))
+        try importer.commit(corrected)
+        let upper = try #require(training.history.sessions.first)
+        #expect(training.history.sessions.count == 2 && upper.name == "Synthetic Upper Body")
+        #expect(upper.endedAt == upper.startedAt.addingTimeInterval(80 * 60))
+    }
+
+    @Test func aWorkoutChangedInExerlyIsKeptWhenTheFileChangesItToo() throws {
+        let (persistence, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
+        var push = try #require(training.history.sessions.first)
+        push.notes = "Edited in Exerly"
+        try persistence.performAtomically {
+            try training.prepareWrite(kind: "workout_session", id: push.id.uuidString, payload: ExerlyJSON.canonical(push))()
+        }
+        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 2))
+        #expect(corrected.lost.contains("1 workout you changed in Exerly since the last import is kept as it is."))
+        try importer.commit(corrected)
+        #expect(training.history.sessions.map(\.notes).first == "Edited in Exerly")
+        #expect(training.history.sessions.count == 3)
     }
 
     // MARK: A daily total and the foods that replace it

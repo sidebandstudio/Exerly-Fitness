@@ -13,6 +13,8 @@ public struct MacroFactorImportSummary: Sendable, Hashable {
         /// Already in Exerly, from an earlier import or as the same reading,
         /// and left as they are.
         public var existing = 0
+        /// From an earlier import and changed in the file since: updated.
+        public var updated = 0
     }
 
     public var counts: [Kind: Count] = [:]
@@ -50,9 +52,12 @@ public struct MacroFactorImport {
     private var days: [NutritionDay] = []
     private var weights: [WeightEntry] = []
     private var plans: [NutritionPlan] = []
-    private var sessions: [WorkoutSession] = []
+    private var sessions: [PlannedWrite] = []
+    /// Workouts changed both in the file and in Exerly since the last import: Exerly's are kept.
+    public private(set) var keptEdited = 0
 
-    public init(_ export: MacroFactorExport, nutrition: NutritionStore, training: TrainingStore) {
+    /// `records` are the account's earlier imports, for workouts the file updates.
+    public init(_ export: MacroFactorExport, nutrition: NutritionStore, training: TrainingStore, records: [ImportRecord] = []) {
         self.export = export
         summary = MacroFactorImportSummary(dateRange: export.dateRange, report: export.report)
         func count(_ kind: Kind, new: Bool) {
@@ -121,10 +126,11 @@ public struct MacroFactorImport {
             }
         }
 
-        for session in export.sessions {
-            let new = training.history.session(session.id) == nil && training.activeSession?.id != session.id
-            if new { sessions.append(session) }
-            count(.workouts, new: new)
+        if !export.sessions.isEmpty, let reconciled = try? HistoryImportReader.reconcile(export.sessions, training: training, records: records) {
+            sessions = reconciled.writes
+            summary.counts[.workouts] = MacroFactorImportSummary.Count(new: reconciled.new, existing: reconciled.existing,
+                                                                       updated: reconciled.updated)
+            keptEdited = reconciled.keptEdited
         }
     }
 
@@ -169,7 +175,7 @@ public struct MacroFactorImport {
         }
         writes += try weights.map { try add(NutritionStore.weightKind, $0.id.uuidString, $0) }
         writes += try plans.map { try add(NutritionStore.planKind, $0.id.uuidString, $0) }
-        writes += try sessions.map { try add(TrainingStore.sessionKind, $0.id.uuidString, $0) }
+        writes += sessions
         return writes
     }
 

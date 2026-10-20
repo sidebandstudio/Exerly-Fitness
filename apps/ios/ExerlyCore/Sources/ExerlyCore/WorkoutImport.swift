@@ -49,6 +49,12 @@ public enum WorkoutImport {
 
     static let namespace = UUID(uuidString: "5B0E7C1D-2F4A-4C8B-9E36-7A1D0F2B8C45")!
 
+    /// A workout's ID from its source and its start to the minute; `ordinal`
+    /// tells apart workouts starting in the same minute, in the file's order.
+    static func sessionID(source: String, start: Date, ordinal: Int) -> UUID {
+        UUID(named: "\(source)/start/\(Int((start.timeIntervalSince1970 / 60).rounded(.down)))/\(ordinal)", in: namespace)
+    }
+
     /// Reads an export. Its times have no zone, so they are read in `timeZone`;
     /// weights without a unit are taken in `unit`. `mapping` names the
     /// exercise for any name, ahead of the built-in matching.
@@ -85,6 +91,7 @@ public enum WorkoutImport {
         calendar.timeZone = timeZone
 
         // Rows grouped into workouts, in the file's order.
+        var starts: [Int: Int] = [:]
         var order: [String] = []
         var workouts: [String: [Record]] = [:]
         for record in records {
@@ -99,7 +106,13 @@ public enum WorkoutImport {
                 result.skipped.append("A workout with an unreadable date, \(format.dateText(first)), with \(rows.count) rows")
                 continue
             }
-            let sessionID = UUID(named: "\(format.source.rawValue)/\(key)", in: namespace)
+            // Neither app's export has a workout ID, so a workout is known by its
+            // start, to the minute: correcting its title or end in the app and
+            // exporting again updates it rather than adding it twice.
+            let minute = Int((start.timeIntervalSince1970 / 60).rounded(.down))
+            let ordinal = starts[minute, default: 0]
+            starts[minute] = ordinal + 1
+            let sessionID = Self.sessionID(source: format.source.rawValue, start: start, ordinal: ordinal)
             var exercises: [PerformedExercise] = []
             var supersets: [String: UUID] = [:]
             var previousName: String?

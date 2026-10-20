@@ -257,7 +257,10 @@ struct HistoryImportFlow: View {
             }.value
             let hosts: [DocumentHost] = [workspace.store, workspace.programs, workspace.nutrition, workspace.gyms, workspace.agent]
             let result = parsed.flatMap { parsed in
-                Result { try HistoryImportReader.plan(parsed, files: files.map(\.name), options: options, hosts: hosts) }
+                Result {
+                    try HistoryImportReader.plan(parsed, files: files.map(\.name), options: options, hosts: hosts,
+                                                 records: (try? workspace.importer.records()) ?? [])
+                }
             }
             withAnimation(.snappy) {
                 switch result {
@@ -339,9 +342,10 @@ struct HistoryImportFlow: View {
     static func amount(_ plan: HistoryImportPlan) -> String { amount(plan.lines, total: plan.additions) }
 
     static func amount(_ lines: [ImportLine], total: Int) -> String {
-        let adding = lines.filter { !ImportLine.breakdowns.contains($0.key) && $0.new > 0 }
+        let adding = lines.filter { !ImportLine.breakdowns.contains($0.key) && $0.new + $0.updated > 0 }
         if adding.count == 1, ["workouts", "workout_session"].contains(adding[0].key) {
-            return "\(adding[0].new.formatted()) \(adding[0].new == 1 ? "workout" : "workouts")"
+            let count = adding[0].new + adding[0].updated
+            return "\(count.formatted()) \(count == 1 ? "workout" : "workouts")"
         }
         return "\(total.formatted()) \(total == 1 ? "item" : "items")"
     }
@@ -355,7 +359,7 @@ struct HistoryImportFlow: View {
 
     @ViewBuilder
     private func lines(_ lines: [ImportLine], showExisting: Bool) -> some View {
-        let shown = lines.filter { $0.new > 0 || (showExisting && $0.existing > 0) }
+        let shown = lines.filter { $0.new > 0 || $0.updated > 0 || (showExisting && $0.existing > 0) }
         if !shown.isEmpty {
             VStack(spacing: 0) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, line in
@@ -367,7 +371,9 @@ struct HistoryImportFlow: View {
     }
 
     private func lineRow(_ line: ImportLine, showExisting: Bool) -> some View {
-        let detail = showExisting && line.existing > 0 ? "\(line.existing.formatted()) already in Exerly" : ""
+        let detail = [line.updated > 0 ? "\(line.updated.formatted()) updated from the file" : nil,
+                      showExisting && line.existing > 0 ? "\(line.existing.formatted()) already in Exerly" : nil]
+            .compactMap { $0 }.joined(separator: ", ")
         let layout = typeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: ExSpacing.small))
@@ -377,13 +383,15 @@ struct HistoryImportFlow: View {
                 if !detail.isEmpty { Text(detail).font(.exSmall).foregroundStyle(Color.exTextMuted) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
-            Text(line.new.formatted()).font(.exStatSmall).monospacedDigit()
-                .foregroundStyle(line.new > 0 ? Color.exTextPrimary : Color.exTextMuted)
+            Text((line.new + line.updated).formatted()).font(.exStatSmall).monospacedDigit()
+                .foregroundStyle(line.new + line.updated > 0 ? Color.exTextPrimary : Color.exTextMuted)
         }
         .padding(.vertical, ExSpacing.small).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(line.title)
-        .accessibilityValue([line.new.formatted() + " to add", detail.isEmpty ? nil : detail].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue([line.new.formatted() + " to add", line.updated > 0 ? line.updated.formatted() + " to update" : nil,
+                             showExisting && line.existing > 0 ? "\(line.existing.formatted()) already in Exerly" : nil]
+            .compactMap { $0 }.joined(separator: ", "))
         .accessibilityIdentifier("import.count.\(line.key)")
     }
 
@@ -594,7 +602,7 @@ struct HistoryImportFlow: View {
 
     private func doneDetail(_ record: ImportRecord) -> String {
         let range = range(record.dateRange).map { " from \($0)" } ?? ""
-        let total = record.lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new }
+        let total = record.lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new + $1.updated }
         return "\(Self.amount(record.lines, total: total))\(range) \(total == 1 ? "is" : "are") saved and syncing. "
             + "Undo removes exactly these, now or later from Profile → Import & export."
     }

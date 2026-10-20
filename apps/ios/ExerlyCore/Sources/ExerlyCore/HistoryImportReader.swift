@@ -94,17 +94,20 @@ public enum HistoryImportReader {
     /// Checks what was read against the stores: what's new, what's already
     /// there, and what comes across differently or not at all.
     @MainActor
-    public static func plan(_ parsed: Parsed, files: [String], options: Options, hosts: [DocumentHost]) throws -> HistoryImportPlan {
+    /// `records` are this account's earlier imports: a workout an earlier
+    /// import saved, unchanged in Exerly since, can be updated from the file.
+    public static func plan(_ parsed: Parsed, files: [String], options: Options, hosts: [DocumentHost],
+                            records: [ImportRecord] = []) throws -> HistoryImportPlan {
         let nutrition = hosts.lazy.compactMap { $0 as? NutritionStore }.first
         let training = hosts.lazy.compactMap { $0 as? TrainingStore }.first
         var plan = HistoryImportPlan(source: parsed.source, files: files, timeZone: options.timeZone)
         switch parsed {
         case .macroFactor(let export, _):
             guard let nutrition, let training else { throw HistoryImporter.ImportError.noStore("food or training") }
-            try macroFactor(export, into: &plan, nutrition: nutrition, training: training)
+            try macroFactor(export, into: &plan, nutrition: nutrition, training: training, records: records)
         case .workouts(let result):
             guard let training else { throw HistoryImporter.ImportError.noStore("training") }
-            try workouts(result, into: &plan, training: training, options: options)
+            try workouts(result, into: &plan, training: training, options: options, records: records)
         case .exerly(let file):
             try exerly(file, into: &plan, hosts: hosts)
         }
@@ -115,8 +118,8 @@ public enum HistoryImportReader {
 
     @MainActor
     private static func macroFactor(_ export: MacroFactorExport, into plan: inout HistoryImportPlan, nutrition: NutritionStore,
-                                    training: TrainingStore) throws {
-        let check = MacroFactorImport(export, nutrition: nutrition, training: training)
+                                    training: TrainingStore, records: [ImportRecord]) throws {
+        let check = MacroFactorImport(export, nutrition: nutrition, training: training, records: records)
         let summary = check.summary
         let report = summary.report
         plan.writes = try check.writes(nutrition: nutrition)
@@ -125,10 +128,12 @@ public enum HistoryImportReader {
             (.entries, "Foods logged"), (.dayTotals, "Days as daily totals"), (.days, "Day statuses and notes"), (.weights, "Weigh-ins"),
             (.foods, "Custom foods, favorites and recipes"), (.plans, "Past nutrition targets"), (.workouts, "Workouts"),
         ]
-        for (kind, title) in titles where summary[kind].new + summary[kind].existing > 0 {
-            plan.lines.append(ImportLine(key: kind.rawValue, title: title, new: summary[kind].new, existing: summary[kind].existing))
+        for (kind, title) in titles where summary[kind].new + summary[kind].existing + summary[kind].updated > 0 {
+            plan.lines.append(ImportLine(key: kind.rawValue, title: title, new: summary[kind].new, existing: summary[kind].existing,
+                                         updated: summary[kind].updated))
         }
-        let newSessions = Set(plan.writes.filter { $0.kind == TrainingStore.sessionKind }.map(\.id))
+        appendKept(check.keptEdited, to: &plan.lost)
+        let newSessions = Set(plan.writes.filter { $0.kind == TrainingStore.sessionKind && $0.before == nil }.map(\.id))
         let sessions = export.sessions.filter { newSessions.contains($0.id.uuidString) }
         if !sessions.isEmpty { plan.lines.append(setsLine(sessions)) }
 
@@ -165,12 +170,14 @@ public enum HistoryImportReader {
 
     @MainActor
     private static func workouts(_ result: WorkoutImport.Result, into plan: inout HistoryImportPlan, training: TrainingStore,
-                                 options: Options) throws {
-        let new = result.sessions.filter { training.history.session($0.id) == nil && training.activeSession?.id != $0.id }
-        plan.writes = try new.map { session in
-            PlannedWrite(kind: TrainingStore.sessionKind, id: session.id.uuidString, before: nil, after: try ExerlyJSON.canonical(session))
-        }
-        plan.lines.append(ImportLine(key: "workouts", title: "Workouts", new: new.count, existing: result.sessions.count - new.count))
+                                 options: Options, records: [ImportRecord]) throws {
+        let reconciled = try reconcile(result.sessions, training: training, records: records)
+        plan.writes = reconciled.writes
+        let added = Set(reconciled.writes.filter { $0.before == nil }.map(\.id))
+        let new = result.sessions.filter { added.contains($0.id.uuidString) }
+        plan.lines.append(ImportLine(key: "workouts", title: "Workouts", new: reconciled.new, existing: reconciled.existing,
+                                     updated: reconciled.updated))
+        appendKept(reconciled.keptEdited, to: &plan.lost)
         if !new.isEmpty {
             plan.lines.append(ImportLine(key: "exercises", title: "Exercises", new: Set(new.flatMap { $0.exercises.map(\.exerciseID) }).count))
             plan.lines.append(setsLine(new))
@@ -244,6 +251,49 @@ public enum HistoryImportReader {
     }
 
     // MARK: Shared
+
+    /// Workouts checked against Exerly's: new ones are added; one an earlier
+    /// import saved and Exerly hasn't changed since is updated from the file;
+    /// one changed in Exerly is kept as it is.
+    @MainActor
+    static func reconcile(_ sessions: [WorkoutSession], training: TrainingStore, records: [ImportRecord]) throws
+        -> (writes: [PlannedWrite], new: Int, existing: Int, updated: Int, keptEdited: Int) {
+        // What the latest import that still stands saved for each workout.
+        var saved: [String: String] = [:]
+        for record in records.reversed() where record.undoneAt == nil {
+            for change in record.changes where change.kind == TrainingStore.sessionKind { saved[change.id] = change.after }
+        }
+        var result: (writes: [PlannedWrite], new: Int, existing: Int, updated: Int, keptEdited: Int) = ([], 0, 0, 0, 0)
+        for session in sessions {
+            let id = session.id.uuidString
+            let after = try ExerlyJSON.canonical(session)
+            guard training.activeSession?.id != session.id else {
+                result.existing += 1
+                continue
+            }
+            guard let current = try training.payload(kind: TrainingStore.sessionKind, id: id) else {
+                result.writes.append(PlannedWrite(kind: TrainingStore.sessionKind, id: id, before: nil, after: after))
+                result.new += 1
+                continue
+            }
+            if current == after {
+                result.existing += 1
+            } else if saved[id] == HistoryImporter.fingerprint(current) {
+                result.writes.append(PlannedWrite(kind: TrainingStore.sessionKind, id: id, before: current, after: after))
+                result.updated += 1
+            } else {
+                result.existing += 1
+                result.keptEdited += 1
+            }
+        }
+        return result
+    }
+
+    private static func appendKept(_ count: Int, to lost: inout [String]) {
+        guard count > 0 else { return }
+        lost.append(count == 1 ? "1 workout you changed in Exerly since the last import is kept as it is."
+                    : "\(count) workouts you changed in Exerly since the last import are kept as they are.")
+    }
 
     private static func setsLine(_ sessions: [WorkoutSession]) -> ImportLine {
         ImportLine(key: "sets", title: "Sets", new: sessions.reduce(0) { $0 + $1.exercises.reduce(0) { $0 + $1.sets.count } })
