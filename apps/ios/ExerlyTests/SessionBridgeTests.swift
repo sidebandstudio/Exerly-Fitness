@@ -54,6 +54,43 @@ final class SessionBridgeTests: XCTestCase {
         return auth
     }
 
+    // MARK: Password sign-in and recovery
+
+    func testAWrongPasswordSaysSoInsteadOfSessionExpired() async throws {
+        StubURLProtocol.handler = { _ in (401, Self.json(["message": "Invalid credentials"])) }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        await auth.login(email: "a@example.test", password: "wrong-password")
+        XCTAssertEqual(auth.error, "That email and password don’t match. Try again, or reset your password.")
+        XCTAssertNil(keychain.getToken())
+        StubURLProtocol.handler = { _ in (429, Self.json(["message": "Too many sign-in attempts. Wait a few minutes and try again."])) }
+        await auth.login(email: "a@example.test", password: "wrong-password")
+        XCTAssertEqual(auth.error, "Too many sign-in attempts. Wait a few minutes and try again.")
+    }
+
+    func testPasswordResetSendsTheCodeWithoutASessionAndKeepsNone() async throws {
+        var bodies: [String: [String: Any]] = [:]
+        StubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            bodies[request.url!.path] = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
+            if request.url!.path == "/auth/password/forgot" {
+                return (202, Self.json(["message": "If an Exerly account uses that email, we sent it a code."]))
+            }
+            return (400, Self.json(["message": "That code is wrong or has expired.", "details": ["code": "reset_code_invalid"]]))
+        }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        let notice = try await auth.requestPasswordReset(email: "a@example.test")
+        XCTAssertEqual(notice, "If an Exerly account uses that email, we sent it a code.")
+        do {
+            try await auth.resetPassword(email: "a@example.test", code: "ABCDEFGH", newPassword: "a-new-passphrase")
+            XCTFail("Expected the wrong code")
+        } catch { XCTAssertEqual(error.localizedDescription, "That code is wrong or has expired.") }
+        XCTAssertEqual(bodies["/auth/password/forgot"]?["email"] as? String, "a@example.test")
+        XCTAssertEqual(bodies["/auth/password/reset"]?["code"] as? String, "ABCDEFGH")
+        XCTAssertEqual(bodies["/auth/password/reset"]?["newPassword"] as? String, "a-new-passphrase")
+        XCTAssertNil(keychain.getToken())
+        XCTAssertEqual(auth.authState, .loading)
+    }
+
     // MARK: Apple sign-in
 
     func testAppleSignInBootstrapsLikeLoginAndReportsSignInMethods() async throws {

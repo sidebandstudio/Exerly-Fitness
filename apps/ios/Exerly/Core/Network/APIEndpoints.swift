@@ -150,6 +150,21 @@ extension APIClient {
         try await post("/auth/apple", body: body, authenticated: false)
     }
 
+    /// Asks the server to email a reset code. The answer is the same whether
+    /// or not an account uses the address.
+    func requestPasswordReset(email: String) async throws -> APIMessageResponse {
+        try await post("/auth/password/forgot", body: ["email": email], authenticated: false)
+    }
+
+    /// Sets a new password with a mailed code. The server then ends every
+    /// session, so the person signs in again.
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        let _: APIMessageResponse = try await post(
+            "/auth/password/reset", body: ["email": email, "code": code, "newPassword": newPassword],
+            authenticated: false
+        )
+    }
+
     // MARK: Onboarding
 
     func completeOnboarding(_ data: OnboardingRequest, operationID: String) async throws -> OnboardingResponse {

@@ -68,7 +68,7 @@ private let offersAutofill: Bool = {
 }()
 
 struct AuthField<Field: Hashable>: View {
-    enum Kind { case name, email, password, newPassword }
+    enum Kind { case name, email, code, password, newPassword }
 
     let title: String
     let kind: Kind
@@ -84,6 +84,7 @@ struct AuthField<Field: Hashable>: View {
         switch kind {
         case .name: "person"
         case .email: "envelope"
+        case .code: "number"
         case .password, .newPassword: "lock"
         }
     }
@@ -135,6 +136,13 @@ struct AuthField<Field: Hashable>: View {
             TextField(title, text: $text, prompt: prompt)
                 .textContentType(offersAutofill ? .username : nil).keyboardType(.emailAddress)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+        case .code:
+            TextField(title, text: $text, prompt: Text("ABCD-EFGH").foregroundColor(.exTextMuted))
+                .textContentType(.oneTimeCode).keyboardType(.asciiCapable)
+                .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                .monospaced()
+                // The prompt shows the code's shape; the label says what it is.
+                .accessibilityLabel(title)
         case .password, .newPassword:
             Group {
                 if revealed { TextField(title, text: $text, prompt: prompt) }

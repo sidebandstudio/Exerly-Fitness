@@ -14,6 +14,15 @@ enum AccountDeletionOutcome: Equatable {
     case appleReauthorizationRequired
 }
 
+/// What sign-in screens say when the server refuses a password. A 401 there
+/// is a wrong email or password, not an expired session.
+private func signInFailure(_ error: Error) -> String {
+    if case APIError.unauthorized = error {
+        return "That email and password don’t match. Try again, or reset your password."
+    }
+    return error.localizedDescription
+}
+
 @MainActor
 final class AuthViewModel: ObservableObject {
     @Published var authState: AuthState = .loading
@@ -188,7 +197,20 @@ final class AuthViewModel: ObservableObject {
             guard generation == sessionGeneration else { return }
             try finalizeAuthenticatedSession(response)
             await checkAuth(useCached: false)
-        } catch { if generation == sessionGeneration { self.error = error.localizedDescription } }
+        } catch { if generation == sessionGeneration { self.error = signInFailure(error) } }
+    }
+
+    /// Emails a reset code. Returns the server's answer, which is the same
+    /// whether or not an account uses `email`. Touches no session.
+    func requestPasswordReset(email: String) async throws -> String {
+        let response = try await api.requestPasswordReset(email: email)
+        return response.message ?? "If an Exerly account uses that email, we sent it a code."
+    }
+
+    /// Sets a new password with a mailed code. Every session ends on the
+    /// server, so the person signs in again afterwards.
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        try await api.resetPassword(email: email, code: code, newPassword: newPassword)
     }
 
     func signup(email: String, password: String, name: String) async {
@@ -222,6 +244,8 @@ final class AuthViewModel: ObservableObject {
             guard generation == sessionGeneration else { return }
             try finalizeAuthenticatedSession(response)
             await checkAuth(useCached: false)
+        } catch APIError.unauthorized {
+            if generation == sessionGeneration { self.error = "Apple couldn’t confirm this sign-in. Try again." }
         } catch { if generation == sessionGeneration { self.error = error.localizedDescription } }
     }
 

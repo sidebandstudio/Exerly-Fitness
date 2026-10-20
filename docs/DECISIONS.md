@@ -1387,3 +1387,24 @@ again revokes the session: either the app or a copy of it is replaying, and the
 server can't tell which. A retry of a lost acknowledgement with its own
 operation key is still answered with the same credential, so a dropped
 response never signs anyone out.
+
+## 2026-10-20: the delete screen exports first, and sign-in errors say what happened
+
+- Delete account now reads top to bottom: an Export my data button that shares
+  the account file right there, what deleting removes and what it leaves
+  (Apple Health records, saved exports), then "Confirm it's you": the password,
+  or Sign in with Apple for an account connected to Apple. The alert that
+  follows says so if nothing was exported. It reuses the export the Export
+  screen makes rather than linking to that screen, which the imports slice is
+  rebuilding.
+- Forgot password lives on the sign-in screen and carries the typed email
+  along. The code field formats as ABCD-EFGH while typing and offers the
+  one-time-code keyboard suggestion. After a reset the app returns to sign-in
+  with the email filled in and a note, instead of signing in by itself: the
+  server ends every session on reset, and a fresh sign-in proves the new
+  password works.
+- A wrong password at sign-in said "Your session expired. Please sign in
+  again." because every 401 read that way. Sign-in now says "That email and
+  password don't match. Try again, or reset your password.", and a refused
+  Apple sign-in says Apple couldn't confirm it.
+

@@ -3,6 +3,11 @@ import SwiftUI
 struct LoginView: View {
     let onBack: () -> Void
     var onSwitchToSignup: (() -> Void)?
+    /// Opens Forgot password with the email typed so far.
+    var onForgotPassword: ((String) -> Void)?
+    var initialEmail = ""
+    /// Shown above the form, such as after a password reset.
+    var notice: String?
     @EnvironmentObject private var authVM: AuthViewModel
 
     @State private var email = ""
@@ -23,6 +28,21 @@ struct LoginView: View {
                           submitLabel: .go) { if canSubmit { submit() } }
             }
             .modifier(ShakeEffect(animatableData: shakeAttempts))
+            if let onForgotPassword {
+                Button("Forgot password?") {
+                    authVM.error = nil
+                    onForgotPassword(email.trimmingCharacters(in: .whitespaces))
+                }
+                .font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .trailing)
+                .accessibilityIdentifier("login.forgotPassword")
+            }
+            if let notice, authVM.error == nil {
+                Label(notice, systemImage: "checkmark.circle.fill")
+                    .font(.exLabel).foregroundStyle(Color.exSuccess)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("login.notice")
+            }
             if let error = authVM.error {
                 Label(error, systemImage: "exclamationmark.circle.fill")
                     .font(.exLabel).foregroundStyle(Color.exError)
@@ -55,7 +75,11 @@ struct LoginView: View {
                 .padding(.top, ExSpacing.small)
             }
         }
-        .onAppear { authVM.error = nil }
+        .onAppear {
+            authVM.error = nil
+            if email.isEmpty { email = initialEmail }
+            if notice != nil { focus = .password }
+        }
     }
 
     private func submit() {
