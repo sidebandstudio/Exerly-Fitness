@@ -90,6 +90,7 @@ struct MeasurementsTab: View {
                     BodyWeightSection(workspace: workspace, unit: unit, timeZone: timeZone, onWeighIn: { weighIn = .new },
                                       onEdit: { weighIn = .edit($0) }, onDelete: delete, onDeleted: deleted,
                                       onEditGoal: { editGoal(workspace) },
+                                      onAddGoalWeight: { editGoal(workspace, addsGoalWeight: true) },
                                       onShowWeighIns: { withAnimation(.snappy) { proxy.scrollTo(BodyWeightSectionID.weighIns, anchor: .top) } },
                                       measurements: { measurementsCard(records) })
                 } else if let openingError {
@@ -181,10 +182,11 @@ struct MeasurementsTab: View {
         UIAccessibility.post(notification: .announcement, argument: message)
     }
 
-    private func editGoal(_ workspace: TrainingWorkspace) {
+    private func editGoal(_ workspace: TrainingWorkspace, addsGoalWeight: Bool = false) {
         let today = LocalDate(Date(), in: timeZone)
         let kind: TargetsEditorRequest.Kind = workspace.nutrition.plan(on: today) == nil ? .setup : .edit
         goalEditor = .make(kind, store: workspace.nutrition, user: auth.currentUser, unit: unit, today: today)
+        goalEditor?.addsGoalWeight = addsGoalWeight
     }
 
     private func deleted(_ entry: WeightEntry) {

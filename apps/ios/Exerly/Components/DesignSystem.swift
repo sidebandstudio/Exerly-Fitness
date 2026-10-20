@@ -402,6 +402,8 @@ struct ExQuantityControl: View {
     var focusOnAppear = false
     /// Shown while the field is empty; − and + then start from it.
     var placeholder = "0"
+    /// Room for a note under the control, kept in view above the keypad with it.
+    var noteBelow: CGFloat = 0
     @State private var focusRequest = 0
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -454,7 +456,7 @@ struct ExQuantityControl: View {
         // The − and + (under the number at the largest sizes) and the presets
         // stay in view above the keypad with the number.
         ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, centered: true, identifier: identifier,
-                           focusOnAppear: focusOnAppear, revealBelow: typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72,
+                           focusOnAppear: focusOnAppear, revealBelow: (typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72) + noteBelow,
                            focusRequest: focusRequest)
             .frame(minHeight: 52)
     }

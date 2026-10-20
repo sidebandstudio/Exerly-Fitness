@@ -108,6 +108,64 @@ final class TargetsUITests: ExerlyUITestCase {
         XCTAssertEqual(new["startDate"] as? String, Self.day(0).date)
     }
 
+    /// Goal weight on Targets works as on Progress: a goal the trend has
+    /// passed says Goal reached, the editor offers Gain or Maintain in Save's
+    /// place until the goal can be reached, and Add opens the field ready to type.
+    func testAGoalWeightReachedOnTargetsIsReplacedFromAdd() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "targets-goal-weight", units: "imperial")
+        try await deleteSetupWeight(token: person.token)
+        // A loss toward 190 lb from a trend of 84 kg (185.2 lb).
+        let old = try await seedPlan(token: person.token, startOffset: -14, goalWeight: 190)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openTargets(app)
+        let eta = app.descendants(matching: .any)["targets.eta"]
+        reveal(eta, in: app)
+        XCTAssertTrue(eta.label.hasPrefix("Goal reached"), eta.label)
+        capture(app, "targets-goal-reached")
+
+        tap(app.buttons["targets.edit"], in: app)
+        let gain = app.buttons["planEditor.redirect"]
+        XCTAssertTrue(gain.waitForExistence(timeout: 5))
+        XCTAssertEqual(gain.label, "Gain to 190 lb")
+        XCTAssertTrue(app.buttons["planEditor.redirect.maintain"].exists)
+        XCTAssertFalse(app.buttons["planEditor.save"].exists, "Gain or Maintain takes Save's place")
+        capture(app, "targets-goal-redirect")
+        tap(app.buttons["Remove goal weight"], in: app)
+        let save = app.buttons["planEditor.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5) && save.isEnabled)
+        XCTAssertFalse(gain.exists)
+        tap(save, in: app)
+
+        let add = app.buttons["targets.addGoalWeight"]
+        reveal(add, in: app)
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        tapCount = 0
+        tap(add, in: app)
+        let field = app.textFields["planEditor.goalWeight"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["planEditor.addGoalWeight"].exists, "No second Add (run 7 tapped it twice)")
+        await fulfillment(of: [expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: field)], timeout: 5)
+        capture(app, "targets-goal-add")
+        field.typeText("175")
+        let editorETA = app.descendants(matching: .any)["planEditor.eta"]
+        XCTAssertTrue(editorETA.label.hasPrefix("Around"), editorETA.label)
+        dismissKeyboard(app)
+        tap(save, in: app)
+        XCTAssertEqual(tapCount, 2, "Add and Save; the goal weight is typed")
+        reveal(eta, in: app)
+        XCTAssertTrue(eta.waitForExistence(timeout: 10))
+        XCTAssertTrue(eta.label.hasPrefix("Around"), eta.label)
+        capture(app, "targets-goal-set")
+
+        let plans = try await waitForDocuments("nutrition_plan", token: person.token) { $0.count == 3 }
+        let kept = try XCTUnwrap(plans.first { $0["id"] as? String == old })
+        XCTAssertEqual(((kept["goal"] as? [String: Any])?["goalWeight"] as? [String: Any])?["value"] as? Double, 190)
+        let goals = plans.compactMap { ($0["goal"] as? [String: Any])?["goalWeight"] as? [String: Any] }
+        XCTAssertTrue(goals.contains { $0["value"] as? Double == 175 && $0["unit"] as? String == "lb" }, "\(goals)")
+    }
+
     /// A due check-in shows its change and evidence; Accept starts the new
     /// targets and Undo brings the old ones back, on the device and the server.
     func testAWeeklyCheckInIsAcceptedAndUndone() async throws {

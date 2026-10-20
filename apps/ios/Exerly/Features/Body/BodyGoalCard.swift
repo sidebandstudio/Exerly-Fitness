@@ -13,6 +13,8 @@ struct BodyGoalCard: View {
     let unit: MassUnit
     let today: LocalDate
     let onEdit: () -> Void
+    /// Opens the editor at an empty goal weight, as Targets' Add does.
+    let onAddGoalWeight: () -> Void
     @State private var showsAll = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -128,9 +130,18 @@ struct BodyGoalCard: View {
                 .font(.exBody).foregroundStyle(Color.exTextSecondary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("body.goal.eta")
         case .noGoalWeight, .maintaining:
-            Text("Add a goal weight to see when you'd reach it and the trend to expect each week.")
-                .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("body.goal.eta")
+            // Add under the sentence at the largest sizes, which squeezed it into a narrow column beside it.
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+            row {
+                Text("Add a goal weight to see when you'd reach it and the trend to expect each week.")
+                    .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("body.goal.eta")
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                Button("Add", action: onAddGoalWeight).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                    .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Add a goal weight")
+                    .accessibilityIdentifier("body.goal.addGoalWeight")
+            }
         }
     }
 

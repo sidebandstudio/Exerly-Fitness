@@ -220,9 +220,12 @@ struct TargetsView: View {
     @ViewBuilder
     private func goalWeight(_ goal: NutritionGoal, today: LocalDate, trend: Double?) -> some View {
         if let target = goal.goalWeight {
-            HStack(alignment: .firstTextBaseline) {
+            // Stacked at the largest sizes, where side by side both wrapped ("190.0" over "lb").
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+            row {
                 Text("Goal weight").font(.exBody).foregroundStyle(Color.exTextSecondary)
-                Spacer(minLength: ExSpacing.small)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
                 Text(BodyFormat.reading(target, unit)).font(.exStatSmall).monospacedDigit().foregroundStyle(Color.exTextPrimary)
             }
             .accessibilityElement(children: .combine)
@@ -239,19 +242,31 @@ struct TargetsView: View {
                             .frame(height: 110)
                     }
                 case .reached:
-                    Text("Your trend weight is already at or past this goal.").font(.exCaption)
-                        .foregroundStyle(Color.exSuccess).accessibilityIdentifier("targets.eta")
+                    // As on Progress: reached, and what to do next, rather than a loss rate toward a weight already passed.
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        Text("Goal reached").font(.exLabel.weight(.semibold)).foregroundStyle(Color.exSuccess).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Color.exSuccess.opacity(0.14), in: Capsule())
+                        Text("Your trend weight is at or past your goal weight. Edit the plan to maintain it or aim for a new one.")
+                            .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("targets.eta")
                 case .noGoalWeight, .maintaining:
                     EmptyView()
                 }
             }
         } else {
-            HStack(spacing: ExSpacing.small) {
+            // Add under the sentence at the largest sizes, as on Progress.
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+            row {
                 Text("No goal weight. Add one to see when you'd reach it.").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("Add") { open(.edit) }.font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                Button("Add") { open(.edit, addsGoalWeight: true) }.font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
                     .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Add a goal weight")
+                    .accessibilityIdentifier("targets.addGoalWeight")
             }
         }
     }
@@ -505,8 +520,9 @@ struct TargetsView: View {
         PlanBasisChoice.current(summary: summary, plans: store.plans, profile: TargetsProfile.body(auth.currentUser))
     }
 
-    private func open(_ kind: TargetsEditorRequest.Kind) {
+    private func open(_ kind: TargetsEditorRequest.Kind, addsGoalWeight: Bool = false) {
         editor = .make(kind, store: store, user: auth.currentUser, unit: unit, today: today)
+        editor?.addsGoalWeight = addsGoalWeight
     }
 }
 
@@ -529,6 +545,8 @@ struct TargetsEditorRequest: Identifiable {
     let choice: PlanBasisChoice?
     /// The version in force.
     let current: NutritionPlan?
+    /// Opened from "Add a goal weight": the editor starts at its field.
+    var addsGoalWeight = false
 
     /// The editor for `kind` on `today`: from the version in force, or toward
     /// setup's goal when there's none yet, resting on the latest estimate.

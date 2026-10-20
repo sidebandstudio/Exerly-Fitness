@@ -2002,3 +2002,22 @@ Profile, and came back to "Yesterday". Coming back from another tab or the
 background keeps the day shown for up to 3 minutes, so a quick look at Log
 food doesn't lose it; after that, or on a new day, Today shows today. Re-tapping
 Today still goes to today at once.
+
+## 2026-10-20: Goal weight takes the same path from Targets and Progress
+
+Driving the fix showed the goal editor's "Gain to 165 lb" and "Maintain
+instead" under the keypad, which stays up after typing the goal weight. The
+choice now replaces Save in the bar above the keypad ("Gain to 165 lb" and
+"Maintain"), with the reason above it, until one is taken; the goal weight
+keeps only the explanation. Save comes back once the goal can be reached.
+
+Goal weight works the same from Targets and from Progress → Body:
+
+- Run 7 tapped Add twice: "Add a goal weight" on Targets opened the editor
+  with a second "Add a goal weight" in it. Add on Targets, and a new Add beside
+  Body's "Add a goal weight" line, now open the editor at the empty field with
+  the keypad up. Edit goal and Edit still open the editor as it was, since
+  they may be for the rate or the macros.
+- Targets said "already at or past this goal" in green under a loss rate, while
+  Progress said "Goal reached". Targets now shows the same "Goal reached" pill
+  and says to edit the plan to maintain or aim for a new goal.

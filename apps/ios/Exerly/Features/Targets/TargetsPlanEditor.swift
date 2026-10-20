@@ -48,7 +48,10 @@ struct TargetsPlanEditor: View {
         self.request = request
         self.onSaved = onSaved
         _draft = State(initialValue: request.draft)
-        _hasGoalWeight = State(initialValue: request.draft.goal.goalWeight != nil)
+        // From "Add a goal weight", the field is ready rather than behind a second Add (run 7 tapped it twice).
+        let adding = request.addsGoalWeight && request.draft.goal.goalWeight == nil && request.draft.goal.direction != .maintain
+        _hasGoalWeight = State(initialValue: request.draft.goal.goalWeight != nil || adding)
+        _addedGoalWeight = State(initialValue: adding)
         _goalWeightText = State(initialValue: request.draft.goal.goalWeight.map { Self.weightText($0, unit: unit) } ?? "")
         _manualText = State(initialValue: ManualText(request.draft.manual))
         _customDays = State(initialValue: !WeekdayBudget.isEven(request.draft.weekdayWeights))
@@ -244,7 +247,9 @@ struct TargetsPlanEditor: View {
             // figure read as if the person had chosen it.
             ExQuantityControl(title: "Goal weight (\(unit.rawValue))", text: $goalWeightText, step: unit == .pounds ? 1 : 0.5,
                               unit: unit.rawValue, identifier: "planEditor.goalWeight", focusOnAppear: addedGoalWeight,
-                              placeholder: trend.map { Self.weightText(Mass(Mass.kg($0).value(in: unit).rounded(), unit), unit: unit) } ?? "0")
+                              placeholder: trend.map { Self.weightText(Mass(Mass.kg($0).value(in: unit).rounded(), unit), unit: unit) } ?? "0",
+                              // The trend weight and when the goal is reached stay readable while typing.
+                              noteBelow: typeSize.isAccessibilitySize ? 220 : 64)
             if let trend, let redirection = draft.goal.redirection(trend: trend) {
                 redirect(redirection, trend: trend)
             } else if let trend {
@@ -277,38 +282,41 @@ struct TargetsPlanEditor: View {
         }
     }
 
-    /// A goal weight the trend has already reached: what it would take
-    /// instead, as one tap, or maintaining. Save waits for a choice, since a
-    /// loss toward a weight above the trend can only cut calories for nothing.
+    private var goalText: String { draft.goal.goalWeight.map { "\(Self.weightText($0, unit: unit)) \(unit.rawValue)" } ?? "" }
+
+    /// Why a goal weight the trend has already reached can't be saved as it is.
     private func redirect(_ direction: NutritionGoal.Direction, trend: Double) -> some View {
-        let goal = draft.goal.goalWeight.map { "\(Self.weightText($0, unit: unit)) \(unit.rawValue)" } ?? ""
         let text = switch direction {
-        case .gain: "\(goal) is above your trend weight of \(BodyFormat.weight(trend, unit)), so losing won't get you there."
-        case .lose: "\(goal) is below your trend weight of \(BodyFormat.weight(trend, unit)), so gaining won't get you there."
-        case .maintain: "Your trend weight, \(BodyFormat.weight(trend, unit)), is already at \(goal)."
+        case .gain: "\(goalText) is above your trend weight of \(BodyFormat.weight(trend, unit)), so losing won't get you there."
+        case .lose: "\(goalText) is below your trend weight of \(BodyFormat.weight(trend, unit)), so gaining won't get you there."
+        case .maintain: "Your trend weight, \(BodyFormat.weight(trend, unit)), is already at \(goalText)."
         }
+        return Label(text, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("planEditor.eta")
+    }
+
+    /// In Save's place, what the goal weight takes instead, in one tap, or
+    /// maintaining: a loss toward a weight above the trend could only cut
+    /// calories for nothing. In the bar, it stays above the keypad.
+    private func redirectChoices(_ direction: NutritionGoal.Direction, trend: Double) -> some View {
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
             : AnyLayout(HStackLayout(spacing: ExSpacing.small))
-        return VStack(alignment: .leading, spacing: ExSpacing.small) {
-            Label(text, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("planEditor.eta")
-            layout {
-                if direction != .maintain {
-                    Button("\(TargetsFormat.direction(direction)) to \(goal)") {
-                        draft.goal.direction = direction
-                        draft.goal.weeklyRate = NutritionRate.standard(for: direction, trend: trend, unit: unit)
-                    }
-                    .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("planEditor.redirect")
+        return layout {
+            if direction != .maintain {
+                Button("\(TargetsFormat.direction(direction)) to \(goalText)") {
+                    draft.goal.direction = direction
+                    draft.goal.weeklyRate = NutritionRate.standard(for: direction, trend: trend, unit: unit)
                 }
-                Button(direction == .maintain ? "Maintain" : "Maintain instead") {
-                    draft.goal.direction = .maintain
-                    draft.goal.weeklyRate = 0
-                }
-                .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("planEditor.redirect.maintain")
+                .buttonStyle(ExActionStyle()).accessibilityIdentifier("planEditor.redirect")
             }
-            .lineLimit(1).minimumScaleFactor(0.7)
+            Button("Maintain") {
+                draft.goal.direction = .maintain
+                draft.goal.weeklyRate = 0
+            }
+            .buttonStyle(ExActionStyle(secondary: direction != .maintain)).accessibilityIdentifier("planEditor.redirect.maintain")
         }
+        .lineLimit(1).minimumScaleFactor(0.7)
     }
 
     private static func weightText(_ mass: Mass, unit: MassUnit) -> String {
@@ -646,10 +654,14 @@ struct TargetsPlanEditor: View {
                 Text(error).font(.exCaption).foregroundStyle(Color.exError).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("planEditor.error")
             }
-            Button(saveTitle) { save(preview) }
-                .buttonStyle(ExActionStyle()).disabled(preview.plan == nil)
-                .lineLimit(1).minimumScaleFactor(0.7)
-                .accessibilityIdentifier("planEditor.save")
+            if let trend, let redirection = draft.goal.redirection(trend: trend) {
+                redirectChoices(redirection, trend: trend)
+            } else {
+                Button(saveTitle) { save(preview) }
+                    .buttonStyle(ExActionStyle()).disabled(preview.plan == nil)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .accessibilityIdentifier("planEditor.save")
+            }
         }
         // A bar that stays on screen; the editor above carries the full text sizes.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)

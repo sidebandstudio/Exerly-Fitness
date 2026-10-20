@@ -8,9 +8,9 @@ final class BodyTrackingUITests: ExerlyUITestCase {
 
     // MARK: Goal
 
-    /// From Progress: Edit goal, Add a goal weight, type it, Save; the goal
-    /// card then shows when the trend reaches it and the weeks before, and
-    /// the editor reopens on it.
+    /// From Progress: Add a goal weight opens the editor at its field, ready
+    /// to type; Save, and the goal card then shows when the trend reaches it
+    /// and the weeks before, and the editor reopens on it.
     func testSettingAGoalWeightShowsItsETAAndCheckpoints() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "body-goal", units: "imperial")
@@ -26,21 +26,24 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         let eta = app.descendants(matching: .any)["body.goal.eta"]
         reveal(eta, in: app)
         XCTAssertTrue(eta.label.hasPrefix("Add a goal weight"), eta.label)
+        capture(app, "body-goal-add")
 
         tapCount = 0
-        tap(edit, in: app)
-        tap(app.buttons["planEditor.addGoalWeight"], in: app)
+        tap(app.buttons["body.goal.addGoalWeight"], in: app)
         let field = app.textFields["planEditor.goalWeight"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
+        // No second Add in the editor: the field already has the keypad (run 7 tapped Add twice on Targets).
+        XCTAssertFalse(app.buttons["planEditor.addGoalWeight"].exists)
+        await fulfillment(of: [expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: field)], timeout: 5)
         // Empty, with the trend weight as its hint, rather than a figure nobody chose.
         let editorETA = app.descendants(matching: .any)["planEditor.eta"]
         XCTAssertTrue(editorETA.label.hasPrefix("Your trend weight is"), editorETA.label)
         XCTAssertNotEqual(field.value as? String, "160")
-        replace(field, with: "170", in: app)
+        field.typeText("170")
         dismissKeyboard(app)
         XCTAssertTrue(editorETA.label.hasPrefix("Around"), editorETA.label)
         tap(app.buttons["planEditor.save"], in: app)
-        XCTAssertLessThanOrEqual(tapCount, 6, "Edit goal, Add a goal weight, the field, Done, Save")
+        XCTAssertLessThanOrEqual(tapCount, 2, "Add and Save; the goal weight is typed")
 
         reveal(eta, in: app)
         XCTAssertTrue(eta.waitForExistence(timeout: 10))
@@ -85,24 +88,26 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         reveal(standing, in: app)
         XCTAssertTrue(standing.label.hasPrefix("Goal reached"), standing.label)
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'On track'")).firstMatch.exists)
+        capture(app, "body-goal-reached")
 
         reveal(edit, in: app)
         tap(edit, in: app)
-        let save = app.buttons["planEditor.save"]
-        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        let gain = app.buttons["planEditor.redirect"]
+        XCTAssertTrue(gain.waitForExistence(timeout: 5))
         let eta = app.descendants(matching: .any)["planEditor.eta"]
         reveal(eta, in: app)
         XCTAssertTrue(eta.label.hasPrefix("190 lb is above your trend weight"), eta.label)
-        XCTAssertFalse(save.isEnabled, "A loss toward a weight above the trend isn't saved")
+        let save = app.buttons["planEditor.save"]
+        XCTAssertFalse(save.exists, "A loss toward a weight above the trend isn't saved: Gain or Maintain takes Save's place")
+        XCTAssertTrue(app.buttons["planEditor.redirect.maintain"].exists)
         let preview = app.descendants(matching: .any)["planEditor.preview"]
         XCTAssertTrue(preview.label.contains("losing can't reach it"), preview.label)
         capture(app, "body-goal-passed")
 
-        let gain = app.buttons["planEditor.redirect"]
         XCTAssertEqual(gain.label, "Gain to 190 lb")
         tap(gain, in: app)
         XCTAssertTrue(app.buttons["Gain"].isSelected)
-        XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(save.waitForExistence(timeout: 5) && save.isEnabled)
         let rate = app.descendants(matching: .any)["planEditor.rate"]
         reveal(rate, in: app)
         XCTAssertEqual(app.buttons["planEditor.rate.0"].label, "0.2 pounds a week")
@@ -137,6 +142,7 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         let newest = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "body.weighIn.")).firstMatch
         await fulfillment(of: [expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: newest)], timeout: 5)
         XCTAssertFalse(all.isHittable, "Scrolled past the card")
+        capture(app, "body-weigh-ins")
     }
 
     // MARK: Readings

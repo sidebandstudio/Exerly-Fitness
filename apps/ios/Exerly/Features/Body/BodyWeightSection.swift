@@ -20,6 +20,8 @@ struct BodyWeightSection<Measurements: View>: View {
     /// A weigh-in deleted from a sheet opened here.
     let onDeleted: (WeightEntry) -> Void
     let onEditGoal: () -> Void
+    /// Opens the goal editor at an empty goal weight.
+    let onAddGoalWeight: () -> Void
     /// Scrolls the screen to the weigh-ins (`BodyWeightSectionID.weighIns`).
     let onShowWeighIns: () -> Void
     @ViewBuilder var measurements: Measurements
@@ -41,7 +43,7 @@ struct BodyWeightSection<Measurements: View>: View {
                 let goals = WeightGoal.stretches(store.versionsInForce, estimates: estimates, from: start, through: today)
                 trendCard(summary, estimates: estimates, points: points, readings: readings, goals: goals, start: start, today: today)
                 BodyGoalCard(plan: store.plan(on: today), stretch: goals.last { $0.end == today }, summary: summary, unit: unit,
-                             today: today, onEdit: onEditGoal)
+                             today: today, onEdit: onEditGoal, onAddGoalWeight: onAddGoalWeight)
                 // Under the chart: above it, the offer pushed the chart off an SE's first screen (run 6).
                 HealthWeighInPrompt()
                 measurements
