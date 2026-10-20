@@ -59,7 +59,7 @@ struct WeighInSheet: View {
         // A new weigh-in is typed (docs/TAP_BUDGETS.md); an edit has more to
         // show (day, time, Delete) and starts on its reading.
         _typing = State(initialValue: editing == nil ? .weight : nil)
-        _detent = State(initialValue: .large)
+        _detent = State(initialValue: editing == nil ? .weighInTyping : .large)
     }
 
     private var range: ClosedRange<Double> { WeightRuler.range(for: unit) }
@@ -90,7 +90,7 @@ struct WeighInSheet: View {
         }
         .exFooter { saveBar }
         .background(Color.exSurface1)
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.weighIn, .large], selection: $detent)
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.weighIn, .weighInTyping, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.exSurface1)
         .presentationCornerRadius(ExRadius.card + 10)
@@ -265,10 +265,18 @@ struct WeighInSheet: View {
                 }
                 .padding(.horizontal, ExSpacing.content).accessibilityElement(children: .combine)
             }
-            ExNumericKeypad(title: typing == .bodyFat ? "Body fat (%)" : "Weight (\(unit.rawValue))", integer: false,
+            ExNumericKeypad(title: keypadTitle, integer: false,
                             insert: insert, delete: { typed = String(typed.dropLast()) }, done: { commit() })
                 .clipShape(RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
         }
+    }
+
+    /// Until a digit is typed, what the grey number is: a run read it as
+    /// already entered.
+    private var keypadTitle: String {
+        if typing == .bodyFat { return "Body fat (%)" }
+        if editing == nil, typed.isEmpty { return "Type over it, or Save to keep it" }
+        return "Weight (\(unit.rawValue))"
     }
 
     @ViewBuilder
@@ -311,7 +319,7 @@ struct WeighInSheet: View {
         error = nil
         typed = ""
         typing = field
-        if !typeSize.isAccessibilitySize { detent = .large }
+        if !typeSize.isAccessibilitySize { detent = .weighInTyping }
     }
 
     private func insert(_ key: String) {
@@ -443,6 +451,12 @@ private struct WeighInDetent: CustomPresentationDetent {
     static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 440) }
 }
 
+/// Tall enough for the number, the keypad and Save, without a gap under the keypad.
+private struct WeighInTypingDetent: CustomPresentationDetent {
+    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 600) }
+}
+
 extension PresentationDetent {
     static let weighIn = Self.custom(WeighInDetent.self)
+    static let weighInTyping = Self.custom(WeighInTypingDetent.self)
 }
