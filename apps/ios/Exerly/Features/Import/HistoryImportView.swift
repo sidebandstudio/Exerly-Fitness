@@ -31,7 +31,8 @@ struct ImportExportView: View {
                 }
                 Text("Your workouts, food log and weigh-ins come with you. You see what comes across before anything is saved, "
                      + "and any import can be undone.")
-                    .font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    .font(typeSize.isAccessibilitySize ? .exCaption : .exBody).foregroundStyle(Color.exTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ExCard {
                 ExSectionHeading("Import from")

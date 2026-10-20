@@ -287,17 +287,16 @@ struct HistoryImportFlow: View {
     @ViewBuilder
     private func preview(_ plan: HistoryImportPlan) -> some View {
         ExCard(accent: true) {
-            ExEyebrow(plan.isEmpty ? "Nothing new" : "Ready to import · \(plan.source.name)", color: .exPrimaryText)
+            // The source is in the title; at the largest sizes the eyebrow leaves it out.
+            ExEyebrow(plan.isEmpty ? "Nothing new" : typeSize.isAccessibilitySize ? "Ready to import" : "Ready to import · \(plan.source.name)",
+                      color: .exPrimaryText)
             Text(range(plan.dateRange) ?? "No dated history").font(.exH2).foregroundStyle(Color.exTextPrimary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+            // At the largest sizes the action comes first, as it does elsewhere in Exerly.
+            if typeSize.isAccessibilitySize { importButton(plan) }
             Text(previewDetail(plan)).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
             lines(plan.lines, showExisting: true)
-            if !plan.isEmpty {
-                Button { commit(plan) } label: {
-                    Label("Import \(Self.amount(plan))", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(ExActionStyle()).accessibilityIdentifier("import.import")
-            }
+            if !typeSize.isAccessibilitySize { importButton(plan) }
             Button(plan.isEmpty ? "Choose another file" : "Choose a different file") { choosing = true }
                 .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("import.chooseAgain")
         }
@@ -316,6 +315,16 @@ struct HistoryImportFlow: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("import.skipped")
+        }
+    }
+
+    @ViewBuilder
+    private func importButton(_ plan: HistoryImportPlan) -> some View {
+        if !plan.isEmpty {
+            Button { commit(plan) } label: {
+                Label("Import \(Self.amount(plan))", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(ExActionStyle()).accessibilityIdentifier("import.import")
         }
     }
 
@@ -415,19 +424,24 @@ struct HistoryImportFlow: View {
             color = .exWarning
         }
         let sets = "\(match.sets.formatted()) \(match.sets == 1 ? "set" : "sets")"
+        let large = typeSize.isAccessibilitySize
         return HStack(alignment: .center, spacing: ExSpacing.item) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(match.name).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 HStack(alignment: .firstTextBaseline, spacing: ExSpacing.tight) {
-                    if match.how == .unmatched {
+                    if match.how == .unmatched && !large {
                         Image(systemName: "exclamationmark.circle").font(.caption).foregroundStyle(color).accessibilityHidden(true)
                     }
                     Text(target).font(.exBodyMedium).foregroundStyle(color).fixedSize(horizontal: false, vertical: true)
                 }
+                // At the largest sizes the count goes under the names, so they keep the width.
+                if large { Text(sets).font(.exCaption).monospacedDigit().foregroundStyle(Color.exTextMuted) }
             }
             Spacer(minLength: ExSpacing.small)
-            Text(sets).font(.exCaption).monospacedDigit().foregroundStyle(Color.exTextMuted)
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Color.exTextMuted).accessibilityHidden(true)
+            if !large {
+                Text(sets).font(.exCaption).monospacedDigit().foregroundStyle(Color.exTextMuted)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Color.exTextMuted).accessibilityHidden(true)
+            }
         }
         .padding(.vertical, ExSpacing.small)
         .frame(minHeight: 52)
@@ -481,7 +495,9 @@ struct HistoryImportFlow: View {
 
     private func bullet(_ text: String, icon: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: ExSpacing.small) {
-            Image(systemName: icon).font(.caption.weight(.semibold)).foregroundStyle(Color.exTextMuted).frame(width: 16).accessibilityHidden(true)
+            if !typeSize.isAccessibilitySize {
+                Image(systemName: icon).font(.caption.weight(.semibold)).foregroundStyle(Color.exTextMuted).frame(width: 16).accessibilityHidden(true)
+            }
             Text(text).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)

@@ -1695,3 +1695,53 @@ and N08 track. Changing it here would fork the policy for one kind and pre-empt 
 `BarcodeLoggingModelTests.aScanUndoneHereAndEditedElsewhereIsLoggedOnceAfterSync` drives the
 sequence through two real `SyncEngine`s and the fake document server and expects one entry,
 under `withKnownIssue`, so it starts failing when the conflict-review slice fixes this.
+## 2026-10-20: Imports are one undoable unit; export is made on the phone
+
+PARITY I02, I12, I13, I14.
+
+- One screen, Profile → Import & export, holds every import (MacroFactor,
+  MacroFactor Workouts, Hevy, Strong and an Exerly export), the list of past
+  imports with Undo, and Export. Setup's last page can open it once setup is
+  done, and CSV, TSV, xlsx and JSON files shared to Exerly open the same
+  preview. Exerly registers those types as Alternate, never Owner, so it
+  doesn't take over other apps' files.
+- The source is recognised from the file's contents, not its name or the row
+  tapped: Hevy by `exercise_title` and `start_time`, Strong by `Exercise Name`
+  and `Set Order`, MacroFactor Workouts by `Exercise` and `Date` alone,
+  MacroFactor by a workbook or its food and day columns, an Exerly export by
+  `documents` and `exported_at`. Formats follow each app's public help pages;
+  the fixtures cite them.
+- An import saves as one SQLite transaction across the account's stores,
+  through `HistoryImporter`. A failure saves nothing, replacing the earlier
+  kind-by-kind save that could leave half a MacroFactor import. A document
+  that appeared or changed after the preview (a sync) is left as it is.
+- Each import keeps a record in the account's own database: every document
+  it wrote, what was there before, and a fingerprint of what it saved. Undo
+  writes back the before, again as one unit, and keeps anything edited since
+  the import. Records don't sync: their before copies can be large, and the
+  documents themselves sync, removals included. Undo is on the device that
+  imported. Importing a file again changes nothing and leaves no record.
+- Exercise names are matched by name; the person can choose any exercise or
+  leave a name's sets out, and the file is read again with that choice.
+  Strong's unitless Weight column asks which unit was used.
+- MacroFactor Workouts' mini-sets join the myo set before them as one myo set
+  of several efforts. Strong's rest timers, Hevy's and Strong's routines and
+  measurements, and MacroFactor's trend weight, expenditure, steps and body
+  metrics are listed as not coming across. Body measurements stay out: they
+  live in the server's older measurements table, outside the one-unit save
+  and Undo.
+- Export is built on the phone from the account's JSON export (server and
+  device merged, or the device alone offline or when the server doesn't
+  answer within 6 s, which the screen says): a zip with the JSON, a CSV per
+  kind of data with the server's `/v1/export` columns plus nutrition targets,
+  an .xlsx with the same sheets (inline strings, stored zip, no dependency),
+  and a README. This reverses design note 022's "xlsx isn't produced": a
+  writer turned out to be 80 lines and no dependency. The JSON gains
+  `context` (time zone and mass unit) and `imports` (provenance: each
+  import's source, files, time and documents).
+- Restoring an Exerly export imports its `documents` into the account,
+  keeping IDs; documents the account has are kept. The server's older tables
+  and account details are listed as not restored. Exported, restored into a
+  fresh account and exported again, documents and CSV files are identical;
+  only `exported_at`, revisions (a fresh account hasn't synced) and `imports`
+  differ.
