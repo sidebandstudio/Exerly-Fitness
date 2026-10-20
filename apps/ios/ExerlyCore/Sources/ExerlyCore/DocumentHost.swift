@@ -20,6 +20,16 @@ public protocol DocumentHost: AnyObject {
     /// Persists a write, nil to delete, and returns the step that publishes it in
     /// memory. Call inside `performAtomically` and publish only after it commits.
     func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void
+    /// `prepareWrite` for many documents of one kind, published in one step.
+    /// Stores holding thousands of documents, such as an import's, override it.
+    func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void
+}
+
+extension DocumentHost {
+    public func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void {
+        let steps = try writes.map { try prepareWrite(kind: kind, id: $0.id, payload: $0.payload) }
+        return { steps.forEach { $0() } }
+    }
 }
 
 /// Documents with no dedicated table: proposals and audit events.
@@ -159,5 +169,20 @@ extension TrainingStore: DocumentHost {
         default:
             throw DocumentError(message: "Unknown kind \(kind)")
         }
+    }
+
+    /// Finished sessions added or removed together rebuild the history once.
+    /// Anything touching the workout in progress goes one by one.
+    public func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void {
+        let sessions = try writes.map { write -> (UUID, WorkoutSession?) in
+            guard let id = UUID(uuidString: write.id) else { throw DocumentError(message: "Invalid session ID") }
+            return (id, try write.payload.map { try ExerlyJSON.decoder.decode(WorkoutSession.self, from: $0) })
+        }
+        guard kind == Self.sessionKind,
+              sessions.allSatisfy({ $0.1?.isFinished != false && $0.0 != activeSession?.id }) else {
+            let steps = try writes.map { try prepareWrite(kind: kind, id: $0.id, payload: $0.payload) }
+            return { steps.forEach { $0() } }
+        }
+        return try stageFinishedSessions(sessions)
     }
 }

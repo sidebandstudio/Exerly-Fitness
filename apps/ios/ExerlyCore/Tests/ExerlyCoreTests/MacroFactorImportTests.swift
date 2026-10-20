@@ -378,16 +378,16 @@ import Testing
         #expect(MacroFactorImport(try read(), nutrition: nutrition, training: training).steps.isEmpty)
     }
 
-    @Test func eachKindSavesAsOneUnit() throws {
+    @Test func theWholeImportSavesAsOneUnit() throws {
         let persistence = InMemoryTrainingPersistence()
         let nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
         // A library without the bench press: the workouts can't be saved.
         let library = try ExerciseLibrary(exercises: ExerciseLibrary.bundled.exercises.filter { $0.id != "barbell-bench-press" })
         let training = try TrainingStore(persistence: persistence, library: library, now: { Fixture.instant() })
         let result = MacroFactorImport(try read(), nutrition: nutrition, training: training).save(nutrition: nutrition, training: training)
-        #expect(Array(result.failures.keys) == [.workouts])
+        #expect(Set(result.failures.keys) == Set(MacroFactorImportSummary.Kind.allCases))
         #expect(training.history.sessions.isEmpty && persistence.sessions.isEmpty, "Neither workout was saved")
-        #expect(nutrition.entries.count == 8 && nutrition.weights.count == 4, "The other kinds were")
+        #expect(nutrition.entries.isEmpty && nutrition.weights.isEmpty, "Nor anything else: no half-import")
     }
 
     @Test func yearsOfHistoryImportInOnePass() throws {

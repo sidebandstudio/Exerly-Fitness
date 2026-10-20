@@ -143,46 +143,41 @@ public struct MacroFactorImport {
         }
     }
 
-    /// Saves one kind as one unit: every document is checked, then all are
-    /// saved or none are.
-    public func save(_ kind: Kind, nutrition: NutritionStore, training: TrainingStore) throws {
-        switch kind {
-        case .foods: try write(nutrition, NutritionStore.foodKind, foods.map { ($0.id, try ExerlyJSON.canonical($0)) })
-        case .entries:
-            try write(nutrition, NutritionStore.entryKind, try entries.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) }
-                + removedTotals.map { ($0.uuidString, nil) })
-        case .dayTotals: try write(nutrition, NutritionStore.entryKind, try totals.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .days: try write(nutrition, NutritionStore.dayKind, try days.map { ($0.id, try ExerlyJSON.canonical($0)) })
-        case .weights: try write(nutrition, NutritionStore.weightKind, try weights.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .plans: try write(nutrition, NutritionStore.planKind, try plans.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .workouts: try training.importSessions(sessions)
+    /// Every document the import writes, with what it expects to replace.
+    public func writes(nutrition: NutritionStore) throws -> [PlannedWrite] {
+        func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws -> PlannedWrite {
+            PlannedWrite(kind: kind, id: id, before: nil, after: try ExerlyJSON.canonical(value))
         }
+        var writes: [PlannedWrite] = []
+        writes += try foods.map { try add(NutritionStore.foodKind, $0.id, $0) }
+        writes += try entries.map { try add(NutritionStore.entryKind, $0.id.uuidString, $0) }
+        writes += try removedTotals.map { id in
+            PlannedWrite(kind: NutritionStore.entryKind, id: id.uuidString,
+                         before: try nutrition.payload(kind: NutritionStore.entryKind, id: id.uuidString), after: nil)
+        }
+        writes += try totals.map { try add(NutritionStore.entryKind, $0.id.uuidString, $0) }
+        writes += try days.map { day in
+            PlannedWrite(kind: NutritionStore.dayKind, id: day.id, before: try nutrition.payload(kind: NutritionStore.dayKind, id: day.id),
+                         after: try ExerlyJSON.canonical(day))
+        }
+        writes += try weights.map { try add(NutritionStore.weightKind, $0.id.uuidString, $0) }
+        writes += try plans.map { try add(NutritionStore.planKind, $0.id.uuidString, $0) }
+        writes += try sessions.map { try add(TrainingStore.sessionKind, $0.id.uuidString, $0) }
+        return writes
     }
 
-    /// Saves every kind. A kind that fails is reported in `failures`, and the
-    /// others still save.
+    /// Saves everything as one unit through `HistoryImporter`: all of it, or
+    /// nothing, with every kind reported as failed.
     @discardableResult
     public func save(nutrition: NutritionStore, training: TrainingStore) -> MacroFactorImportSummary {
         var result = summary
-        for kind in steps {
-            do { try save(kind, nutrition: nutrition, training: training) } catch { result.failures[kind] = Self.describe(error) }
+        do {
+            var plan = HistoryImportPlan(source: .macroFactor, files: [], timeZone: .gmt)
+            plan.writes = try writes(nutrition: nutrition)
+            try HistoryImporter(hosts: [nutrition, training], persistence: nutrition.persistence).commit(plan)
+        } catch {
+            for kind in steps { result.failures[kind] = HistoryImporter.describe(error) }
         }
         return result
-    }
-
-    public static func describe(_ error: Error) -> String {
-        switch error {
-        case let error as DocumentError: error.message
-        case NutritionStore.StoreError.invalid(let problems): problems.joined(separator: "; ")
-        case TrainingStore.StoreError.edit(let problem): "A workout isn't valid: \(problem)"
-        default: "\(error)"
-        }
-    }
-
-    private func write(_ nutrition: NutritionStore, _ kind: String, _ documents: [(id: String, payload: Data?)]) throws {
-        for document in documents {
-            if let payload = document.payload { try nutrition.validate(kind: kind, id: document.id, payload: payload) }
-        }
-        try nutrition.writeAll(kind: kind, documents)
     }
 }

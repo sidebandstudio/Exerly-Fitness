@@ -25,6 +25,12 @@ public struct MacroFactorReport: Sendable, Hashable {
     /// Exercise names that match nothing in Exerly's library, with their
     /// number of sets. Those sets were left out.
     public var unmappedExercises: [String: Int] = [:]
+    /// Exercise names matched to Exerly's library, by name or by the
+    /// person's choice, with their number of sets.
+    public var mappedExercises: [String: ExerciseID] = [:]
+    public var exerciseSets: [String: Int] = [:]
+    /// Names the person chose to leave out, with their number of sets.
+    public var leftOutExercises: [String: Int] = [:]
     /// What the file didn't say, and what was assumed instead.
     public var assumptions: [String] = []
 
@@ -107,14 +113,18 @@ public struct MacroFactorExport: Sendable {
 
     /// Reads one or more exported files: .xlsx workbooks, or CSV files named
     /// after their sheet.
+    /// `mapping` names the exercise for a name in the file, ahead of matching
+    /// by name; the sets of names in `leftOut` are left out.
     public static func read(_ files: [(name: String, data: Data)], timeZone: TimeZone, unit: MassUnit,
-                            library: ExerciseLibrary = .bundled, locale: Locale = .current, now: Date = Date()) throws -> MacroFactorExport {
+                            library: ExerciseLibrary = .bundled, mapping: [String: ExerciseID] = [:], leftOut: Set<String> = [],
+                            locale: Locale = .current, now: Date = Date()) throws -> MacroFactorExport {
         var sheets: [Spreadsheet.Sheet] = []
         for file in files {
             let name = (file.name as NSString).deletingPathExtension
             sheets += try Spreadsheet.read(file.data, name: name).sheets
         }
-        return MacroFactorExport(Spreadsheet(sheets: sheets), timeZone: timeZone, unit: unit, library: library, locale: locale, now: now)
+        return MacroFactorExport(Spreadsheet(sheets: sheets), timeZone: timeZone, unit: unit, library: library, mapping: mapping,
+                                 leftOut: leftOut, locale: locale, now: now)
     }
 
     /// Maps a spreadsheet's sheets. Times have no zone, so they are read in
@@ -122,8 +132,10 @@ public struct MacroFactorExport: Sendable {
     /// exports them; distances without one in `unit`'s system. Slashed dates
     /// that don't show their order follow `locale`.
     public init(_ spreadsheet: Spreadsheet, timeZone: TimeZone, unit: MassUnit, library: ExerciseLibrary = .bundled,
-                locale: Locale = .current, now: Date = Date()) {
+                mapping: [String: ExerciseID] = [:], leftOut: Set<String> = [], locale: Locale = .current, now: Date = Date()) {
         var reader = MFReader(timeZone: timeZone, unit: unit, library: library, locale: locale, now: now.roundedToMilliseconds)
+        reader.mapping = mapping
+        reader.leftOut = leftOut
         reader.read(spreadsheet)
         self = reader.export
     }
@@ -205,6 +217,8 @@ struct MFReader {
     let library: ExerciseLibrary
     let locale: Locale
     let now: Date
+    var mapping: [String: ExerciseID] = [:]
+    var leftOut: Set<String> = []
     var export = MacroFactorExport()
 
     private var foods: [String: Food] = [:]
@@ -904,6 +918,9 @@ struct MFReader {
 
     // MARK: Workouts
 
+    /// MacroFactor's continuations of a myo set.
+    static let miniSetNames: Set<String> = ["mini set", "miniset", "myo mini set", "myo rep mini set", "myo reps mini set"]
+
     private static func setKind(_ text: String?) -> SetKind? {
         guard let text else { return .standard }
         let key = MFColumns.key(text)
@@ -938,6 +955,7 @@ struct MFReader {
         if !columns.has(.time), !order.isEmpty { assume("Workouts have no start time, so each starts at midday.") }
         var used = 0
         var unknownKinds = false
+        var looseMiniSets = 0
         for key in order {
             guard let rows = groups[key], let (date, seconds) = dates[key] else { continue }
             let sessionID = MacroFactorExport.id("workout/\(key)")
@@ -945,12 +963,19 @@ struct MFReader {
             var index: [ExerciseID: Int] = [:]
             for row in rows {
                 guard let name = MFColumns.text(columns.value(.exercise, row)) else { skip(table, row, "No exercise name"); continue }
-                guard let id = WorkoutImport.match(name, library: library), let exercise = library.exercise(id) else {
+                if leftOut.contains(name) {
+                    export.report.leftOutExercises[name, default: 0] += 1
+                    continue
+                }
+                guard let id = WorkoutImport.match(name, library: library, mapping: mapping), let exercise = library.exercise(id) else {
                     export.report.unmappedExercises[name, default: 0] += 1
                     continue
                 }
+                export.report.mappedExercises[name] = id
+                export.report.exerciseSets[name, default: 0] += 1
                 var kindText = MFColumns.text(columns.value(.setType, row))
-                var kind = Self.setKind(kindText)
+                let mini = kindText.map(MFColumns.key).map(Self.miniSetNames.contains) ?? false
+                var kind = mini ? .standard : Self.setKind(kindText)
                 if kind == nil { unknownKinds = true; kind = .standard; kindText = nil }
                 let load = columns.fields[.load].flatMap { column in
                     MFColumns.number(row[column]).flatMap { $0 > 0 ? Mass($0, table.headers[column]?.unit == .lb ? .pounds : .kilograms) : nil }
@@ -976,6 +1001,13 @@ struct MFReader {
                     exercises.append(PerformedExercise(id: MacroFactorExport.id("\(sessionID)/\(position)"), exerciseID: id,
                                                        notes: MFColumns.text(columns.value(.exerciseNotes, row)) ?? ""))
                 }
+                // A mini-set continues the myo set before it, as one set of several efforts.
+                if mini, let last = exercises[position].sets.indices.last, exercises[position].sets[last].kind == .myo {
+                    exercises[position].sets[last].efforts.append(Effort(reps: reps, load: load, duration: duration, distance: distance))
+                    used += 1
+                    continue
+                }
+                if mini { looseMiniSets += 1 }
                 var set = PerformedSet(id: MacroFactorExport.id("\(exercises[position].id)/\(exercises[position].sets.count)"),
                                        kind: kind ?? .standard, side: side,
                                        efforts: [Effort(reps: reps, load: load, duration: duration, distance: distance)], rir: rir)
@@ -1016,6 +1048,9 @@ struct MFReader {
             if sessionIDs.insert(sessionID).inserted { export.sessions.append(session) }
         }
         if unknownKinds { assume("Set types Exerly doesn't know were imported as working sets.") }
+        if looseMiniSets > 0 {
+            assume("\(looseMiniSets) mini-\(looseMiniSets == 1 ? "set" : "sets") without a myo set before \(looseMiniSets == 1 ? "it" : "them") became working sets.")
+        }
         export.sessions.sort { $0.startedAt < $1.startedAt }
         return used
     }

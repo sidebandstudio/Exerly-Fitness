@@ -469,49 +469,57 @@ public final class NutritionStore {
     /// publishes them in one step, so an import of thousands doesn't sort the
     /// log once per document. Callers check the documents first.
     func writeAll(kind: String, _ documents: [(id: String, payload: Data?)]) throws {
-        let decoder = ExerlyJSON.decoder
-        let removed = Set(documents.filter { $0.payload == nil }.map(\.id))
-        var changed = Set<String>()
-        var publish: () -> Void = {}
+        // Published once the outermost transaction commits, never on a rollback.
         try persistence.performAtomically {
-            var canonical: [Data] = []
-            for document in documents {
-                if let payload = document.payload {
-                    let data = try canonicalize(kind: kind, payload: payload)
-                    try persistence.saveDocument(kind: kind, id: document.id, payload: data)
-                    canonical.append(data)
-                    changed.insert(document.id)
-                } else {
-                    try persistence.deleteDocument(kind: kind, id: document.id)
-                }
+            persistence.afterCommit(try prepareWrites(kind: kind, documents.map { DocumentWrite(kind: kind, id: $0.id, payload: $0.payload) }))
+        }
+    }
+
+    /// Persists documents of one kind and returns one step that publishes them
+    /// all. Call inside `performAtomically`.
+    public func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void {
+        let decoder = ExerlyJSON.decoder
+        let removed = Set(writes.filter { $0.payload == nil }.map(\.id))
+        var changed = Set<String>()
+        var canonical: [Data] = []
+        for write in writes {
+            if let payload = write.payload {
+                let data = try canonicalize(kind: kind, payload: payload)
+                try persistence.saveDocument(kind: kind, id: write.id, payload: data)
+                canonical.append(data)
+                changed.insert(write.id)
+            } else {
+                try persistence.deleteDocument(kind: kind, id: write.id)
             }
-            let kept = { (id: String) in !changed.contains(id) && !removed.contains(id) }
-            switch kind {
-            case Self.foodKind:
-                let added = try canonical.map { try decoder.decode(Food.self, from: $0) }
-                publish = { [self] in
-                    foods = (foods.filter { kept($0.id) } + added)
-                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                }
-            case Self.entryKind:
-                let added = try canonical.map { try decoder.decode(FoodEntry.self, from: $0) }
-                publish = { [self] in entries = (entries.filter { kept($0.id.uuidString) } + added).sorted(by: Self.entryOrder) }
-            case Self.dayKind:
-                let added = try canonical.map { try decoder.decode(NutritionDay.self, from: $0) }
-                publish = { [self] in
-                    for id in removed { if let date = LocalDate(id) { days[date] = nil } }
-                    for day in added { days[day.date] = day }
-                }
-            case Self.weightKind:
-                let added = try canonical.map { try decoder.decode(WeightEntry.self, from: $0) }
-                publish = { [self] in weights = (weights.filter { kept($0.id.uuidString) } + added).sorted { $0.at < $1.at } }
-            case Self.planKind:
-                let added = try canonical.map { try decoder.decode(NutritionPlan.self, from: $0) }
-                publish = { [self] in plans = (plans.filter { kept($0.id.uuidString) } + added).sorted(by: Self.planOrder) }
-            default:
-                throw DocumentError(message: "Unknown kind \(kind)")
+        }
+        let kept = { (id: String) in !changed.contains(id) && !removed.contains(id) }
+        switch kind {
+        case Self.foodKind:
+            let added = try canonical.map { try decoder.decode(Food.self, from: $0) }
+            return { [self] in
+                foods = (foods.filter { kept($0.id) } + added)
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             }
-            persistence.afterCommit(publish)
+        case Self.entryKind:
+            let added = try canonical.map { try decoder.decode(FoodEntry.self, from: $0) }
+            return { [self] in entries = (entries.filter { kept($0.id.uuidString) } + added).sorted(by: Self.entryOrder) }
+        case Self.dayKind:
+            let added = try canonical.map { try decoder.decode(NutritionDay.self, from: $0) }
+            return { [self] in
+                for id in removed { if let date = LocalDate(id) { days[date] = nil } }
+                for day in added { days[day.date] = day }
+            }
+        case Self.weightKind:
+            let added = try canonical.map { try decoder.decode(WeightEntry.self, from: $0) }
+            return { [self] in weights = (weights.filter { kept($0.id.uuidString) } + added).sorted { $0.at < $1.at } }
+        case Self.planKind:
+            let added = try canonical.map { try decoder.decode(NutritionPlan.self, from: $0) }
+            return { [self] in plans = (plans.filter { kept($0.id.uuidString) } + added).sorted(by: Self.planOrder) }
+        case Self.hiddenKind:
+            let added = try canonical.map { try decoder.decode(HiddenSuggestion.self, from: $0) }
+            return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { kept($0.id) } + added).sorted(by: Self.hiddenOrder) }
+        default:
+            throw DocumentError(message: "Unknown kind \(kind)")
         }
     }
 

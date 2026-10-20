@@ -313,6 +313,19 @@ public final class TrainingStore {
         }
     }
 
+    /// Saves finished sessions, nil removing one, and rebuilds the history
+    /// once when published.
+    func stageFinishedSessions(_ sessions: [(id: UUID, session: WorkoutSession?)]) throws -> () -> Void {
+        for (id, session) in sessions {
+            if let session { try persistence.save(session) } else { try persistence.deleteSession(id) }
+        }
+        let touched = Set(sessions.map(\.id))
+        let added = sessions.compactMap(\.session)
+        return { [self] in
+            history = TrainingHistory(sessions: history.sessions.filter { !touched.contains($0.id) } + added, library: library)
+        }
+    }
+
     func stageSessionRemoval(_ id: UUID) throws -> () -> Void {
         let wasActive = activeSession?.id == id
         try persistence.deleteSession(id)
