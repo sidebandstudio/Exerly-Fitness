@@ -154,7 +154,8 @@ import Testing
         #expect(diagnosis.evidence[0].caveats.contains { $0.hasPrefix("RIR not recorded") })
     }
 
-    @Test func liftsFallingTogetherSignalADeload() throws {
+    /// Twelve weeks of three lifts, all falling 8 % in the last two weeks.
+    func liftsFallingTogether() -> TrainingHistory {
         var sessions: [WorkoutSession] = []
         for index in 0..<36 {
             let day = Double(index / 3 * 7 + [0, 2, 4][index % 3])
@@ -167,7 +168,11 @@ import Testing
                 }
             sessions.append(Fixture.session(days: day, exercises))
         }
-        let history = TrainingHistory(sessions: sessions, library: .bundled)
+        return TrainingHistory(sessions: sessions, library: .bundled)
+    }
+
+    @Test func liftsFallingTogetherSignalADeload() throws {
+        let history = liftsFallingTogether()
         let diagnosis = try #require(TrainingSignals.deload(in: history, through: lastDay))
         #expect(diagnosis.kind == .deload)
         #expect(Set(diagnosis.exerciseIDs) == ["barbell-bench-press", "back-squat", "deadlift"])

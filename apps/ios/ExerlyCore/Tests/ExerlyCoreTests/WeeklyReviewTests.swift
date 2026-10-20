@@ -38,4 +38,14 @@ import Testing
         #expect(urgent.map(\.id) == WeeklyReview.make(training: falling, proposals: proposals, checkIn: checkIn,
                                                       through: signals.lastDay).map(\.id))
     }
+
+    /// PARITY B06: a deload is advice in the weekly review, with evidence and a
+    /// falsifier but no proposal to accept, no diff and nothing to undo.
+    @Test func aDeloadIsAdviceWithNothingToAccept() throws {
+        let signals = TrainingSignalsTests()
+        let review = WeeklyReview.make(training: signals.liftsFallingTogether(), proposals: [], checkIn: nil, through: signals.lastDay)
+        let deload = try #require(review.first { $0.kind == .deload })
+        #expect(!deload.evidence.isEmpty && !deload.falsifier.isEmpty)
+        #expect(deload.proposalID == nil)
+    }
 }
