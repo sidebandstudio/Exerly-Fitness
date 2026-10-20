@@ -155,10 +155,13 @@ public struct HistoryImporter {
         public var undone: Int
         /// Documents changed since the import, kept as they are now.
         public var kept: Int
+        /// Custom exercises the import added, kept in the library.
+        public var keptExercises: Int
 
-        public init(undone: Int, kept: Int) {
+        public init(undone: Int, kept: Int, keptExercises: Int = 0) {
             self.undone = undone
             self.kept = kept
+            self.keptExercises = keptExercises
         }
     }
 
@@ -229,12 +232,17 @@ public struct HistoryImporter {
     public func undo(_ id: UUID) throws -> UndoResult {
         guard var record = try records().first(where: { $0.id == id }) else { throw ImportError.invalid("That import isn't in this account") }
         guard record.undoneAt == nil else { throw ImportError.alreadyUndone }
-        var result = UndoResult(undone: 0, kept: 0)
+        var result = UndoResult(undone: 0, kept: 0, keptExercises: 0)
         var batches: [(host: DocumentHost, kind: String, writes: [DocumentWrite])] = []
         for host in hosts {
             for kind in host.documentKinds {
                 var writes: [DocumentWrite] = []
                 for change in record.changes where change.kind == kind {
+                    // Custom exercises are never deleted: workouts may use them.
+                    if kind == TrainingStore.exerciseKind && change.before == nil {
+                        result.keptExercises += 1
+                        continue
+                    }
                     let current = try host.payload(kind: kind, id: change.id)
                     guard current.map(Self.fingerprint) == change.after else {
                         if current != change.before { result.kept += 1 }
@@ -253,11 +261,24 @@ public struct HistoryImporter {
     }
 
     private func validate(_ batches: [(host: DocumentHost, kind: String, writes: [DocumentWrite])]) throws {
+        // Programs may use custom exercises saved alongside them.
+        var library = hosts.lazy.compactMap { $0 as? TrainingStore }.first?.library
+        for write in batches.flatMap(\.writes) where write.kind == TrainingStore.exerciseKind {
+            if let payload = write.payload, let exercise = try? ExerlyJSON.decoder.decode(Exercise.self, from: payload) {
+                library = try? library?.replacing(exercise)
+            }
+        }
         for host in hosts {
             let writes = batches.filter { $0.host === host }.flatMap(\.writes)
             guard !writes.isEmpty else { continue }
             do {
-                try host.validate(batch: writes)
+                if let programs = host as? ProgramStore, let library {
+                    for write in writes {
+                        if let payload = write.payload { try programs.validate(kind: write.kind, id: write.id, payload: payload, library: library) }
+                    }
+                } else {
+                    try host.validate(batch: writes)
+                }
             } catch {
                 throw ImportError.invalid(Self.describe(error))
             }

@@ -174,15 +174,17 @@ extension TrainingStore: DocumentHost {
     /// Finished sessions added or removed together rebuild the history once.
     /// Anything touching the workout in progress goes one by one.
     public func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void {
+        let oneByOne = { [self] in
+            let steps = try writes.map { try prepareWrite(kind: kind, id: $0.id, payload: $0.payload) }
+            return { steps.forEach { $0() } }
+        }
+        // Custom exercises, and anything else that isn't a session, go one by one.
+        guard kind == Self.sessionKind else { return try oneByOne() }
         let sessions = try writes.map { write -> (UUID, WorkoutSession?) in
             guard let id = UUID(uuidString: write.id) else { throw DocumentError(message: "Invalid session ID") }
             return (id, try write.payload.map { try ExerlyJSON.decoder.decode(WorkoutSession.self, from: $0) })
         }
-        guard kind == Self.sessionKind,
-              sessions.allSatisfy({ $0.1?.isFinished != false && $0.0 != activeSession?.id }) else {
-            let steps = try writes.map { try prepareWrite(kind: kind, id: $0.id, payload: $0.payload) }
-            return { steps.forEach { $0() } }
-        }
+        guard sessions.allSatisfy({ $0.1?.isFinished != false && $0.0 != activeSession?.id }) else { return try oneByOne() }
         return try stageFinishedSessions(sessions)
     }
 }

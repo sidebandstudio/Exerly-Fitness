@@ -323,6 +323,68 @@ import Testing
         #expect(again.isEmpty)
     }
 
+    /// Every store an account has, sharing one database, as the app's workspace does.
+    @MainActor
+    struct Account {
+        let persistence: InMemoryTrainingPersistence
+        let training: TrainingStore
+        let nutrition: NutritionStore
+        let programs: ProgramStore
+        let gyms: GymStore
+        var hosts: [DocumentHost] { [training, programs, nutrition, gyms] }
+        var importer: HistoryImporter { HistoryImporter(hosts: hosts, persistence: persistence, now: { Fixture.instant() }) }
+
+        init() throws {
+            persistence = InMemoryTrainingPersistence()
+            training = try TrainingStore(persistence: persistence, now: { Fixture.instant() })
+            nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
+            programs = try ProgramStore(persistence: persistence, training: training, now: { Fixture.instant() })
+            gyms = try GymStore(persistence: persistence, now: { Fixture.instant() })
+        }
+
+        func export() throws -> Data {
+            try AccountExport.merging(server: nil, hosts: hosts, state: persistence, imports: try importer.records(), now: Fixture.instant())
+        }
+
+        func restore(_ export: Data) throws -> HistoryImportPlan {
+            let options = HistoryImportReader.Options(timeZone: Fixture.utc, unit: .kilograms)
+            let parsed = try HistoryImportReader.read([("exerly-export.json", export)], options: options, library: training.library)
+            return try HistoryImportReader.plan(parsed, files: ["exerly-export.json"], options: options, hosts: hosts)
+        }
+    }
+
+    @Test func anExportWithCustomExercisesProgramsAndGymsRestoresAndUndoes() throws {
+        let first = try Account()
+        let zercher = Exercise(id: "custom-synthetic-zercher-squat", name: "Synthetic Zercher Squat", aliases: [], metric: .weightReps,
+                               mechanics: .compound, region: .lower, muscles: [.quads: 1, .glutes: 1], equipment: [.barbell], support: [.rack])
+        try first.training.addCustomExercise(zercher)
+        try first.training.importSessions([Fixture.session([("custom-synthetic-zercher-squat", [Fixture.set(5, 100)])])])
+        let program = Program(name: "Synthetic block", days: [
+            ProgramDay(name: "A", slots: [ProgramSlot(exerciseID: "custom-synthetic-zercher-squat",
+                                                      target: SlotTarget(sets: 3, minReps: 5, maxReps: 8, rir: 2))]),
+        ], cycles: 3, deload: .last)
+        try first.programs.save(program)
+        try first.gyms.save(GymProfile(name: "Synthetic garage", equipment: [.barbell, .rack]))
+        let export = try first.export()
+
+        let second = try Account()
+        let restore = try second.restore(export)
+        #expect(restore.lines.map(\.key) == ["custom_exercise", "workout_session", "program", "gym_profile"])
+        let record = try second.importer.commit(restore)
+        #expect(second.training.library.exercise("custom-synthetic-zercher-squat")?.name == "Synthetic Zercher Squat")
+        #expect(second.training.history.sessions.count == 1 && second.programs.programs.map(\.name) == ["Synthetic block"])
+        #expect(second.gyms.gyms.map(\.name) == ["Synthetic garage"])
+        let restored = try ExerlyExportFile(second.export()).documents.map(\.payload)
+        let original = try ExerlyExportFile(export).documents.map(\.payload)
+        #expect(Set(restored) == Set(original), "The same documents, byte for byte")
+
+        // Undo removes the workout, program and gym. The custom exercise stays: exercises are never deleted.
+        let undone = try second.importer.undo(record.id)
+        #expect(undone.undone == 3 && undone.keptExercises == 1)
+        #expect(second.training.history.sessions.isEmpty && second.programs.programs.isEmpty && second.gyms.gyms.isEmpty)
+        #expect(second.training.library.exercise("custom-synthetic-zercher-squat") != nil)
+    }
+
     @Test func theCSVFilesKeepIDsUnitsUnknownsAndEscapeFormulas() throws {
         let (persistence, nutrition, training, _) = try stores()
         let toast = Food(name: "=Synthetic, \"toast\"", per100g: NutrientAmounts([.energy: 250, .protein: 9]))
