@@ -16,6 +16,29 @@ public protocol SessionTransport: Sendable {
               as accountID: String) async throws -> (status: Int, data: Data)
 }
 
+/// How the person shows it's them before their account is deleted. The server
+/// checks it as well as the session, so an unlocked phone or a copied session
+/// isn't enough.
+public enum AccountConfirmation: Sendable, Equatable {
+    /// The account's password.
+    case password(String)
+    /// A Sign in with Apple authorization from moments ago: its identity token
+    /// and raw nonce, and its authorization code, with which the server revokes
+    /// Apple's authorization when it can.
+    case apple(identityToken: String, rawNonce: String, authorizationCode: String?)
+
+    var body: [String: Any] {
+        switch self {
+        case .password(let password):
+            return ["confirm": true, "password": password]
+        case let .apple(identityToken, rawNonce, authorizationCode):
+            var body: [String: Any] = ["confirm": true, "identityToken": identityToken, "nonce": rawNonce]
+            if let authorizationCode { body["appleAuthorizationCode"] = authorizationCode }
+            return body
+        }
+    }
+}
+
 /// One account's endpoints: documents and the account lifecycle. Every request
 /// is bound to `accountID`, so work started for one account can never read or
 /// write as another.
@@ -101,18 +124,21 @@ public struct AccountAPI: DocumentAPI {
                             ignoredTables: result["ignored_tables"] as? [String] ?? [])
     }
 
-    /// Deletes the account and everything in it on the server. Throws
-    /// `appleReauthorizationRequired` when the server needs a fresh Sign in
-    /// with Apple authorization code. The session owner then forgets the session.
-    public func deleteAccount(appleAuthorizationCode: String?) async throws {
-        var body: [String: Any] = ["confirm": true]
-        if let appleAuthorizationCode { body["appleAuthorizationCode"] = appleAuthorizationCode }
-        let (status, json) = try await sendJSON("DELETE", "/api/account", body: body)
+    /// Deletes the account and everything in it on the server, once
+    /// `confirmation` shows it's the account's owner. Throws `wrongPassword`
+    /// for a wrong password, `passwordRequired` when the account needs its
+    /// password, and `appleReauthorizationRequired` when it needs a fresh Sign
+    /// in with Apple. Nothing is deleted then, and the session stays. After a
+    /// deletion the session owner forgets the session.
+    public func deleteAccount(confirmation: AccountConfirmation) async throws {
+        let (status, json) = try await sendJSON("DELETE", "/api/account", body: confirmation.body)
         guard status == 200 else {
-            if status == 400, Wire.code(json) == "apple_reauthorization_required" {
-                throw APIError.appleReauthorizationRequired
+            switch (status, Wire.code(json)) {
+            case (400, "apple_reauthorization_required"): throw APIError.appleReauthorizationRequired
+            case (400, "password_required"): throw APIError.passwordRequired
+            case (403, "wrong_password"): throw APIError.wrongPassword
+            default: throw Wire.failure(status, json)
             }
-            throw Wire.failure(status, json)
         }
     }
 

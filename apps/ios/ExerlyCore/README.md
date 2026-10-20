@@ -249,8 +249,11 @@ try await api.signOut()
   - the document endpoints `SyncEngine` uses (it is a `DocumentAPI`);
   - `connectApple(identityToken:rawNonce:)` and `disconnectApple()`;
   - `exportAccount()`, which returns the JSON `Data`;
-  - `deleteAccount(appleAuthorizationCode:)`, which deletes on the server. The
-    session owner then forgets the session.
+  - `deleteAccount(confirmation:)`, which deletes on the server once an
+    `AccountConfirmation` (`.password` or a fresh `.apple` authorization) shows
+    it's the owner. A refusal throws `wrongPassword`, `passwordRequired` or
+    `appleReauthorizationRequired` and keeps the session. After a deletion the
+    session owner forgets the session.
   - `accessTokens()`, `createAccessToken(name:scopes:expiresInDays:)` and
     `revokeAccessToken(id:)` for the person's own agents. Every token can read;
     `.propose` files proposals, and `.write` changes data. The secret in
@@ -287,7 +290,7 @@ An actor, and a `SessionTransport`.
   `account` (`id`, `email`, `name`).
 - `account()` returns the signed-in account's `AccountAPI`.
 - `signOut()` forgets the session at once, then revokes it on the server when
-  reachable. `deleteAccount(appleAuthorizationCode:)` deletes, then forgets.
+  reachable. `deleteAccount(confirmation:)` deletes, then forgets.
 - `isSignedIn` and `accountID`.
 
 It refreshes the 15-minute access token before it expires and once after a 401. A

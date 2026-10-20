@@ -122,7 +122,7 @@ final class AccountWorkspaceTests: XCTestCase {
         let oldEngine = try XCTUnwrap(training.sync)
         try training.store.startSession(name: "Keep me", bodyweight: nil)
         StubURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
-        do { try await owner.deleteAccount(auth: auth, authorizationCode: nil); XCTFail("Expected offline error") }
+        do { try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password")); XCTFail("Expected offline error") }
         catch { XCTAssertNotNil(error as? URLError) }
         XCTAssertEqual(auth.authState, .authenticated)
         XCTAssertEqual(owner.training?.store.activeSession?.name, "Keep me")
@@ -148,7 +148,7 @@ final class AccountWorkspaceTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/api/account")
             return (200, Data(#"{"ok":true}"#.utf8))
         }
-        try await owner.deleteAccount(auth: auth, authorizationCode: nil)
+        try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password"))
         XCTAssertEqual(auth.authState, .unauthenticated)
         XCTAssertNil(owner.training)
         XCTAssertFalse(FileManager.default.fileExists(atPath: original.url.path))
@@ -173,7 +173,7 @@ final class AccountWorkspaceTests: XCTestCase {
         StubURLProtocol.handler = { _ in
             (400, Data(#"{"message":"Confirm with Apple","details":{"code":"apple_reauthorization_required"}}"#.utf8))
         }
-        do { try await owner.deleteAccount(auth: auth, authorizationCode: nil); XCTFail("Expected Apple authorization") }
+        do { try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password")); XCTFail("Expected Apple authorization") }
         catch ExerlyCore.APIError.appleReauthorizationRequired { }
         XCTAssertEqual(auth.authState, .authenticated)
         XCTAssertFalse(training.sync === oldEngine)

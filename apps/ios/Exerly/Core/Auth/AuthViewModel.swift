@@ -10,7 +10,7 @@ enum AuthState: Equatable {
 enum AccountDeletionOutcome: Equatable {
     case deleted
     /// The account uses Sign in with Apple: ask Apple for a fresh authorization
-    /// code and call `deleteAccount` again with it. Nothing was deleted.
+    /// and call `deleteAccount` again with it. Nothing was deleted.
     case appleReauthorizationRequired
 }
 
@@ -273,10 +273,10 @@ final class AuthViewModel: ObservableObject {
     /// awaiting cleanup, the app deletes the training database with
     /// `SQLiteTrainingPersistence.deleteDatabase(accountID:)`, calls
     /// `SyncEngine.shared.purge(accountID:)`, then `finishLocalCleanup(for:)`.
-    func deleteAccount(appleAuthorizationCode: String?) async throws -> AccountDeletionOutcome {
+    func deleteAccount(confirmation: AccountConfirmation) async throws -> AccountDeletionOutcome {
         let account = try signedInAccount()
         do {
-            try await account.deleteAccount(appleAuthorizationCode: appleAuthorizationCode)
+            try await account.deleteAccount(confirmation: confirmation)
         } catch ExerlyCore.APIError.appleReauthorizationRequired {
             return .appleReauthorizationRequired
         } catch ExerlyCore.APIError.accountDeleted {

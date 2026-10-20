@@ -59,7 +59,7 @@ final class AppAccountWorkspace: ObservableObject {
         isChangingAccount = false
     }
 
-    func deleteAccount(auth: AuthViewModel, authorizationCode: String?) async throws {
+    func deleteAccount(auth: AuthViewModel, confirmation: AccountConfirmation) async throws {
         guard !isChangingAccount, let account = auth.accountAPI else { throw ExerlyCore.APIError.notSignedIn }
         isChangingAccount = true
         generation = UUID()
@@ -67,7 +67,7 @@ final class AppAccountWorkspace: ObservableObject {
         await training?.sync?.shutdown()
         do {
             try Task.checkCancellation()
-            let result = try await auth.deleteAccount(appleAuthorizationCode: authorizationCode)
+            let result = try await auth.deleteAccount(confirmation: confirmation)
             if result == .appleReauthorizationRequired { throw ExerlyCore.APIError.appleReauthorizationRequired }
             // Core persists confirmed deletions before clearing the session.
             await closeTraining()
@@ -156,7 +156,7 @@ final class AppAccountWorkspace: ObservableObject {
             return try savedTraining().export(server: server, pending: self.pendingLegacy(accountID))
         }, deleteAccount: { code in
             try checkAccount()
-            try await self.deleteAccount(auth: auth, authorizationCode: code)
+            try await self.deleteAccount(auth: auth, confirmation: code)
         })
         actions.exportDeviceData = { try savedTraining().export(server: nil, pending: self.pendingLegacy(accountID)) }
         return actions

@@ -1,4 +1,5 @@
 #if DEBUG
+import ExerlyCore
 import SwiftUI
 
 /// UI-only synthetic actions. Never compiled into a release build.
@@ -27,8 +28,11 @@ struct AccountControlsFixtureView: View {
             connectApple: { _ in connected = true; return methods },
             disconnectApple: { connected = false; return methods },
             exportAccount: { Data(#"{"account":{"name":"Morgan Example"},"workouts":[]}"#.utf8) },
-            deleteAccount: { _ in
+            deleteAccount: { confirmation in
                 if mode == "delete-error" { throw URLError(.cannotConnectToHost) }
+                if case .password(let password) = confirmation, password != "Synthetic-Password-1" {
+                    throw ExerlyCore.APIError.wrongPassword
+                }
                 deleted = true
             }
         )

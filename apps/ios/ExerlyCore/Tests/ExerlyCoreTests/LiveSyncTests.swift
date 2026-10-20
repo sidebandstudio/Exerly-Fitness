@@ -170,7 +170,7 @@ struct LiveSyncTests {
         let export = try JSONSerialization.jsonObject(with: exported) as? [String: Any]
         let documents = export?["documents"] as? [[String: Any]]
         #expect(documents?.contains { $0["document_id"] as? String == custom.id.rawValue } == true)
-        try await phone.api.deleteAccount(appleAuthorizationCode: nil)
+        try await phone.api.deleteAccount(confirmation: .password(password))
         #expect(await !phone.api.isSignedIn)
         // The other device learns the account is gone, not merely that its session ended.
         await #expect(throws: APIError.accountDeleted) { _ = try await watch.api.account().changes(after: 0, limit: 10) }

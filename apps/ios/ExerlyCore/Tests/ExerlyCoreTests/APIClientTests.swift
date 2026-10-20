@@ -218,13 +218,39 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
         let transport = FakeTransport { request in
             #expect(request.method == "DELETE" && request.path == "/api/account")
             #expect(request.body?["confirm"] as? Bool == true)
+            #expect(request.body?["identityToken"] as? String == "jwt")
+            #expect(request.body?["nonce"] as? String == "raw")
             #expect(request.body?["appleAuthorizationCode"] as? String == "code")
+            #expect(request.body?["password"] == nil)
             return (200, ["deleted": true, "apple_revoked": true, "removed": [:]])
         }
         let start = self.start
         let api = client(transport, store: store, clock: { start })
-        try await api.deleteAccount(appleAuthorizationCode: "code")
+        try await api.deleteAccount(confirmation: .apple(identityToken: "jwt", rawNonce: "raw", authorizationCode: "code"))
         #expect(try store.load() == nil)
+    }
+
+    @Test func aRefusedConfirmationKeepsTheAccountAndTheSession() async throws {
+        let store = InMemoryCredentialStore()
+        try store.save(Credentials(accessToken: "t", refreshToken: "r", accessExpiresAt: start.addingTimeInterval(600), sessionID: "s", accountID: "a"))
+        var reply: (Int, [String: Any]) = (403, [:])
+        let transport = FakeTransport { request in
+            #expect(request.body?["password"] as? String == "typed password")
+            #expect(request.body?["identityToken"] == nil)
+            return reply
+        }
+        let start = self.start
+        let api = client(transport, store: store, clock: { start })
+        let delete = { try await api.deleteAccount(confirmation: .password("typed password")) }
+        for (status, code, expected) in [(403, "wrong_password", APIError.wrongPassword),
+                                         (400, "password_required", .passwordRequired),
+                                         (400, "apple_reauthorization_required", .appleReauthorizationRequired),
+                                         (403, "apple_not_confirmed", .server(status: 403, message: "Try again.")),
+                                         (429, "", .server(status: 429, message: "Try again."))] {
+            reply = (status, ["message": "Try again.", "details": ["code": code]])
+            await #expect(throws: expected) { try await delete() }
+            #expect(try store.load() != nil, "\(code) keeps the session")
+        }
     }
 }
 
@@ -319,9 +345,9 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
         }
         let start = self.start
         let api = ExerlyAPI(baseURL: base, transport: transport, credentials: store, now: { start })
-        await #expect(throws: Offline.self) { try await api.deleteAccount(appleAuthorizationCode: nil) }
+        await #expect(throws: Offline.self) { try await api.deleteAccount(confirmation: .password("synthetic-password")) }
         #expect(try store.load() != nil, "The outcome is unknown, so the session stays")
-        try await api.deleteAccount(appleAuthorizationCode: nil)
+        try await api.deleteAccount(confirmation: .password("synthetic-password"))
         #expect(try store.load() == nil)
     }
 }

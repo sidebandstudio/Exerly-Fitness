@@ -14,7 +14,7 @@ struct AccountManagementActions {
     var connectApple: @MainActor (AppleAuthorizationResult) async throws -> AccountSignInMethods
     var disconnectApple: @MainActor () async throws -> AccountSignInMethods
     var exportAccount: @MainActor () async throws -> Data
-    var deleteAccount: @MainActor (String?) async throws -> Void
+    var deleteAccount: @MainActor (AccountConfirmation) async throws -> Void
     var exportDeviceData: (@MainActor () throws -> Data)?
 }
 
@@ -88,7 +88,7 @@ struct AccountManagementView: View {
                 if let methods {
                     NavigationLink {
                         DeleteAccountView(email: email, appleConnected: methods.appleConnected,
-                                          delete: actions.deleteAccount)
+                                          export: actions.exportAccount, delete: actions.deleteAccount)
                     } label: {
                         Label("Delete account", systemImage: "trash")
                             .foregroundStyle(Color.exError)
@@ -239,37 +239,72 @@ private struct AccountExportView: View {
 private struct DeleteAccountView: View {
     let email: String
     let appleConnected: Bool
-    let delete: @MainActor (String?) async throws -> Void
-    @State private var confirm = false
+    let export: @MainActor () async throws -> Data
+    let delete: @MainActor (AccountConfirmation) async throws -> Void
+    @State private var password = ""
     @State private var needsApple = false
+    @State private var pending: AccountConfirmation?
+    @State private var confirming = false
     @State private var deleting = false
+    @State private var exporting = false
+    @State private var exportFile: AccountExportFile?
+    @State private var exported = false
     @State private var error: String?
     @State private var task: Task<Void, Never>?
+    @FocusState private var passwordFocused: Bool
     @AccessibilityFocusState private var errorFocused: Bool
+
+    private var confirmsWithApple: Bool { appleConnected || needsApple }
+    private var busy: Bool { deleting || exporting }
 
     var body: some View {
         ExList {
             Section {
-                Text(email).textSelection(.enabled)
-                Text("Deleting your account removes its training, food, body measurements and other saved records from Exerly and this device. This cannot be undone.")
-                Text("Exports you saved elsewhere and records already shared with Apple Health remain there.")
-                    .foregroundStyle(.secondary)
+                Text(email).font(.exBodyMedium).textSelection(.enabled)
+                Text("Deleting your account can’t be undone.")
+            }
+            Section("Before you delete") {
+                Text("Save a copy of your data first: a file with your account, training, food and body records that you can keep or import into another account.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { prepareExport() } label: {
+                    Label(exported ? "Export again" : "Export my data",
+                          systemImage: exported ? "checkmark.circle" : "square.and.arrow.up")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("account.deleteExport")
+                if exporting { ProgressView("Preparing export…") }
+            }
+            Section("What deleting does") {
+                consequence("trash", "Removes your workouts, food log, body measurements, programs, recipes and settings from Exerly.")
+                consequence("iphone.slash", "Signs out every device on this account, and ends access for agents you connected.")
+                consequence("photo.on.rectangle", "Removes what this iPhone saved for the account, progress photos included.")
+                consequence("heart", "Leaves records already in Apple Health, and exports you saved, where they are.")
             }
             Section {
-                if needsApple {
-                    Text("Confirm with Apple to finish deleting this account.")
+                if confirmsWithApple {
                     AppleAuthorizationButton { payload in
-                        guard let code = payload.authorizationCode, !code.isEmpty else {
-                            throw DeleteError.missingAppleCode
-                        }
-                        try await performDelete(code)
+                        guard !busy else { return }
+                        ask(.apple(identityToken: payload.identityToken, rawNonce: payload.rawNonce,
+                                   authorizationCode: payload.authorizationCode))
                     }
-                    .disabled(deleting)
+                    .disabled(busy)
                 } else {
-                    Button("Delete my account", role: .destructive) { confirm = true }
-                        .disabled(deleting)
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($passwordFocused)
+                        .submitLabel(.done)
+                        .onSubmit { if !password.isEmpty { ask(.password(password)) } }
+                        .accessibilityIdentifier("account.deletePassword")
+                    Button("Delete my account", role: .destructive) { ask(.password(password)) }
+                        .disabled(password.isEmpty || busy)
                         .accessibilityIdentifier("account.confirmDelete")
                 }
+            } header: {
+                Text("Confirm it’s you")
+            } footer: {
+                Text(confirmsWithApple ? "Sign in with Apple again to delete this account."
+                                       : "Enter the password you sign in with.")
             }
             if deleting { Section { ProgressView("Deleting account…") } }
             if let error {
@@ -278,6 +313,7 @@ private struct DeleteAccountView: View {
                         .foregroundStyle(Color.exError)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityFocused($errorFocused)
+                        .accessibilityIdentifier("account.deleteError")
                 }
             }
         }
@@ -286,36 +322,70 @@ private struct DeleteAccountView: View {
         .exListStyle()
         .interactiveDismissDisabled(deleting)
         .navigationBarBackButtonHidden(deleting)
-        .alert("Delete this account?", isPresented: $confirm) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete account", role: .destructive) {
-                if appleConnected { needsApple = true } else {
-                    task = Task { @MainActor in
-                        do { try await performDelete(nil) } catch is CancellationError { } catch {
-                            guard !Task.isCancelled else { return }
-                            self.error = AccountScreenError.message(error)
-                            errorFocused = true
-                        }
-                    }
-                }
-            }
-        } message: {
-            Text("Your saved Exerly records will be permanently removed.")
+        .alert("Delete this account?", isPresented: $confirming, presenting: pending) { confirmation in
+            Button("Cancel", role: .cancel) { pending = nil }
+            Button("Delete account", role: .destructive) { perform(confirmation) }
+        } message: { _ in
+            Text(exported ? "Your Exerly records will be permanently removed."
+                          : "You haven’t exported your data. Your Exerly records will be permanently removed.")
+        }
+        .sheet(item: $exportFile) { file in
+            AccountShareSheet(url: file.url).onDisappear { file.remove() }
         }
         .onDisappear { task?.cancel() }
     }
 
-    private func performDelete(_ code: String?) async throws {
-        guard !deleting else { return }
-        error = nil
-        deleting = true
-        defer { deleting = false }
-        do { try await delete(code) } catch ExerlyCore.APIError.appleReauthorizationRequired { needsApple = true }
+    private func consequence(_ symbol: String, _ text: String) -> some View {
+        Label { Text(text).fixedSize(horizontal: false, vertical: true) } icon: {
+            Image(systemName: symbol).foregroundStyle(Color.exTextSecondary)
+        }
     }
 
-    private enum DeleteError: LocalizedError {
-        case missingAppleCode
-        var errorDescription: String? { "Apple authorization expired. Confirm with Apple again." }
+    private func ask(_ confirmation: AccountConfirmation) {
+        passwordFocused = false
+        pending = confirmation
+        confirming = true
+    }
+
+    private func prepareExport() {
+        guard !busy else { return }
+        error = nil
+        exporting = true
+        task = Task { @MainActor in
+            defer { exporting = false }
+            do {
+                let data = try await export()
+                try Task.checkCancellation()
+                exportFile = try AccountExportFile(data: data)
+                exported = true
+            } catch is CancellationError { } catch {
+                guard !Task.isCancelled else { return }
+                show(error)
+            }
+        }
+    }
+
+    private func perform(_ confirmation: AccountConfirmation) {
+        guard !busy else { return }
+        error = nil
+        deleting = true
+        task = Task { @MainActor in
+            defer { deleting = false; pending = nil }
+            do { try await delete(confirmation) } catch is CancellationError { } catch {
+                guard !Task.isCancelled else { return }
+                switch error {
+                case ExerlyCore.APIError.appleReauthorizationRequired: needsApple = true
+                case ExerlyCore.APIError.wrongPassword: password = ""
+                default: break
+                }
+                show(error)
+            }
+        }
+    }
+
+    private func show(_ failure: Error) {
+        error = AccountScreenError.message(failure)
+        errorFocused = true
     }
 }
 
