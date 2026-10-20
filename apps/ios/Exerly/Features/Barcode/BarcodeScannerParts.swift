@@ -32,6 +32,8 @@ struct BarcodeViewfinder: View {
     let cameraDenied: Bool
     let status: String
     let statusIcon: String
+    /// Something to read under it: at the largest sizes it gives way.
+    var compact = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -53,7 +55,7 @@ struct BarcodeViewfinder: View {
                         .position(x: window.midX, y: window.midY).allowsHitTesting(false)
                 }
             }
-            .frame(height: typeSize.isAccessibilitySize ? 250 : 330)
+            .frame(height: typeSize.isAccessibilitySize ? (compact ? 200 : 260) : 330)
             .clipShape(RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
             // Over the camera the controls stop growing at xxLarge, so the window
             // stays clear; VoiceOver hears the status in full.
@@ -179,18 +181,23 @@ struct BarcodeNoticeCard<Actions: View>: View {
     let message: String
     let identifier: String
     @ViewBuilder let actions: Actions
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         ExCard(accent: true) {
-            Label(title, systemImage: icon).font(.exH3).foregroundStyle(Color.exTextPrimary)
+            Group {
+                if typeSize.isAccessibilitySize { Text(title) } else { Label(title, systemImage: icon) }
+            }.font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
             if let gtin {
                 Text(BarcodeText.printed(gtin)).font(.exMono.weight(.semibold)).foregroundStyle(Color.exTextPrimary)
                     .textSelection(.enabled)
                     .accessibilityLabel("Barcode \(BarcodeText.spoken(gtin))").accessibilityIdentifier("nutrition.barcodeShown")
             }
+            // At the largest sizes what to do comes first, on screen; the why follows.
+            if typeSize.isAccessibilitySize { actions }
             Text(message).font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier)
-            actions
+            if !typeSize.isAccessibilitySize { actions }
         }
     }
 }
@@ -204,16 +211,24 @@ struct BarcodeTray: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        let count = session.plate.rows.count
+        let energy = (session.plate.summary?.totals.energy).map { "\(FoodFormat.kcal($0)) kcal" }
         ExCard(accent: true) {
-            let header = typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.tight)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
-            header {
-                ExEyebrow("Your plate · \(session.plate.rows.count) \(session.plate.rows.count == 1 ? "food" : "foods")", color: .exPrimaryText)
-                if !typeSize.isAccessibilitySize { Spacer() }
-                if let energy = session.plate.summary?.totals.energy {
-                    Text("\(FoodFormat.kcal(energy)) kcal").font(.exStatSmall).foregroundStyle(Color.exTextPrimary)
-                }
-            }.accessibilityElement(children: .combine).accessibilityIdentifier("nutrition.scanPlate")
+            if typeSize.isAccessibilitySize {
+                // One plain line, so the foods themselves are on screen at the largest sizes.
+                Text(["\(count) \(count == 1 ? "food" : "foods")", energy].compactMap { $0 }.joined(separator: " · "))
+                    .font(.exLabel).foregroundStyle(Color.exTextPrimary).accessibilityIdentifier("nutrition.scanPlate")
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    ExEyebrow("Your plate · \(count) \(count == 1 ? "food" : "foods")", color: .exPrimaryText)
+                    Spacer()
+                    if let energy { Text(energy).font(.exStatSmall).foregroundStyle(Color.exTextPrimary) }
+                }.accessibilityElement(children: .combine).accessibilityIdentifier("nutrition.scanPlate")
+            }
+            ForEach(session.plate.rows) { row in
+                BarcodeTrayRow(session: session, row: row, edit: edit)
+                Divider().overlay(Color.exBorder.opacity(0.3))
+            }
             Menu {
                 Picker("Meal", selection: Binding(get: { session.plate.meal }, set: { session.plate.meal = $0 })) {
                     ForEach(meals, id: \.self) { Text($0).tag($0) }
@@ -221,15 +236,24 @@ struct BarcodeTray: View {
             } label: {
                 Label("Into \(session.plate.meal)", systemImage: "fork.knife").font(.exLabel).frame(minHeight: 44)
             }.accessibilityIdentifier("nutrition.scanMeal")
-            ForEach(session.plate.rows) { row in
-                BarcodeTrayRow(session: session, row: row, edit: edit)
-                if row.id != session.plate.rows.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
-            }
+            BarcodeAttribution(lines: session.plateAttributions)
         }
     }
 
     private var meals: [String] {
         NutritionStore.defaultMeals.contains(session.plate.meal) ? NutritionStore.defaultMeals : NutritionStore.defaultMeals + [session.plate.meal]
+    }
+}
+
+/// The licence lines for database foods shown, as Open Food Facts's ODbL requires.
+struct BarcodeAttribution: View {
+    let lines: [String]
+
+    var body: some View {
+        if !lines.isEmpty {
+            Text(lines.joined(separator: "\n")).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("nutrition.scanAttribution")
+        }
     }
 }
 
@@ -252,14 +276,15 @@ private struct BarcodeTrayRow: View {
             }
             .buttonStyle(.plain).accessibilityHint("Changes the amount")
             .accessibilityIdentifier("nutrition.scanRow.\(row.food.id)")
-            HStack(spacing: 0) {
+            HStack(spacing: typeSize.isAccessibilitySize ? ExSpacing.small : 0) {
                 if session.stepped(row, more: true) != nil {
                     stepButton("minus", "One less", more: false, enabled: session.stepped(row, more: false) != nil,
                                identifier: "nutrition.scanLess.\(row.food.id)")
                     stepButton("plus", "One more", more: true, enabled: true, identifier: "nutrition.scanMore.\(row.food.id)")
                 }
+                if typeSize.isAccessibilitySize { Spacer() }
                 Button("Remove \(row.food.name)", systemImage: "xmark.circle.fill") { session.plate.remove(row) }
-                    .labelStyle(.iconOnly).font(.title3).foregroundStyle(Color.exTextMuted).frame(width: 44, height: 44)
+                    .labelStyle(.iconOnly).font(.title3).foregroundStyle(Color.exTextMuted).frame(minWidth: 44, minHeight: 44)
                     .accessibilityIdentifier("nutrition.scanRemove.\(row.food.id)")
             }
         }
@@ -267,11 +292,11 @@ private struct BarcodeTrayRow: View {
 
     private func stepButton(_ icon: String, _ title: String, more: Bool, enabled: Bool, identifier: String) -> some View {
         Button { session.step(row, more: more) } label: {
-            Image(systemName: icon).font(.body.weight(.semibold)).frame(width: 40, height: 40)
-                .background(Color.exSurface2, in: Circle())
+            Image(systemName: icon).font(.body.weight(.semibold)).frame(minWidth: 40, minHeight: 40)
+                .padding(typeSize.isAccessibilitySize ? 6 : 0).background(Color.exSurface2, in: Circle())
         }
         .buttonStyle(.plain).foregroundStyle(enabled ? Color.exPrimaryText : Color.exTextMuted).disabled(!enabled)
-        .frame(width: 44, height: 44).accessibilityLabel("\(title) \(row.food.name)").accessibilityIdentifier(identifier)
+        .frame(minWidth: 44, minHeight: 44).accessibilityLabel("\(title) \(row.food.name)").accessibilityIdentifier(identifier)
     }
 }
 
@@ -281,63 +306,70 @@ struct BarcodeRecentScans: View {
     @ObservedObject var session: BarcodeScanSession
     let limit: Int
     let picking: Bool
-    let log: (BarcodeLibrary.Scan) -> Void
+    let use: (BarcodeScanSession.PastScan) -> Void
     let showAll: () -> Void
 
     var body: some View {
+        let all = session.pastScans
+        let scans = Array(all.prefix(limit))
         VStack(alignment: .leading, spacing: ExSpacing.item) {
             HStack(alignment: .firstTextBaseline) {
                 ExSectionHeading("Recent scans")
                 Spacer()
-                if session.library.history.count > limit {
+                if all.count > limit {
                     Button("See all", action: showAll).font(.exLabel).frame(minHeight: 44).accessibilityIdentifier("nutrition.scanSeeAll")
                 }
             }
             ExCard {
-                // Scans that resolved since going offline come first.
-                let history = session.library.history
-                let scans = Array((history.filter(\.ready) + history.filter { !$0.ready }).prefix(limit))
                 ForEach(scans) { scan in
-                    BarcodeScanRow(session: session, scan: scan, picking: picking, log: log)
+                    BarcodeScanRow(session: session, past: scan, picking: picking, use: use)
                     if scan.id != scans.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
                 }
+                BarcodeAttribution(lines: session.attributions(for: scans))
             }
         }
     }
 }
 
-/// Every past scan: those found offline first, then those still waiting.
+/// Every past scan: offline ones found since first, then those still waiting.
 struct BarcodeHistoryView: View {
     @ObservedObject var session: BarcodeScanSession
     let picking: Bool
-    let log: (BarcodeLibrary.Scan) -> Void
+    let use: (BarcodeScanSession.PastScan) -> Void
 
     var body: some View {
-        let history = session.library.history
-        let sections: [(String, String?, [BarcodeLibrary.Scan])] = [
-            ("Ready to log", nil, history.filter(\.ready)),
-            ("Waiting for a connection", nil, history.filter { $0.state == .waiting }),
-            ("Scanned", nil, history.filter { !$0.ready && $0.state != .waiting }),
+        let all = session.pastScans
+        let sections: [(String, [BarcodeScanSession.PastScan])] = [
+            ("Ready to log", all.filter { if case .pending(let scan) = $0 { scan.state == .ready } else { false } }),
+            ("Waiting for a connection", all.filter { if case .pending(let scan) = $0 { scan.state == .waiting } else { false } }),
+            ("Not found once online", all.filter { if case .pending(let scan) = $0 { scan.state == .missing } else { false } }),
+            ("Scanned", all.filter { if case .scan = $0 { true } else { false } }),
         ]
         ExScreen {
-            if history.isEmpty {
+            if all.isEmpty {
                 ExEmptyState(icon: "barcode.viewfinder", title: "No scans yet",
                              message: "Codes you scan stay here, ready to log again in one tap, offline too.", action: "Scan a barcode") {}
             }
-            ForEach(sections.filter { !$0.2.isEmpty }, id: \.0) { title, detail, scans in
+            ForEach(sections.filter { !$0.1.isEmpty }, id: \.0) { title, scans in
                 VStack(alignment: .leading, spacing: ExSpacing.item) {
-                    ExSectionHeading(title, detail: detail)
+                    ExSectionHeading(title)
                     ExCard {
                         ForEach(scans) { scan in
-                            BarcodeScanRow(session: session, scan: scan, picking: picking, log: log)
+                            BarcodeScanRow(session: session, past: scan, picking: picking, use: use)
                                 .contextMenu {
-                                    Button("Remove from history", systemImage: "trash", role: .destructive) { session.library.remove(scan.gtin) }
+                                    Button("Remove", systemImage: "trash", role: .destructive) {
+                                        switch scan {
+                                        case .pending(let pending): session.library.acknowledge(pending.id)
+                                        case .scan(let past): session.library.remove(past.gtin)
+                                        }
+                                    }
                                 }
                             if scan.id != scans.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
                         }
                     }
                 }
             }
+            BarcodeAttribution(lines: session.attributions(for: all))
         }
         .navigationTitle("Scan history").navigationBarTitleDisplayMode(.inline)
     }
@@ -345,62 +377,83 @@ struct BarcodeHistoryView: View {
 
 struct BarcodeScanRow: View {
     @ObservedObject var session: BarcodeScanSession
-    let scan: BarcodeLibrary.Scan
+    let past: BarcodeScanSession.PastScan
     let picking: Bool
-    let log: (BarcodeLibrary.Scan) -> Void
+    let use: (BarcodeScanSession.PastScan) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.timeZone) private var timeZone
 
     var body: some View {
-        let product = session.library.product(scan.gtin)
+        let product = session.library.usable(past.gtin)
         let layout = typeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small)) : AnyLayout(HStackLayout(spacing: ExSpacing.item))
         layout {
             HStack(alignment: .top, spacing: ExSpacing.item) {
-                Image(systemName: icon).font(.body.weight(.semibold)).foregroundStyle(tint).frame(width: 24).accessibilityHidden(true)
+                // Decorative; the text says the same, so it gives way at the largest sizes.
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: icon).font(.body.weight(.semibold)).foregroundStyle(tint).frame(width: 24).accessibilityHidden(true)
+                }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(product?.food.name ?? BarcodeText.printed(scan.gtin)).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
-                    Text(detail(product)).font(.exCaption).foregroundStyle(scan.ready ? Color.exSuccess : Color.exTextSecondary)
+                    Text(product?.food.name ?? BarcodeText.printed(past.gtin)).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                    Text(detail(product)).font(.exCaption).foregroundStyle(isReady ? Color.exSuccess : Color.exTextSecondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("nutrition.scanHistory.\(scan.gtin.key)")
-            if product != nil {
-                Button(picking ? "Add" : scan.ready ? "Log to \(scan.meal)" : "Log") { log(scan) }
+            .accessibilityIdentifier("nutrition.scanHistory.\(past.gtin.key)")
+            if let product {
+                Button(actionTitle) { use(past) }
                     .font(.exLabel.weight(.semibold)).foregroundStyle(Color.white)
                     .padding(.horizontal, ExSpacing.content).frame(minHeight: 44)
                     .background(Color.exActionFill, in: Capsule())
-                    .accessibilityLabel("\(picking ? "Add" : "Log") \(product?.food.name ?? "")")
-                    .accessibilityIdentifier("nutrition.scanRelog.\(scan.gtin.key)")
+                    .accessibilityLabel("\(actionTitle), \(product.food.name)")
+                    .accessibilityIdentifier(identifier)
             }
         }
         .frame(minHeight: 44)
     }
 
+    private var isReady: Bool { if case .pending(let scan) = past { scan.state == .ready } else { false } }
+
+    /// With foods on the plate, a past scan joins them instead of logging alone.
+    private var actionTitle: String {
+        if picking || !session.plate.rows.isEmpty { return picking ? "Add" : "Add to plate" }
+        if case .pending(let scan) = past { return "Log to \(scan.meal)" }
+        return "Log"
+    }
+
+    private var identifier: String {
+        switch past {
+        case .pending(let scan): "nutrition.scanRelog.\(scan.gtin.key).\(scan.meal)"
+        case .scan(let scan): "nutrition.scanRelog.\(scan.gtin.key)"
+        }
+    }
+
     private var icon: String {
-        switch scan.state {
-        case .found: scan.ready ? "checkmark.icloud.fill" : "barcode"
-        case .missing: "questionmark.circle"
-        case .waiting: "wifi.slash"
+        switch past {
+        case .pending(let scan): scan.state == .ready ? "checkmark.icloud.fill" : scan.state == .waiting ? "wifi.slash" : "questionmark.circle"
+        case .scan(let scan): scan.state == .missing ? "questionmark.circle" : "barcode"
         }
     }
 
     private var tint: Color {
-        switch scan.state {
-        case .found: scan.ready ? .exSuccess : .exPrimaryText
-        case .missing: .exTextMuted
-        case .waiting: .exWarning
+        switch past {
+        case .pending(let scan): scan.state == .ready ? .exSuccess : scan.state == .waiting ? .exWarning : .exTextMuted
+        case .scan(let scan): scan.state == .missing ? .exTextMuted : .exPrimaryText
         }
     }
 
     private func detail(_ product: BarcodeLibrary.Product?) -> String {
-        let time = scan.scannedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: timeZone))
-        switch scan.state {
-        case .waiting: return "Waiting for a connection · scanned \(time)"
-        case .missing: return "Not in the food database · \(time)"
-        case .found:
-            if scan.ready { return "Found · scanned offline at \(time) for \(scan.meal)" }
-            guard let product, let portion = session.usualPortion(of: product.food) else { return time }
+        func time(_ date: Date) -> String { date.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: timeZone)) }
+        switch past {
+        case .pending(let scan):
+            switch scan.state {
+            case .waiting: return "Waiting for a connection · scanned \(time(scan.scannedAt)) for \(scan.meal)"
+            case .ready: return "Found · scanned offline at \(time(scan.scannedAt)) for \(scan.meal)"
+            case .missing: return "Not in the food database · scanned \(time(scan.scannedAt))"
+            }
+        case .scan(let scan):
+            if scan.state == .missing { return "Not in the food database · \(time(scan.scannedAt))" }
+            guard let product, let portion = session.usualPortion(of: product.food) else { return time(scan.scannedAt) }
             return "\(FoodFormat.portion(portion, unit: session.unit)) · \(FoodFormat.kcal(portion.nutrients.energy)) kcal"
         }
     }

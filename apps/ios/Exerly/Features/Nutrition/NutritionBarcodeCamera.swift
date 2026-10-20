@@ -64,7 +64,6 @@ final class BarcodeCamera: NSObject, ObservableObject, BarcodeSource, AVCaptureV
             self.wantsRunning = true
             if !self.configured { self.configure() }
             guard self.configured else { return }
-            self.consensus.reset()
             if !self.session.isRunning { self.session.startRunning() }
         }
     }
@@ -73,6 +72,8 @@ final class BarcodeCamera: NSObject, ObservableObject, BarcodeSource, AVCaptureV
         queue.async { [weak self] in
             guard let self else { return }
             self.wantsRunning = false
+            // A pack accepted before the pause isn't added again on return.
+            self.consensus.pause()
             self.setTorch(false)
             if self.session.isRunning { self.session.stopRunning() }
         }

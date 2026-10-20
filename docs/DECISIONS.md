@@ -1615,3 +1615,18 @@ The rest of the slice:
   match bwip-js. DataBar Limited, DataBar Expanded, GS1 DataMatrix and Micro QR, which
   have large published tables, were rendered once by bwip-js (MIT) for synthetic GTINs
   under GS1's demonstration prefix 950, and are committed as test fixtures.
+
+## 2026-10-20: Restricted EAN-8s aren't looked up; offline scans keep every intent
+
+Review round 1 of the barcode slice changed four earlier calls:
+
+- EAN-8s starting 0 or 2 are a company's own restricted circulation numbers (GS1 General
+  Specifications), so two retailers can reuse one. They are no longer looked up, and no
+  cached product answers them; a food the person entered for one does, on their account.
+  This reverses the earlier entry, which looked them up for own-brand EAN-8s.
+- Each scan made offline is kept as its own record with its meal, day and time, apart from
+  the one-per-code history, so a later scan of the same code never overwrites it.
+- A past scan with foods on the plate joins the plate rather than logging alone, and the
+  plate can't be logged while an accepted scan is still being looked up.
+- A pack accepted before the camera pauses stays held when it resumes and must leave the
+  frame to count again.

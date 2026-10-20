@@ -39,6 +39,9 @@ final class BarcodeScanSession: ObservableObject {
     }
 
     @Published private(set) var notice: Notice?
+    /// Accepted codes still being looked up. The plate can't be logged until
+    /// they've settled, so none is left behind.
+    @Published private(set) var lookingUp = 0
     /// Counts that drive haptics.
     @Published private(set) var successes = 0
     @Published private(set) var warnings = 0
@@ -61,13 +64,16 @@ final class BarcodeScanSession: ObservableObject {
 
     // MARK: Scanning
 
-    /// The food for a code, or nil after saying why there isn't one.
+    /// The food for a code, or nil after saying why there isn't one. A
+    /// store's own code finds only a food the person entered for it.
     func food(for gtin: GTIN) async -> ExerlyCore.Food? {
-        guard gtin.isProduct else {
+        guard gtin.isProduct || library.usable(gtin) != nil else {
             show(.notProduct(gtin, gtin.kind), warning: true)
             return nil
         }
         notice = .looking(gtin)
+        lookingUp += 1
+        defer { lookingUp -= 1 }
         switch await library.resolve(gtin, meal: plate.meal, date: plate.date, fetch: BarcodeLibrary.fetch(api)) {
         case .found(let product, let cached):
             if cached, library.isStale(product) { Task { await library.refresh(product.gtin, fetch: BarcodeLibrary.fetch(api)) } }
@@ -97,12 +103,15 @@ final class BarcodeScanSession: ObservableObject {
     func lookUp(typed text: String) async -> TypedLookup {
         let candidates = GTIN.candidates(typed: text)
         guard let last = candidates.last else { return .invalid }
-        if let cached = candidates.first(where: { library.product($0) != nil }) {
+        if let cached = candidates.first(where: { library.usable($0) != nil }) {
             return await food(for: cached).map(TypedLookup.food) ?? .noFood
         }
         for gtin in candidates.dropLast() where gtin.isProduct {
             notice = .looking(gtin)
-            switch await library.resolve(gtin, meal: plate.meal, date: plate.date, fetch: BarcodeLibrary.fetch(api)) {
+            lookingUp += 1
+            let outcome = await library.resolve(gtin, meal: plate.meal, date: plate.date, fetch: BarcodeLibrary.fetch(api))
+            lookingUp -= 1
+            switch outcome {
             case .found(let product, _): return .food(product.food)
             case .missing: library.remove(gtin)
             case .queued: show(.queued(gtin), warning: true); return .noFood
@@ -141,6 +150,27 @@ final class BarcodeScanSession: ObservableObject {
         NutritionFormat.portion(row.entry(on: plate.date, meal: plate.meal, at: plate.loggedAt), unit: unit)
     }
 
+    /// The licence line for a food from a database, such as Open Food Facts's.
+    func attribution(for food: ExerlyCore.Food) -> String? {
+        library.products.values.first { $0.food.id == food.id && !$0.own }?.attribution
+    }
+
+    /// The licence lines for the foods on the plate.
+    var plateAttributions: [String] {
+        var lines: [String] = []
+        for row in plate.rows { if let line = attribution(for: row.food), !lines.contains(line) { lines.append(line) } }
+        return lines
+    }
+
+    /// The licence lines for the past scans shown.
+    func attributions(for scans: [PastScan]) -> [String] {
+        var lines: [String] = []
+        for scan in scans {
+            if let product = library.usable(scan.gtin), !product.own, !lines.contains(product.attribution) { lines.append(product.attribution) }
+        }
+        return lines
+    }
+
     /// What one tap logs for a food from Recent scans.
     func usualPortion(of food: ExerlyCore.Food) -> QuickPortion? { store.quickPortion(for: food, unit: unit) }
 
@@ -173,23 +203,72 @@ final class BarcodeScanSession: ObservableObject {
 
     // MARK: Logging
 
+    /// The plate logs once every accepted scan has been looked up.
+    var canLog: Bool { lookingUp == 0 && !plate.rows.isEmpty }
+
     func logAll() -> [FoodEntry]? {
-        plate.save()
+        guard lookingUp == 0 else { return nil }
+        return plate.save()
     }
 
-    /// Logs a past scan again in one tap, at the amount usually logged. A
-    /// scan made offline logs to the meal and time it was scanned for.
-    func relog(_ scan: BarcodeLibrary.Scan) -> FoodEntry? {
-        guard let product = library.product(scan.gtin), let portion = store.quickPortion(for: product.food, unit: unit) else { return nil }
+    /// A past scan, as Recent scans and the history list it.
+    enum PastScan: Identifiable, Equatable {
+        /// Made offline, with where it was meant to be logged.
+        case pending(BarcodeLibrary.Pending)
+        case scan(BarcodeLibrary.Scan)
+
+        var id: String {
+            switch self {
+            case .pending(let scan): "pending-\(scan.id.uuidString)"
+            case .scan(let scan): "scan-\(scan.gtin.key)"
+            }
+        }
+
+        var gtin: GTIN {
+            switch self {
+            case .pending(let scan): scan.gtin
+            case .scan(let scan): scan.gtin
+            }
+        }
+    }
+
+    /// Offline scans ready to log first, then those waiting or not found,
+    /// then every other code scanned, latest first.
+    var pastScans: [PastScan] {
+        let offline = library.ready + library.waiting + library.pending.filter { $0.state == .missing }
+        let codes = Set(library.pending.map(\.gtin))
+        return offline.map(PastScan.pending) + library.history.filter { !codes.contains($0.gtin) }.map(PastScan.scan)
+    }
+
+    enum PastScanResult {
+        case logged(FoodEntry)
+        case addedToPlate
+        case failed
+    }
+
+    /// One tap on a past scan. With foods on the plate it joins them, so the
+    /// plate isn't lost; otherwise it logs at once, an offline scan to the
+    /// meal, day and time it was scanned for.
+    func use(_ past: PastScan) -> PastScanResult {
+        guard let product = library.usable(past.gtin) else { return .failed }
+        if !plate.rows.isEmpty {
+            add(product.food)
+            if case .pending(let scan) = past { library.acknowledge(scan.id) }
+            return .addedToPlate
+        }
+        guard let portion = store.quickPortion(for: product.food, unit: unit) else { return .failed }
         do {
-            let entry = scan.ready
-                ? try store.log(portion, on: scan.date, meal: scan.meal, at: scan.scannedAt)
-                : try store.log(portion, on: plate.date, meal: plate.meal)
-            library.acknowledge(scan.gtin)
-            return entry
+            let entry: FoodEntry
+            if case .pending(let scan) = past {
+                entry = try store.log(portion, on: scan.date, meal: scan.meal, at: scan.scannedAt)
+                library.acknowledge(scan.id)
+            } else {
+                entry = try store.log(portion, on: plate.date, meal: plate.meal)
+            }
+            return .logged(entry)
         } catch {
             show(nil, warning: true)
-            return nil
+            return .failed
         }
     }
 
@@ -200,9 +279,9 @@ final class BarcodeScanSession: ObservableObject {
         if !library.ready.isEmpty, notice == nil { show(.ready(library.ready.count)) }
     }
 
-    /// The person doesn't need the scans that resolved: they stay in the history.
+    /// The person doesn't need the offline scans that resolved.
     func dismissReady() {
-        for scan in library.ready { library.acknowledge(scan.gtin) }
+        library.dismissResolved()
         notice = nil
     }
 }
@@ -223,7 +302,8 @@ enum BarcodeNoticeCopy {
         switch kind {
         case .variableMeasure:
             "Weighed and priced items carry the store's price or weight, not the product, so no database knows them. Search for the food instead."
-        case .storeInternal: "The store made this number up for itself, so no food database knows it. Search for the food instead."
+        case .storeInternal:
+            "The store numbered this itself, and another store may use the same number for something else, so it isn't looked up. Enter the food once and this code finds it on your phone."
         case .coupon: "Scan the barcode on the food's own package instead."
         case .publication: "Scan the barcode on a food package instead."
         case .product: "Search for it with the code below, or enter it from the label."

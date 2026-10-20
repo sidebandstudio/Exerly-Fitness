@@ -53,14 +53,15 @@ struct NutritionBarcodeView: View {
     var body: some View {
         ExScreen {
             BarcodeViewfinder(camera: camera, feedImage: feedImage, feedPrimed: feedPrimed, usesCamera: usesCamera, usesFeed: usesFeed,
-                              cameraDenied: cameraDenied, status: status, statusIcon: statusIcon)
+                              cameraDenied: cameraDenied, status: status, statusIcon: statusIcon,
+                              compact: !session.plate.rows.isEmpty || session.notice.isCard)
             if let notice = session.notice { noticeCard(notice) }
             if picking == false, !session.plate.rows.isEmpty {
                 BarcodeTray(session: session, edit: { editing = $0 })
             }
             digitsSection
-            if !session.library.history.isEmpty {
-                BarcodeRecentScans(session: session, limit: 4, picking: picking, log: relog) { showingHistory = true }
+            if !session.pastScans.isEmpty {
+                BarcodeRecentScans(session: session, limit: 4, picking: picking, use: usePast) { showingHistory = true }
             }
             if session.plate.rows.isEmpty {
                 HStack(spacing: ExSpacing.small) {
@@ -109,7 +110,7 @@ struct NutritionBarcodeView: View {
         .onChange(of: presenting) { _, presenting in if presenting { stopSources() } else { startSources() } }
         .onDisappear { stopSources() }
         .navigationDestination(isPresented: $showingHistory) {
-            BarcodeHistoryView(session: session, picking: picking, log: relog)
+            BarcodeHistoryView(session: session, picking: picking, use: usePast)
         }
         .sheet(item: $editing) { row in
             FoodPortionStep(store: workspace.nutrition, food: row.food,
@@ -231,13 +232,19 @@ struct NutritionBarcodeView: View {
         }
     }
 
-    private func relog(_ scan: BarcodeLibrary.Scan) {
-        if let onPicked, let product = session.library.product(scan.gtin) {
+    /// A past scan: added to the meal being built or the plate, else logged.
+    private func usePast(_ past: BarcodeScanSession.PastScan) {
+        if let onPicked, let product = session.library.usable(past.gtin) {
             onPicked(product.food)
             dismiss()
-        } else if let entry = session.relog(scan) {
+            return
+        }
+        switch session.use(past) {
+        case .logged(let entry):
             Task { await workspace.synchronize() }
             onLogged([entry])
+        case .addedToPlate: showingHistory = false
+        case .failed: break
         }
     }
 
@@ -245,7 +252,7 @@ struct NutritionBarcodeView: View {
         guard let food = createdFood else { return }
         createdFood = nil
         if let gtin = creatingFor {
-            session.library.remember(food, for: gtin, attribution: "Your food", meal: session.plate.meal, date: session.plate.date)
+            session.library.remember(food, for: gtin, attribution: "Your food")
             creatingFor = nil
         }
         session.dismissNotice()
@@ -262,10 +269,14 @@ struct NutritionBarcodeView: View {
                               identifier: "nutrition.barcodeNotFound") { missActions(gtin) }
         case .notProduct(let gtin, let kind):
             BarcodeNoticeCard(icon: "tag", title: BarcodeNoticeCopy.title(kind), gtin: gtin, message: BarcodeNoticeCopy.detail(kind),
-                              identifier: "nutrition.barcodeNotProduct") { missActions(nil) }
+                              identifier: "nutrition.barcodeNotProduct") {
+                // A store's own number can still find the person's own food for it;
+                // a weighed label's number changes with each price, so it can't.
+                missActions(kind == .storeInternal ? gtin : nil)
+            }
         case .queued(let gtin):
             BarcodeNoticeCard(icon: "wifi.slash", title: "Saved for when you're online", gtin: gtin,
-                              message: "You're offline and this code is new to this phone. It's in Recent scans and will be looked up as soon as you're back, ready to log to \(session.plate.meal).",
+                              message: "It's looked up when you're back online, then waits in Recent scans to log to \(session.plate.meal).",
                               identifier: "nutrition.barcodeQueued") {
                 Button("Keep scanning", systemImage: "barcode.viewfinder") { session.dismissNotice() }
                     .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeKeepScanning")
@@ -290,7 +301,9 @@ struct NutritionBarcodeView: View {
     @ViewBuilder private func missActions(_ gtin: GTIN?) -> some View {
         Button { dismiss() } label: { Label("Search by name", systemImage: "magnifyingglass") }
             .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.barcodeSearchByName")
-        HStack(spacing: ExSpacing.small) {
+        // Side by side, the largest sizes break the words.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small)) : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+        layout {
             Button("Enter it", systemImage: "square.and.pencil") { creatingFor = gtin; creating = true }
                 .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeManualFood")
             Button("Read label", systemImage: "text.viewfinder") { creatingFor = gtin; scanningLabel = true }
@@ -353,6 +366,7 @@ struct NutritionBarcodeView: View {
     @ViewBuilder private var logFooter: some View {
         if !picking, !session.plate.rows.isEmpty {
             let count = session.plate.rows.count
+            let foods = "\(count) \(count == 1 ? "food" : "foods")"
             VStack(spacing: ExSpacing.small) {
                 if let error = session.plate.error {
                     Text(error).font(.exCaption).foregroundStyle(Color.exError).frame(maxWidth: .infinity, alignment: .leading)
@@ -363,9 +377,19 @@ struct NutritionBarcodeView: View {
                         onLogged(entries)
                     }
                 } label: {
-                    Label("Log \(count) \(count == 1 ? "food" : "foods") to \(session.plate.meal)", systemImage: "checkmark")
+                    if session.lookingUp > 0 {
+                        // A scan still being looked up joins the plate before it logs.
+                        HStack(spacing: ExSpacing.small) {
+                            ProgressView().tint(.white)
+                            Text("Finding \(session.lookingUp) more \(session.lookingUp == 1 ? "food" : "foods")…")
+                        }
+                    } else {
+                        // The meal is under the foods; at the largest sizes the button stays short.
+                        Label(typeSize.isAccessibilitySize ? "Log \(foods)" : "Log \(foods) to \(session.plate.meal)", systemImage: "checkmark")
+                    }
                 }
-                .buttonStyle(ExActionStyle()).accessibilityIdentifier("nutrition.scanLogAll")
+                .buttonStyle(ExActionStyle()).disabled(!session.canLog)
+                .accessibilityIdentifier("nutrition.scanLogAll")
             }
             .padding(ExSpacing.page).background(Color.exBackground)
         }
@@ -374,4 +398,12 @@ struct NutritionBarcodeView: View {
 
 private extension Optional where Wrapped == BarcodeScanSession.Notice {
     var isLooking: Bool { if case .looking? = self { true } else { false } }
+
+    /// The notice shows as a card under the viewfinder.
+    var isCard: Bool {
+        switch self {
+        case .missing?, .notProduct?, .queued?, .ready?: true
+        default: false
+        }
+    }
 }

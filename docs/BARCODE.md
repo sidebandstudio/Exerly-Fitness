@@ -25,7 +25,9 @@ Scan barcode, from Today's Scan button or food search. Decision record:
    the server for the canonical GTIN-14. Offline and never seen, the scan is saved and
    resolves after the next sync or when the scanner opens.
 5. **Plate.** A found food joins the plate at the amount it's usually logged at. The same
-   food again adds one more serving. Each row has − and + for one serving, a tap for any
+   food again adds one more serving; a pack still in view when the camera resumes, after
+   the portion sheet, isn't added again until it has left the frame. While a scan is
+   still being looked up, Log waits for it ("Finding 1 more food…"). Each row has − and + for one serving, a tap for any
    amount, and ×. One button logs the plate to the chosen meal. A success haptic and a
    VoiceOver announcement ("Found Synthetic oat bar. 2 foods to log.") mark each scan; a
    warning haptic marks a miss.
@@ -45,22 +47,31 @@ Prefixes that aren't products are recognised and never looked up:
 | GTIN-13 prefix | Meaning | What the scanner says |
 | --- | --- | --- |
 | 020–029, 200–299 | In-store weighed or priced label (item + price or weight) | "This is a store's own label" |
-| 040–049 | A store's own number | "This code only works in its store" |
+| 040–049, and EAN-8s starting 0 or 2 | A store's own number (restricted circulation) | "This code only works in its store" |
 | 050–059, 980–984, 990–999 | Coupon or refund receipt | "This is a coupon" |
 | 977–979 | ISSN, ISBN, ISMN | "This is a book or magazine" |
 | GTIN-14 indicator 9 | Variable-measure trade item | "This is a store's own label" |
 
-EAN-8 codes starting 0 or 2 are restricted numbers too, but retailers' own-brand EAN-8s
-are stable and appear in Open Food Facts, so they're looked up. Typed digits may drop
-leading zeros; eight digits are tried as EAN-8, then UPC-E.
+GS1 reserves EAN-8s starting 0 or 2 for numbers a company issues for itself, so two
+retailers can use one for different foods: they're never looked up, and a cached product
+never answers them. A food the person enters for such a code answers it on their account
+(`BarcodeLibrary.Product.own`). Typed digits may drop leading zeros; eight digits are tried
+as EAN-8 and UPC-E, a product reading first.
 
 ## Never a dead end
 
 A miss shows the code with **Search by name**, **Enter it** (the food editor, carrying the
-code) and **Read label**. A food entered for a missed code is remembered for that code on
-this device, so the next scan finds it, offline too. Offline, a new code shows "Saved for
-when you're online" with the code, waits in Recent scans, and comes back as "Ready to
-log" to the meal, day and time it was scanned for.
+code) and **Read label**. A food entered for a missed code, or a store's own code, is
+remembered for that code on this account, so the next scan finds it, offline too.
+
+Offline, a new code shows "Saved for when you're online" with the code. Each such scan is
+kept apart from the history (`BarcodeLibrary.Pending`) with its own meal, day and time, so
+scanning the same bar for Lunch and again for Dinner keeps both. Once online, each comes
+back as "Ready to log" to where it was scanned for. With foods on the plate, a past scan's
+button reads "Add to plate" and joins them instead of logging alone.
+
+Open Food Facts's ODbL attribution is shown under the plate, Recent scans and the history,
+wherever its foods appear.
 
 Hooks for the next wave: `BarcodeScanSession.Notice.missing(GTIN)` carries the code for
 label OCR on a miss and for contributing a food; `BarcodeLibrary.remember` is where a

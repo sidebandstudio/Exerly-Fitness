@@ -198,12 +198,38 @@ final class BarcodeScannerUITests: ExerlyUITestCase {
         try await control([:])
         openScanner(app)
         XCTAssertTrue(app.staticTexts["nutrition.barcodeReady"].waitForExistence(timeout: 10), "Told it's ready")
-        let relog = app.buttons["nutrition.scanRelog.\("0" + Self.juice)"]
+        let relog = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.scanRelog.\("0" + Self.juice).")).firstMatch
         XCTAssertTrue(relog.waitForExistence(timeout: 5))
         XCTAssertTrue(relog.label.contains("Log"), relog.label)
         tap(relog, in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
         XCTAssertEqual(entries("Synthetic apple juice", in: app).count, 1)
+    }
+
+    /// Two foods on the plate, then Add on a past scan: it joins them and the
+    /// scanner stays open, so the plate isn't lost.
+    func testAPastScanJoinsAPlateInsteadOfReplacingIt() async throws {
+        let (app, _) = try await launchScanner(prefix: "scan-past-plate")
+        openScanner(app)
+        try await scan("ean13:\(Self.oatBar)", in: app)
+        tap(logAll(app), in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+        openScanner(app)
+        try await scan("ean13:\(Self.juice)", in: app)
+        XCTAssertTrue(app.buttons["nutrition.scanRow.off:\(Self.juice)"].waitForExistence(timeout: 10))
+        try await scan("ean13:\(Self.cola)", in: app)
+        XCTAssertTrue(app.buttons["nutrition.scanRow.off:\(Self.cola)"].waitForExistence(timeout: 10))
+        let past = app.buttons["nutrition.scanRelog.\("0" + Self.oatBar)"]
+        XCTAssertTrue(past.waitForExistence(timeout: 5))
+        XCTAssertTrue(past.label.hasPrefix("Add to plate"), past.label)
+        tap(past, in: app)
+        XCTAssertTrue(app.buttons["nutrition.scanRow.off:\(Self.oatBar)"].waitForExistence(timeout: 5), "It joined the plate")
+        XCTAssertTrue(logAll(app).label.contains("Log 3 foods"), logAll(app).label)
+        tap(logAll(app), in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 10))
+        XCTAssertEqual(entries("Synthetic oat bar", in: app).count, 2)
+        XCTAssertEqual(entries("Synthetic apple juice", in: app).count, 1)
+        XCTAssertEqual(entries("Synthetic cola multipack", in: app).count, 1)
     }
 
     // MARK: Not found
@@ -243,6 +269,12 @@ final class BarcodeScannerUITests: ExerlyUITestCase {
         try await scan("ean13:\(Self.deli)", in: app)
         XCTAssertTrue(app.staticTexts["nutrition.barcodeNotProduct"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["nutrition.barcodeSearchByName"].exists)
+        // An EAN-8 starting 2 is a store's own number: explained, and the food can be entered for it.
+        try await scan("ean8:20123451", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["nutrition.barcodeShown"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "only works in its store")).firstMatch
+            .waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["nutrition.barcodeManualFood"].exists)
         let requests = try await request("GET", "/__test/food-database-requests")
         XCTAssertEqual((requests["requests"] as? [[String: Any]])?.filter { $0["type"] as? String == "barcode" }.count, 0)
     }
