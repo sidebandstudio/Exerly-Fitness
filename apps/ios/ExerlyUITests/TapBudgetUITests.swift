@@ -12,8 +12,8 @@ final class TapBudgetUITests: ExerlyUITestCase {
     /// name typed into the field that opens focused, then its +, which logs
     /// the last portion. Budget 3.
     func testAFoodEatenBeforeTakesTwoTaps() async throws {
-        let (app, person) = try await home(prefix: "budget-food")
-        start()
+        let (app, person) = try await budgetHome(prefix: "budget-food")
+        startCounting()
         tap(app.buttons["nutrition.addFood"], in: app)
         XCTAssertTrue(app.navigationBars["Add food"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "Search opens ready to type")
@@ -31,11 +31,11 @@ final class TapBudgetUITests: ExerlyUITestCase {
 
     /// The food most likely now is the first Log again chip on Today: one tap.
     func testTheFoodMostLikelyNowTakesOneTap() async throws {
-        let (app, person) = try await home(prefix: "budget-suggestion")
+        let (app, person) = try await budgetHome(prefix: "budget-suggestion")
         let chip = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         let name = String(chip.label.dropFirst("Log ".count).prefix { $0 != "," })
-        start()
+        startCounting()
         tap(chip, in: app)
         XCTAssertEqual(tapCount, 1)
         XCTAssertEqual(scrollCount, 0, "On the first screen")
@@ -45,11 +45,11 @@ final class TapBudgetUITests: ExerlyUITestCase {
     /// The meal being eaten now, as last logged, leads Log again: one tap,
     /// with no scrolling. Budget 2.
     func testRepeatingAMealTakesOneTap() async throws {
-        let (app, person) = try await home(prefix: "budget-meal")
+        let (app, person) = try await budgetHome(prefix: "budget-meal")
         let meal = app.buttons["today.repeatMeal"]
         XCTAssertTrue(meal.waitForExistence(timeout: 20))
         XCTAssertTrue(meal.label.hasPrefix("Repeat Yesterday's breakfast, 2 foods"), meal.label)
-        start()
+        startCounting()
         tap(meal, in: app)
         XCTAssertLessThanOrEqual(tapCount, 2, "Budget: 2")
         XCTAssertEqual(tapCount, 1)
@@ -63,36 +63,33 @@ final class TapBudgetUITests: ExerlyUITestCase {
         XCTAssertTrue(rest.waitForExistence(timeout: 5))
         XCTAssertTrue(rest.label.hasPrefix("Repeat the rest of yesterday, lunch and dinner, 4 foods"), rest.label)
         tap(rest, in: app)
-        try await expectEntries(token: person.token, Self.yesterday)
-        XCTAssertTrue(rest.waitForNonExistence(timeout: 5), "Nothing of yesterday is left to repeat")
+        try await expectEntries(token: person.token, Self.yesterdaysFood)
+        XCTAssertTrue(rest.label.hasPrefix("Repeated yesterday, 4 foods. Undo"), "Its own Undo stays: \(rest.label)")
     }
 
     /// All of yesterday, beside Log again's title: one tap on an empty day.
     /// Budget 2.
     func testRepeatingAWholeDayTakesOneTap() async throws {
-        let (app, person) = try await home(prefix: "budget-day")
+        let (app, person) = try await budgetHome(prefix: "budget-day")
         let day = app.buttons["today.repeatDay"]
         XCTAssertTrue(day.waitForExistence(timeout: 20))
         XCTAssertTrue(day.label.hasPrefix("Repeat all of yesterday, breakfast, lunch and dinner, 6 foods"), day.label)
-        start()
+        startCounting()
         tap(day, in: app)
         XCTAssertLessThanOrEqual(tapCount, 2, "Budget: 2")
         XCTAssertEqual(tapCount, 1)
         XCTAssertEqual(scrollCount, 0, "On the first screen")
-        try await expectEntries(token: person.token, Self.yesterday)
-        XCTAssertTrue(day.waitForNonExistence(timeout: 5), "Nothing of yesterday is left to repeat")
+        try await expectEntries(token: person.token, Self.yesterdaysFood)
+        XCTAssertTrue(day.label.hasPrefix("Repeated yesterday, 6 foods. Undo"), "Its own Undo stays: \(day.label)")
     }
 
-    /// Yesterday's food in seedWeek, each once.
-    private static let yesterday = ["Greek yogurt, plain", "Blueberries", "Chicken breast, grilled", "Jasmine rice, cooked",
-                                    "Salmon fillet", "Roasted potatoes"]
 
     /// Scan, the barcode, Log. The simulator has no camera, so the barcode
     /// builder's seam, its digits typed and looked up, stands in for the scan
     /// and counts as one action. Budget 3.
     func testBarcodeToLoggedTakesThreeTaps() async throws {
-        let (app, person) = try await home(prefix: "budget-barcode")
-        start()
+        let (app, person) = try await budgetHome(prefix: "budget-barcode")
+        startCounting()
         tap(app.buttons["nutrition.scanBarcodeDirect"], in: app)
         let field = app.textFields["nutrition.barcodeDigits"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -110,8 +107,8 @@ final class TapBudgetUITests: ExerlyUITestCase {
     /// Weigh in, the scale's number typed over the last reading on the
     /// keypad that's already up, Save. Budget 3.
     func testAWeighInTakesTwoTaps() async throws {
-        let (app, person) = try await home(prefix: "budget-weigh")
-        start()
+        let (app, person) = try await budgetHome(prefix: "budget-weigh")
+        startCounting()
         tap(app.buttons["today.weighIn"], in: app)
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 5))
@@ -136,8 +133,8 @@ final class TapBudgetUITests: ExerlyUITestCase {
     /// with the workout later, so it's checked the way PARITY B02 asks: the
     /// app is killed and opened again, and the set is still done.
     func testTodaysWorkoutStartsInOneTapAndAPrefilledSetTakesOne() async throws {
-        let (app, person) = try await home(prefix: "budget-workout")
-        start()
+        let (app, person) = try await budgetHome(prefix: "budget-workout")
+        startCounting()
         tap(app.buttons["today.startWorkout"], in: app)
         XCTAssertTrue(app.buttons["training.finish"].waitForExistence(timeout: 10))
         XCTAssertLessThanOrEqual(tapCount, 2, "Budget: 2")
@@ -153,7 +150,7 @@ final class TapBudgetUITests: ExerlyUITestCase {
         let reps = app.textFields["set.barbell-bench-press.1.reps"].value as? String
         XCTAssertNotNil(Int(reps ?? ""), "Reps prefilled too")
 
-        start()
+        startCounting()
         tap(app.buttons["Complete set 1, Barbell Bench Press"], in: app)
         let done = app.buttons["Reopen set 1, Barbell Bench Press"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
@@ -177,7 +174,7 @@ final class TapBudgetUITests: ExerlyUITestCase {
         guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else {
             throw XCTSkip("Opt-in visual review of Log again's repeats")
         }
-        let (app, _) = try await home(prefix: "budget-capture")
+        let (app, _) = try await budgetHome(prefix: "budget-capture")
         XCTAssertTrue(app.buttons["today.repeatMeal"].waitForExistence(timeout: 20))
         capture(app, "taps-01-today-repeats")
         // At the largest text sizes Log again is a scroll down.
@@ -203,109 +200,5 @@ final class TapBudgetUITests: ExerlyUITestCase {
         app.buttons["exerly.keypad.1"].tap()
         app.buttons["exerly.keypad.8"].tap()
         capture(app, "taps-05-weigh-in-typing")
-    }
-
-    // MARK: Support
-
-    /// A person with last week's food and weigh-ins, a two-day program with
-    /// last Upper A logged, signed in on Today. Their breakfast habit is
-    /// around now, so Breakfast is the meal Log again fills at any hour.
-    private func home(prefix: String) async throws -> (XCUIApplication, (email: String, token: String)) {
-        try await control([:])
-        let person = try await createAccount(prefix: prefix, units: "imperial")
-        try await seedWeek(token: person.token)
-        try await deleteSetupWeight(token: person.token)
-        try await seedPlan(token: person.token)
-        let app = launch(resetSession: true)
-        signIn(app, email: person.email)
-        settleAfterSignIn(app)
-        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 20))
-        XCTAssertTrue(app.navigationBars["Today"].exists, "On the home screen")
-        return (app, person)
-    }
-
-    /// Counts the next task from zero.
-    private func start() {
-        tapCount = 0
-        scrollCount = 0
-    }
-
-    /// Upper A and Lower A, with Upper A three days ago at 155 lb, so Upper A
-    /// is today's and progresses to 160 lb, and a 181.4 lb weigh-in yesterday.
-    private func seedPlan(token: String) async throws {
-        func day(_ name: String, _ slots: [(String, Int, Int, Int)]) -> [String: Any] {
-            ["id": UUID().uuidString, "name": name, "slots": slots.map { slot -> [String: Any] in
-                ["id": UUID().uuidString, "exerciseID": slot.0, "notes": "",
-                 "target": ["sets": slot.1, "minReps": slot.2, "maxReps": slot.3, "rir": 2, "kind": "standard"],
-                 "cycleTargets": [String: Any](), "expandRepRange": false, "weightMatch": true]
-            }]
-        }
-        let id = UUID().uuidString
-        let program: [String: Any] = ["id": id, "name": "Strength foundations", "cycles": 4, "deload": "none",
-                                      "createdAt": "2026-10-01T12:00:00.000Z", "activatedAt": "2026-10-01T12:00:00.000Z",
-                                      "days": [day("Upper A", [("barbell-bench-press", 3, 5, 8), ("barbell-row", 3, 6, 10)]),
-                                               day("Lower A", [("back-squat", 3, 5, 8)])]]
-        _ = try await request("PUT", "/v1/documents/program/\(id)", body: ["base_revision": 0, "payload": program], token: token)
-        let yesterday = Self.day(-1)
-        try await seedWeighIn(token: token, date: yesterday.date, at: yesterday.at, value: 181.4, unit: "lb")
-        let start = Date().addingTimeInterval(-3 * 86_400 - 5_400)
-        var minute = 0.0
-        let exercises: [(String, Double, [Int])] = [("barbell-bench-press", 155, [8, 7, 6]), ("barbell-row", 135, [10, 9, 8])]
-        let session: [String: Any] = [
-            "id": UUID().uuidString, "name": "Upper A", "notes": "", "startedAt": Self.iso(start),
-            "endedAt": Self.iso(start.addingTimeInterval(3_000)), "timeZoneID": "America/New_York",
-            "exercises": exercises.map { exercise -> [String: Any] in
-                ["id": UUID().uuidString, "exerciseID": exercise.0, "notes": "", "sets": exercise.2.map { reps -> [String: Any] in
-                    minute += 3
-                    return ["id": UUID().uuidString, "kind": "standard", "rir": 2,
-                            "completedAt": Self.iso(start.addingTimeInterval(minute * 60)),
-                            "efforts": [["reps": reps, "load": ["unit": "lb", "value": exercise.1]]]]
-                }]
-            },
-        ]
-        let sessionID = session["id"] as? String ?? ""
-        _ = try await request("PUT", "/v1/documents/workout_session/\(sessionID)", body: ["base_revision": 0, "payload": session],
-                              token: token)
-    }
-
-    /// The account's live documents of a kind, by ID, from the change feed.
-    private func documents(_ kind: String, token: String) async throws -> [String: [String: Any]] {
-        var latest: [String: [String: Any]?] = [:]
-        var cursor = 0
-        while true {
-            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
-            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == kind {
-                guard let id = change["id"] as? String else { continue }
-                latest[id] = change["payload"] as? [String: Any]
-            }
-            cursor = page["cursor"] as? Int ?? cursor
-            guard page["has_more"] as? Bool == true else { break }
-        }
-        return latest.compactMapValues { $0 }
-    }
-
-    private func waitForDocument(_ kind: String, token: String,
-                                 _ matches: @escaping ([String: Any]) -> Bool) async throws -> [String: Any]? {
-        for _ in 0..<60 {
-            if let found = try await documents(kind, token: token).values.first(where: matches) { return found }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        XCTFail("No matching \(kind) reached the server")
-        return nil
-    }
-
-    /// Waits until today's food on the server is exactly `names`, in any
-    /// order, each once, and in `meal` when given.
-    private func expectEntries(token: String, _ names: [String], meal: String? = nil) async throws {
-        let today = Self.day(0).date
-        var found: [[String: Any]] = []
-        for _ in 0..<60 {
-            found = try await documents("food_entry", token: token).values.filter { $0["date"] as? String == today }
-            if found.compactMap({ ($0["food"] as? [String: Any])?["name"] as? String }).sorted() == names.sorted() { break }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        XCTAssertEqual(found.compactMap { ($0["food"] as? [String: Any])?["name"] as? String }.sorted(), names.sorted(),
-                       "Today's food on the server")
-        if let meal { XCTAssertTrue(found.allSatisfy { $0["meal"] as? String == meal }, "In \(meal)") }
     }
 }

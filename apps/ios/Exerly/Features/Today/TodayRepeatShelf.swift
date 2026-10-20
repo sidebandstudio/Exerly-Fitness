@@ -3,12 +3,15 @@ import SwiftUI
 
 /// The meal being eaten now, as it was logged last time: the first chip on
 /// Log again, one tap for all of it. Once logged it shows a check, and a
-/// second tap takes it back, as a food chip does.
+/// second tap takes back what it logged, as a food chip does. When the meal
+/// has all of it from somewhere else, a softer check says so.
 struct TodayRepeatChip: View {
     /// "Yesterday's breakfast".
     let title: String
     let repeated: MealRepeat
     var logged = false
+    /// All of it is in, logged another way: a tap logs nothing.
+    var alreadyLogged = false
     let action: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -20,11 +23,11 @@ struct TodayRepeatChip: View {
                     Text(detail).font(.exSmall).foregroundStyle(Color.exTextSecondary).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                Image(systemName: logged ? "checkmark" : "arrow.counterclockwise").font(.system(size: 15, weight: .bold))
+                Image(systemName: logged || alreadyLogged ? "checkmark" : "arrow.counterclockwise").font(.system(size: 15, weight: .bold))
                     .contentTransition(.symbolEffect(.replace))
-                    .foregroundStyle(logged ? Color.exSuccess : .white)
+                    .foregroundStyle(logged ? Color.exSuccess : alreadyLogged ? Color.exTextSecondary : .white)
                     .frame(width: 32, height: 32)
-                    .background(logged ? Color.exSuccess.opacity(0.16) : Color.exActionFill, in: Circle())
+                    .background(logged ? Color.exSuccess.opacity(0.16) : alreadyLogged ? Color.exSurface2 : Color.exActionFill, in: Circle())
                     .frame(width: 44, height: 44)
                     .accessibilityHidden(true)
             }
@@ -35,7 +38,7 @@ struct TodayRepeatChip: View {
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(TodayPressStyle())
-        .accessibilityLabel(logged ? "Repeated \(title). Undo"
+        .accessibilityLabel(logged ? "Repeated \(title). Undo" : alreadyLogged ? "\(title), already logged"
             : "Repeat \(title), \(Self.foods(repeated.entries.count)), \(TodayNutritionCard.number(repeated.energy)) calories")
         .accessibilityIdentifier("today.repeatMeal")
     }
@@ -49,12 +52,16 @@ struct TodayRepeatChip: View {
 
 /// All of an earlier day, or the meals of it today hasn't logged yet, in one
 /// tap: beside Log again's title when there are chips, else a row of its own.
+/// Once tapped it stays, with a check, and a second tap takes back what it
+/// logged, as the chips do.
 struct TodayRepeatDayButton: View {
     /// "yesterday", or a weekday.
     let source: String
+    /// What a tap logs, or what it logged once `logged`.
     let repeated: MealRepeat
     /// True once today has food: what's repeated is the rest of the day.
     let rest: Bool
+    var logged = false
     var row = false
     let action: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -65,8 +72,9 @@ struct TodayRepeatDayButton: View {
                 HStack(spacing: ExSpacing.item) {
                     // As Today's shortcuts do, the text takes the width at the largest sizes.
                     if !typeSize.isAccessibilitySize {
-                        Image(systemName: "arrow.counterclockwise").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                            .frame(width: 32, height: 32).background(Color.exActionFill, in: Circle()).accessibilityHidden(true)
+                        Image(systemName: icon).font(.system(size: 15, weight: .bold)).foregroundStyle(logged ? Color.exSuccess : .white)
+                            .frame(width: 32, height: 32)
+                            .background(logged ? Color.exSuccess.opacity(0.16) : Color.exActionFill, in: Circle()).accessibilityHidden(true)
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title).font(.exLabel).foregroundStyle(Color.exTextPrimary)
@@ -80,7 +88,7 @@ struct TodayRepeatDayButton: View {
                 .contentShape(Rectangle())
             } else {
                 // A filled capsule, not a link: a run took the plain one for "See all".
-                Label(title, systemImage: "arrow.counterclockwise").font(.exLabel.weight(.semibold))
+                Label(title, systemImage: icon).font(.exLabel.weight(.semibold))
                     .foregroundStyle(Color.exPrimaryText).multilineTextAlignment(.leading)
                     .padding(.horizontal, ExSpacing.item).frame(minHeight: 36)
                     .padding(.vertical, typeSize.isAccessibilitySize ? ExSpacing.small : 0)
@@ -90,12 +98,14 @@ struct TodayRepeatDayButton: View {
             }
         }
         .buttonStyle(TodayPressStyle())
-        .accessibilityLabel("\(rest ? "Repeat the rest of \(source)" : "Repeat all of \(source)"), \(meals), "
+        .accessibilityLabel(logged ? "Repeated \(source), \(TodayRepeatChip.foods(repeated.entries.count)). Undo"
+            : "\(rest ? "Repeat the rest of \(source)" : "Repeat all of \(source)"), \(meals), "
             + "\(TodayRepeatChip.foods(repeated.entries.count)), \(TodayNutritionCard.number(repeated.energy)) calories")
         .accessibilityIdentifier("today.repeatDay")
     }
 
-    private var title: String { rest ? "Rest of \(source)" : "Repeat \(source)" }
+    private var title: String { logged ? "Repeated \(source)" : rest ? "Rest of \(source)" : "Repeat \(source)" }
+    private var icon: String { logged ? "checkmark" : "arrow.counterclockwise" }
 
     /// The meals it logs, in diary order, lowercased: "lunch, dinner and snacks".
     private var meals: String {

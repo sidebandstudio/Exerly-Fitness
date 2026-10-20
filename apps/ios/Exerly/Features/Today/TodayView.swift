@@ -83,6 +83,11 @@ struct TodayView: View {
     @State private var mealRepeat: MealRepeat?
     /// What that chip logged, until it's taken back.
     @State private var mealRepeated: [FoodEntry]?
+    /// What the day's repeat logged, until it's taken back: its button stays
+    /// with a check, so its Undo outlasts the confirmation.
+    @State private var dayRepeated: [FoodEntry]?
+    /// The repeat that logged them, for its day's name.
+    @State private var dayRepeat: MealRepeat?
     /// This week's check-in when it waits for a decision, refreshed with "Log again".
     @State private var checkIn: TargetsCheckInCard.State?
     /// Foods chosen to copy or move together; nil when not choosing.
@@ -439,7 +444,11 @@ struct TodayView: View {
     /// the meals (PARITY B01).
     @ViewBuilder private var suggestions: some View {
         let items = suggested ?? []
-        let day = store.repeatableDay(for: today)
+        // The day's button: what a tap would log, or, once tapped, what it did.
+        let dayMine = present(dayRepeated)
+        let day = dayMine.flatMap { mine in dayRepeat.map { var logged = $0; logged.entries = mine; return logged } }
+            ?? store.repeatableDay(for: today)
+        let dayLogged = dayMine != nil && dayRepeat != nil
         let rest = !store.entries(on: today).isEmpty
         if !items.isEmpty || mealRepeat != nil {
             VStack(alignment: .leading, spacing: ExSpacing.small) {
@@ -449,7 +458,7 @@ struct TodayView: View {
                     Text("Log again").font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
                     if !typeSize.isAccessibilitySize { Spacer() }
                     if let day {
-                        TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest) { apply(day) }
+                        TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, logged: dayLogged) { repeatDay(day) }
                     } else if !store.entries(on: today).contains(where: { $0.meal == currentMeal }) {
                         Text("Usual for \(currentMeal.lowercased())").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     }
@@ -457,21 +466,27 @@ struct TodayView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: ExSpacing.small) {
                         if let mealRepeat {
-                            // What a tap logs: the foods of it not in the meal yet.
+                            // What a tap logs: the portions of it not in the meal yet.
                             let left = store.remaining(mealRepeat, on: today)
-                            TodayRepeatChip(title: mealTitle(mealRepeat), repeated: mealRepeated == nil ? left ?? mealRepeat : mealRepeat,
-                                            logged: mealRepeated != nil || left == nil) {
+                            let mine = present(mealRepeated)
+                            TodayRepeatChip(title: mealTitle(mealRepeat), repeated: mine == nil ? left ?? mealRepeat : mealRepeat,
+                                            logged: mine != nil, alreadyLogged: mine == nil && left == nil) {
                                 repeatMeal(mealRepeat)
                             }
                             .containerRelativeFrame(.horizontal, count: typeSize.isAccessibilitySize ? 5 : 7,
                                                     span: typeSize.isAccessibilitySize ? 4 : 3, spacing: ExSpacing.small)
                         }
                         ForEach(items, id: \.food.foodID) { suggestion in
-                            let logged = suggestionsLogged[suggestion.food.foodID]
-                            TodaySuggestionChip(suggestion: suggestion, unit: unit, logged: logged != nil) {
+                            // A chip's check is what it logged itself; the meal can also
+                            // have the food from a repeat, which a tap won't log twice.
+                            let logged = present(suggestionsLogged[suggestion.food.foodID].map { [$0] })?.first
+                            let alreadyIn = logged == nil && isInCurrentMeal(suggestion.food.foodID) ? currentMeal.lowercased() : nil
+                            TodaySuggestionChip(suggestion: suggestion, unit: unit, logged: logged != nil, alreadyIn: alreadyIn) {
                                 destination = .log(suggestion)
                             } log: {
-                                if let logged { unlog(logged) } else { log(suggestion) }
+                                if let logged { unlog(logged) } else if alreadyIn != nil {
+                                    alreadyLogged("\(suggestion.food.name) is already in \(currentMeal.lowercased())")
+                                } else { log(suggestion) }
                             } hide: { hide(suggestion) }
                             // Two chips and a clear part of the next, so the row reads as one that scrolls.
                             .containerRelativeFrame(.horizontal, count: typeSize.isAccessibilitySize ? 5 : 7,
@@ -487,8 +502,38 @@ struct TodayView: View {
                 .padding(.horizontal, -ExSpacing.page)
             }
         } else if let day {
-            TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, row: true) { apply(day) }
+            TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, logged: dayLogged, row: true) { repeatDay(day) }
         }
+    }
+
+    /// The day's button: logs what's left of the day, or a second tap takes
+    /// back exactly what it logged.
+    private func repeatDay(_ day: MealRepeat) {
+        if let copies = present(dayRepeated) {
+            remove(copies, announcing: "Removed \(dayName(day.source))'s food")
+            withAnimation(.snappy) { dayRepeated = nil; dayRepeat = nil }
+            return
+        }
+        if let copies = apply(day) {
+            withAnimation(.snappy) {
+                dayRepeated = copies
+                dayRepeat = day
+            }
+        }
+    }
+
+    /// Deletes `copies` that are still as logged, and the confirmation that offered to.
+    private func remove(_ copies: [FoodEntry], announcing message: String) {
+        do {
+            // An entry edited since is left alone.
+            for copy in copies where store.entries.first(where: { $0.id == copy.id }) == copy { try store.deleteEntry(copy.id) }
+            UISelectionFeedbackGenerator().selectionChanged()
+            withAnimation(.snappy) {
+                if case .remove(let ids) = toast?.undo, Set(ids) == Set(copies.map(\.id)) { toast = nil }
+            }
+            UIAccessibility.post(notification: .announcement, argument: message)
+            Task { await workspace.synchronize() }
+        } catch { show("Could not remove those foods. They are still logged.", failed: true) }
     }
 
     /// "Yesterday's breakfast", "Sunday's lunch".
@@ -497,26 +542,35 @@ struct TodayView: View {
         return day.prefix(1).uppercased() + day.dropFirst() + "'s " + (repeated.meal ?? "").lowercased()
     }
 
+    /// Those of `entries` still logged as they were; nil if none are.
+    private func present(_ entries: [FoodEntry]?) -> [FoodEntry]? {
+        let kept = (entries ?? []).filter { entry in store.entries.first { $0.id == entry.id } == entry }
+        return kept.isEmpty ? nil : kept
+    }
+
+    private func isInCurrentMeal(_ foodID: String) -> Bool {
+        store.entries(on: today).contains { $0.meal == currentMeal && $0.food.foodID == foodID }
+    }
+
+    /// A tap on a chip whose food is in already: nothing is logged, and the
+    /// confirmation showing (a repeat's, with its Undo) stays.
+    private func alreadyLogged(_ message: String) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        UIAccessibility.post(notification: .announcement, argument: message)
+    }
+
     /// Log again's meal chip: what of it isn't logged yet, or a second tap
-    /// takes back what it logged. A food from it logged on its own first
-    /// isn't logged twice.
+    /// takes back exactly what it logged. A portion from it logged on its own
+    /// first isn't logged twice, and once a repeated day has it all, a tap
+    /// logs nothing.
     private func repeatMeal(_ repeated: MealRepeat) {
-        if let copies = mealRepeated {
-            do {
-                // An entry edited since is left alone; the chip just resets.
-                for copy in copies where store.entries.first(where: { $0.id == copy.id }) == copy { try store.deleteEntry(copy.id) }
-                UISelectionFeedbackGenerator().selectionChanged()
-                withAnimation(.snappy) {
-                    mealRepeated = nil
-                    if case .remove(let ids) = toast?.undo, Set(ids) == Set(copies.map(\.id)) { toast = nil }
-                }
-                UIAccessibility.post(notification: .announcement, argument: "Removed \(mealTitle(repeated).lowercased())")
-                Task { await workspace.synchronize() }
-            } catch { show("Could not remove those foods. They are still logged.", failed: true) }
+        if let copies = present(mealRepeated) {
+            remove(copies, announcing: "Removed \(mealTitle(repeated).lowercased())")
+            withAnimation(.snappy) { mealRepeated = nil }
             return
         }
         guard let remaining = store.remaining(repeated, on: today) else {
-            show("\(mealTitle(repeated)) is already logged")
+            alreadyLogged("\(mealTitle(repeated)) is already logged")
             return
         }
         if let copies = apply(remaining) { withAnimation(.snappy) { mealRepeated = copies } }
@@ -566,6 +620,8 @@ struct TodayView: View {
         suggestionsLogged = [:]
         mealRepeat = mealLogged ? nil : store.repeatable(currentMeal, for: today)
         mealRepeated = nil
+        dayRepeated = nil
+        dayRepeat = nil
         refreshCheckIn()
     }
 
@@ -632,6 +688,7 @@ struct TodayView: View {
                     self.toast = nil
                     suggestionsLogged = suggestionsLogged.filter { !ids.contains($0.value.id) }
                     if mealRepeated?.contains(where: { ids.contains($0.id) }) == true { mealRepeated = nil }
+                    if dayRepeated?.contains(where: { ids.contains($0.id) }) == true { dayRepeated = nil; dayRepeat = nil }
                 }
                 Task { await workspace.synchronize() }
             } catch { show("Could not undo. The entries are still logged.", failed: true) }

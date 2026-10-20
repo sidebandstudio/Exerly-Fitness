@@ -300,12 +300,16 @@ struct TodayPressStyle: ButtonStyle {
 }
 
 /// A food logged around this time on other days. The plus logs it again;
-/// once logged it shows a check, and tapping that removes it. VoiceOver
-/// reaches both from the chip itself, even when its plus is off screen.
+/// once logged it shows a check, and tapping that removes it. When the meal
+/// already has it from somewhere else (a repeated meal or day), a softer
+/// check says so and a tap logs nothing. VoiceOver reaches all of it from the
+/// chip itself, even when its plus is off screen.
 struct TodaySuggestionChip: View {
     let suggestion: FoodSuggestion
     let unit: MassUnit
     var logged = false
+    /// The meal it fills, lowercased, when that meal has it already and not from this chip.
+    var alreadyIn: String?
     let open: () -> Void
     let log: () -> Void
     /// "Don't suggest this", from a long press, VoiceOver's actions or the
@@ -325,18 +329,19 @@ struct TodaySuggestionChip: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(suggestion.food.name), \(portion), \(energy) calories")
             .accessibilityHint("Opens the portion before logging")
-            .accessibilityAction(named: logged ? "Undo" : "Log \(portion)", log)
+            .accessibilityAction(named: logged ? "Undo" : alreadyIn.map { "Already in \($0)" } ?? "Log \(portion)", log)
             .accessibilityAction(named: "Don't suggest this", hide)
             Button(action: log) {
-                Image(systemName: logged ? "checkmark" : "plus").font(.system(size: 15, weight: .bold))
+                Image(systemName: logged || alreadyIn != nil ? "checkmark" : "plus").font(.system(size: 15, weight: .bold))
                     .contentTransition(.symbolEffect(.replace))
-                    .foregroundStyle(logged ? Color.exSuccess : .white)
+                    .foregroundStyle(logged ? Color.exSuccess : alreadyIn != nil ? Color.exTextSecondary : .white)
                     .frame(width: 32, height: 32)
-                    .background(logged ? Color.exSuccess.opacity(0.16) : Color.exActionFill, in: Circle())
+                    .background(logged ? Color.exSuccess.opacity(0.16) : alreadyIn != nil ? Color.exSurface2 : Color.exActionFill, in: Circle())
                     .frame(width: 44, height: 44).contentShape(Circle())
             }
             .buttonStyle(TodayPressStyle())
-            .accessibilityLabel(logged ? "Logged \(suggestion.food.name). Undo" : "Log \(suggestion.food.name), \(portion)")
+            .accessibilityLabel(logged ? "Logged \(suggestion.food.name). Undo"
+                : alreadyIn.map { "\(suggestion.food.name), already in \($0)" } ?? "Log \(suggestion.food.name), \(portion)")
             .accessibilityIdentifier("today.suggestion.log.\(suggestion.food.foodID)")
         }
         .padding(.leading, ExSpacing.item).padding(.trailing, 2).padding(.vertical, 2)
@@ -346,7 +351,9 @@ struct TodaySuggestionChip: View {
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
         // As on Add food's usual and recent foods: what the chip does, then Don't suggest this.
         .contextMenu {
-            Button(logged ? "Undo" : "Log \(portion)", systemImage: logged ? "arrow.uturn.backward" : "plus", action: log)
+            if alreadyIn == nil {
+                Button(logged ? "Undo" : "Log \(portion)", systemImage: logged ? "arrow.uturn.backward" : "plus", action: log)
+            }
             Button("Details", systemImage: "info.circle", action: open)
             Button("Don't suggest this", systemImage: "eye.slash", action: hide).accessibilityIdentifier("today.suggestion.hide")
         }
