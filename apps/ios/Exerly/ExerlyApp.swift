@@ -7,6 +7,7 @@ struct ExerlyApp: App {
     private let isUnitTestHost: Bool
 
     init() {
+        LaunchTiming.begin()
         #if DEBUG
         isUnitTestHost = NSClassFromString("XCTestCase") != nil
         // Hosted unit tests inject their own storage and transport. Do not also

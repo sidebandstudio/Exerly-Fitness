@@ -260,7 +260,10 @@ struct TodayView: View {
                 .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
         }
         .onChange(of: showsTargets) { _, shown in if !shown { refreshCheckIn() } }
-        .onAppear { if suggested == nil { refreshSuggestions() } else { refreshCheckIn() } }
+        .onAppear {
+            if suggested == nil { refreshSuggestions() } else { refreshCheckIn() }
+            LaunchTiming.loggingReady()
+        }
         .task {
             await workspace.synchronize()
             // Synced history can change the chips; not once one was used.
