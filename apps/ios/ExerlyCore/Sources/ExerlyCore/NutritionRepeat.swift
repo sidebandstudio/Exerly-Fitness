@@ -103,14 +103,19 @@ extension NutritionStore {
         return MealRepeat(source: source, meal: meal, entries: candidates.filter { $0.date == source })
     }
 
-    /// The latest day before `date`, within `days`, with its entries in the
-    /// meals `date` hasn't logged yet: all of it on an empty day, the rest of
-    /// it once breakfast is in. Nil when every meal it had is already logged,
-    /// so no meal is ever logged twice.
+    /// The latest day before `date`, within `days`, as far as `date` hasn't
+    /// had it yet: all of it on an empty day, then meal by meal. A meal with
+    /// nothing logged gets all of that meal; one holding only foods from it
+    /// (a chip tapped first) gets the rest of them; one with anything else
+    /// was eaten differently and is left alone. Nil when nothing is left.
     public func repeatableDay(for date: LocalDate, within days: Int = 7) -> MealRepeat? {
         guard var day = repeatable(nil, for: date, within: days) else { return nil }
-        let logged = Set(entries(on: date).map(\.meal))
-        day.entries.removeAll { logged.contains($0.meal) }
+        let today = Dictionary(grouping: entries(on: date), by: \.meal).mapValues { Set($0.map(\.food.foodID)) }
+        let earlier = Dictionary(grouping: day.entries, by: \.meal).mapValues { Set($0.map(\.food.foodID)) }
+        day.entries.removeAll { entry in
+            guard let logged = today[entry.meal] else { return false }
+            return !logged.isSubset(of: earlier[entry.meal] ?? []) || logged.contains(entry.food.foodID)
+        }
         return day.entries.isEmpty ? nil : day
     }
 

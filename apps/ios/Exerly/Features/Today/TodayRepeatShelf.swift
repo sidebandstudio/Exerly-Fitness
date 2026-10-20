@@ -75,8 +75,11 @@ struct TodayRepeatDayButton: View {
                 .background(Color.exPrimary.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .contentShape(Rectangle())
             } else {
+                // A filled capsule, not a link: a run took the plain one for "See all".
                 Label(title, systemImage: "arrow.counterclockwise").font(.exLabel.weight(.semibold))
                     .foregroundStyle(Color.exPrimaryText).multilineTextAlignment(.leading)
+                    .padding(.horizontal, ExSpacing.item).frame(minHeight: 36)
+                    .background(Color.exPrimary.opacity(0.16), in: Capsule())
                     .frame(minHeight: 44).contentShape(Rectangle())
             }
         }

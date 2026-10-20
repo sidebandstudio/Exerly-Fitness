@@ -196,10 +196,15 @@ struct TodayView: View {
                 // the shortcuts when the ring is hidden.
                 let visible = layout.visible
                 let logAgainAfter = visible.first { $0 == .nutrition } ?? visible.first { $0 == .quickActions }
+                // A waiting check-in follows today's workout, so it doesn't push
+                // Start below the fold (code-blind run, 2026-10-20).
+                let checkInAfter = visible.first { $0 == .training } ?? logAgainAfter
                 if logAgainAfter == nil { logAgain }
+                if checkInAfter == nil { checkInBanner }
                 ForEach(visible) { card in
                     self.card(card)
                     if card == logAgainAfter { logAgain }
+                    if card == checkInAfter { checkInBanner }
                 }
                 dayFooter
             }
@@ -371,7 +376,6 @@ struct TodayView: View {
         switch card {
         case .quickActions: quickActions
         case .nutrition:
-            checkInBanner
             TodayNutritionCard(progress: store.progress(on: date), leadsWithEaten: leadsWithEaten,
                                onSetTargets: date < today ? nil : { showsTargets = true },
                                pinned: store.nutrientDays(store.pinnedNutrients(today: today), on: date)) { showsGoals = true }
@@ -446,15 +450,17 @@ struct TodayView: View {
                     if !typeSize.isAccessibilitySize { Spacer() }
                     if let day {
                         TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest) { apply(day) }
-                    } else {
+                    } else if !store.entries(on: today).contains(where: { $0.meal == currentMeal }) {
                         Text("Usual for \(currentMeal.lowercased())").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     }
                 }
                 ScrollView(.horizontal) {
                     HStack(spacing: ExSpacing.small) {
                         if let mealRepeat {
-                            TodayRepeatChip(title: mealTitle(mealRepeat), repeated: mealRepeat,
-                                            logged: mealRepeated != nil || store.remaining(mealRepeat, on: today) == nil) {
+                            // What a tap logs: the foods of it not in the meal yet.
+                            let left = store.remaining(mealRepeat, on: today)
+                            TodayRepeatChip(title: mealTitle(mealRepeat), repeated: mealRepeated == nil ? left ?? mealRepeat : mealRepeat,
+                                            logged: mealRepeated != nil || left == nil) {
                                 repeatMeal(mealRepeat)
                             }
                             .containerRelativeFrame(.horizontal, count: typeSize.isAccessibilitySize ? 5 : 7,
@@ -909,8 +915,11 @@ struct TodayView: View {
         do {
             let copied = try store.apply(repeated, to: date)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            let what = repeated.meal.map { "\($0.lowercased())" } ?? "food"
-            show("Repeated \(dayName(repeated.source))'s \(what)", undo: .remove(copied.map(\.id)))
+            let source = dayName(repeated.source)
+            let what = repeated.meal.map { "\(source)'s \($0.lowercased())" }
+                ?? (copied.count == store.entries(on: date).count ? "all of \(source)" : "the rest of \(source)")
+            show("Repeated \(what): \(TodayRepeatChip.foods(copied.count)), \(TodayNutritionCard.number(repeated.energy)) kcal",
+                 undo: .remove(copied.map(\.id)))
             Task { await workspace.synchronize() }
             return copied
         } catch {

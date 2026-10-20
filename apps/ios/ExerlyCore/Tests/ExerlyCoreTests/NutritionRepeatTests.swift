@@ -134,6 +134,21 @@ import Testing
         #expect(nutrition.repeatableDay(for: thursday) == nil, "Only earlier days")
     }
 
+    @Test func repeatingTheDayFinishesAMealStartedFromItButNotOneEatenDifferently() throws {
+        let nutrition = try store()
+        let thursday = friday.adding(days: -1)
+        try nutrition.log(Foods.oats, grams: 60, on: thursday, meal: "Lunch")
+        try nutrition.log(Foods.chicken, grams: 150, on: thursday, meal: "Lunch")
+        try nutrition.log(Foods.milk, grams: 244, on: thursday, meal: "Dinner")
+        try nutrition.log(Foods.oats, grams: 40, on: thursday, meal: "Breakfast")
+        // Lunch's oats logged on their own (a Log again chip); breakfast eaten differently.
+        try nutrition.log(Foods.oats, grams: 60, on: friday, meal: "Lunch")
+        try nutrition.log(Foods.milk, grams: 200, on: friday, meal: "Breakfast")
+        let rest = try #require(nutrition.repeatableDay(for: friday))
+        #expect(Set(rest.entries.map { [$0.meal, $0.food.name] }) == [["Lunch", Foods.chicken.name], ["Dinner", Foods.milk.name]],
+                "Lunch's chicken and dinner; not lunch's oats again, nor yesterday's breakfast over today's")
+    }
+
     @Test func whatRemainsOfARepeatLeavesOutFoodsAlreadyInTheMeal() throws {
         let nutrition = try store()
         let thursday = friday.adding(days: -1)
