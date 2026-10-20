@@ -251,9 +251,12 @@ final class BarcodeScannerUITests: ExerlyUITestCase {
         tap(app.buttons["nutrition.plateBarcode"], in: app)
         let add = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.scanRelog.\("0" + Self.juice).")).firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 10), "The ready scan is offered")
+        // Cancelled at its portion: nothing joins, and it's still offered.
         tap(add, in: app)
-        let confirm = app.buttons["nutrition.pickPortionConfirm"]
-        if confirm.waitForExistence(timeout: 5) { tap(confirm, in: app) }
+        tap(app.buttons["nutrition.scanPickPortionCancel"], in: app)
+        XCTAssertTrue(add.waitForExistence(timeout: 5), "Still ready after a cancelled portion")
+        tap(add, in: app)
+        tap(app.buttons["nutrition.scanPickPortionConfirm"], in: app)
         tap(app.buttons["nutrition.reviewPlate"], in: app)
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "nutrition.plateRow.off:\(Self.juice).")).firstMatch
             .waitForExistence(timeout: 5))

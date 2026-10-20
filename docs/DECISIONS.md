@@ -1639,3 +1639,13 @@ plate, or a meal being built, whose scope reaches the scanner through the enviro
 The record is removed inside the same SQLite transaction as the entries that log it. A
 crash, discard or cancel leaves it ready. While a scan is still being looked up, a past
 scan always joins the plate, so nothing logs ahead of it.
+
+## 2026-10-20: Offline scans travel with plate rows; logs publish after commit
+
+Review round 3 found the staging registry could consume the wrong scan (it matched by
+food) and that a failed outer commit could leave a draft marked logged. The registry is
+gone. A plate row carries the offline scans it came from; a row removed or a portion
+cancelled carries none away. `BarcodeLibrary.log` writes the entries and removes exactly
+those scans in one transaction, and the store's entries, the library's pending list and
+the draft's logged state change only after it commits. Discarding a plate needs no
+cleanup elsewhere, so a running lookup can't hold scans hidden.

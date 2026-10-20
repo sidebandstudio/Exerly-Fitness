@@ -71,14 +71,18 @@ back as "Ready to log" to where it was scanned for. With foods on the plate, or 
 still being looked up, a past scan's button reads "Add to plate" and joins them instead of
 logging alone.
 
-An offline scan put on a plate, the scanner's or a meal being built, is only staged there
-(`BarcodeLibrary.stage`, in memory). Its record is removed in the same transaction as the
-log that uses it (`BarcodeLibrary.consume`, nested in the store's own transaction), so
-discarding the plate, cancelling the meal, a food that can't join, or quitting the app
-before logging all leave it ready, with its meal and time.
+An offline scan put on a plate, the scanner's or a meal being built, travels with the plate
+row it became (`NutritionPlateDraft.Row.pending`): attached only once the row is added,
+released when the row is removed, never attached if its portion step is cancelled. Logging
+consumes exactly the scans of the rows logged, in the same transaction as their entries
+(`BarcodeLibrary.log(_:consuming:to:on:meal:at:)`), and memory changes only after that
+transaction commits. Discarding the plate, cancelling the meal, a failed commit or quitting
+the app before logging leave every scan ready, with its meal, day and time. Two randomized
+tests, 1,000 seeded histories each (Core and the app's plate draft), hold every offline scan
+to ending pending with its intent or logged exactly once.
 
-Open Food Facts's ODbL attribution is shown under the plate, Recent scans and the history,
-wherever its foods appear.
+Open Food Facts's ODbL attribution is one short line, "Open Food Facts · ODbL", with a link
+to the source, under the plate, Recent scans and the history, wherever its foods appear.
 
 Hooks for the next wave: `BarcodeScanSession.Notice.missing(GTIN)` carries the code for
 label OCR on a miss and for contributing a food; `BarcodeLibrary.remember` is where a
