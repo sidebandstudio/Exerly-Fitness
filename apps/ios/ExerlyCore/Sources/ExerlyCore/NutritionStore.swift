@@ -205,6 +205,17 @@ public final class NutritionStore {
     /// Logs several foods to one meal at once, all or none. Each problem names its food.
     @discardableResult
     public func log(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date? = nil) throws -> [FoodEntry] {
+        var written: (entries: [FoodEntry], publish: () -> Void)?
+        try persistence.performAtomically { written = try writeLog(plate, on: date, meal: meal, at: time) }
+        written!.publish()
+        return written!.entries
+    }
+
+    /// Writes a plate's entries inside the caller's transaction without
+    /// publishing them. Call `publish` once the outermost transaction has
+    /// committed; a failed commit leaves memory as untouched as the disk.
+    func writeLog(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date?) throws
+        -> (entries: [FoodEntry], publish: () -> Void) {
         let loggedAt = time?.roundedToMilliseconds ?? now()
         var problems: [String] = []
         var logged: [FoodEntry] = []
@@ -218,8 +229,11 @@ public final class NutritionStore {
             }
         }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
-        try saveAll(logged)
-        return logged
+        var seen = Set<String>()
+        let invalid = logged.flatMap(\.problems).filter { seen.insert($0).inserted }
+        guard invalid.isEmpty else { throw StoreError.invalid(invalid) }
+        let publish = try logged.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+        return (logged, { publish.forEach { $0() } })
     }
 
     /// Copies entries to a day as new entries, into `meal` or each into its own.

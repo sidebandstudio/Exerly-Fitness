@@ -24,6 +24,8 @@ struct NutritionFoodPicker: View {
     @ObservedObject var actions: NutritionDiaryActions
     let onLogged: () -> Void
     let onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)?
+    /// An offline scan picked from the scanner, with its amount and identity.
+    let onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)?
     let pickError: () -> String?
     let presentation: FoodPickerPresentation
     /// What picked foods go into: a meal or a recipe.
@@ -73,6 +75,7 @@ struct NutritionFoodPicker: View {
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, onLogged: @escaping () -> Void,
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
+         onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)? = nil,
          pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
          confirmsAmounts: Bool = false, initialQuery: String = "", entered: Int = 0) {
         self.workspace = workspace
@@ -84,6 +87,7 @@ struct NutritionFoodPicker: View {
         self.actions = actions
         self.onLogged = onLogged
         self.onPick = onPick
+        self.onPickScan = onPickScan
         self.pickError = pickError
         self.presentation = presentation
         self.pickingInto = pickingInto
@@ -129,7 +133,8 @@ struct NutritionFoodPicker: View {
             .navigationDestination(isPresented: $showingBarcode) {
                 NutritionBarcodeView(workspace: workspace, api: api, date: date, meal: meal,
                                      timeZone: timeZone, unit: unit, actions: actions,
-                                     onPicked: picking ? { select($0) } : nil) { entries in
+                                     onPicked: picking ? { select($0) } : nil,
+                                     onPickedScan: picking ? onPickScan.map { pick in { food, amount, id in pickScan(food, amount, id, pick) } } : nil) { entries in
                     showingBarcode = false
                     finish(entries)
                 }
@@ -753,6 +758,14 @@ struct NutritionFoodPicker: View {
             query = ""
             searchFocused = true
         }
+    }
+
+    private func pickScan(_ food: ExerlyCore.Food, _ amount: LoggedAmount, _ id: UUID,
+                          _ pick: (ExerlyCore.Food, LoggedAmount, UUID) -> Int?) -> Bool {
+        guard let count = pick(food, amount, id) else { selectionError = pickError(); return false }
+        pickedCount = count
+        addedIDs.insert(food.id)
+        return true
     }
 
     @discardableResult private func pick(_ food: ExerlyCore.Food, _ amount: FoodPickAmount) -> Bool {

@@ -142,8 +142,6 @@ final class BarcodeScanSessionTests: XCTestCase {
         return try XCTUnwrap(session.library.ready.last { $0.gtin == gtin })
     }
 
-    private func settle() async throws { try await Task.sleep(for: .milliseconds(50)) }
-
     /// An offline scan added to a plate with another food stays recorded until
     /// the plate logs: discarding the plate, or quitting before logging, keeps
     /// it ready with its meal and time.
@@ -161,9 +159,8 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertEqual(relaunched.barcodes.ready.map(\.id), [ready.id])
         XCTAssertEqual(relaunched.barcodes.ready.first?.meal, ready.meal)
         // Discarding the plate.
+        session!.discard()
         session = nil
-        try await settle()
-        XCTAssertTrue(workspace.barcodes.staged.isEmpty)
         XCTAssertEqual(workspace.barcodes.ready.map(\.id), [ready.id])
         XCTAssertTrue(workspace.nutrition.entries.isEmpty)
     }
@@ -176,7 +173,7 @@ final class BarcodeScanSessionTests: XCTestCase {
         await session.scanned(ScannedCode(gtin: juice, symbology: .ean13))
         _ = session.use(.pending(ready))
         XCTAssertEqual(session.logAll()?.count, 2)
-        XCTAssertTrue(workspace.barcodes.ready.isEmpty && workspace.barcodes.staged.isEmpty)
+        XCTAssertTrue(workspace.barcodes.ready.isEmpty)
         XCTAssertTrue(try openWorkspace().barcodes.ready.isEmpty)
         XCTAssertEqual(workspace.nutrition.entries.count, 2)
     }
@@ -190,7 +187,7 @@ final class BarcodeScanSessionTests: XCTestCase {
         let ready = try await readyScan(cola, session, transport)
         await session.scanned(ScannedCode(gtin: juice, symbology: .ean13))
         guard case .failed = session.use(.pending(ready)) else { return XCTFail("It can't join") }
-        XCTAssertTrue(workspace.barcodes.staged.isEmpty)
+        XCTAssertTrue(session.plate.pending.isEmpty)
         XCTAssertEqual(workspace.barcodes.ready.map(\.id), [ready.id])
     }
 
@@ -217,31 +214,160 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertEqual(session.logAll()?.count, 2)
     }
 
-    /// An offline scan picked into a meal being built is consumed when that
-    /// meal logs, and kept if the meal is cancelled or the food left out.
-    func testAMealBuiltWithAnOfflineScanConsumesItOnlyWhenItLogs() async throws {
-        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar"), juice: food(juice, "Synthetic apple juice")])
+    /// Two offline scans of one product into a meal being built: the first
+    /// joins, the second is cancelled at its portion. Logging the meal
+    /// consumes the first only. Adding both and removing one row does the same.
+    func testAMealConsumesOnlyTheScansOfTheRowsItLogs() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar")])
         let (scanner, workspace) = try session(transport)
-        let first = try await readyScan(bar, scanner, transport)
-        let second = try await readyScan(juice, scanner, transport)
-        let library = workspace.barcodes
+        // Three offline scans of the same bar, before any lookup could answer.
+        transport.setOffline(true)
+        for _ in 0..<3 { await scanner.scanned(ScannedCode(gtin: bar, symbology: .ean13)) }
+        transport.setOffline(false)
+        await scanner.resolveWaiting()
+        let scans = workspace.barcodes.ready
+        XCTAssertEqual(scans.count, 3)
+        let (first, second, third) = (scans[0], scans[1], scans[2])
+        let library = workspace.barcodes, date = try XCTUnwrap(LocalDate("2026-10-20"))
+        let portion = try NutritionStore.preview(food(bar, ""), grams: 40)
+        let cancelledOne = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: "Dinner")
+        XCTAssertTrue(cancelledOne.stage(food(bar, "Synthetic oat bar"), amount: portion, pending: first.id))
+        // The second's portion step is cancelled: it never reaches the draft.
+        XCTAssertEqual(cancelledOne.save(consuming: library)?.count, 1)
+        XCTAssertEqual(library.ready.map(\.id), [second.id, third.id], "The cancelled scan stays ready")
+
+        let removedOne = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: "Dinner")
+        XCTAssertTrue(removedOne.stage(food(bar, "Synthetic oat bar"), amount: portion, pending: second.id))
+        XCTAssertTrue(removedOne.stage(food(bar, "Synthetic oat bar"), amount: portion, pending: third.id))
+        XCTAssertTrue(removedOne.remove(try XCTUnwrap(removedOne.rows.last)))
+        XCTAssertEqual(removedOne.save(consuming: library)?.count, 1)
+        XCTAssertEqual(library.ready.map(\.id), [third.id], "The removed row's scan stays ready")
+        XCTAssertEqual(try openWorkspace().barcodes.ready.map(\.id), [third.id])
+    }
+
+    /// The commit fails: the draft isn't marked logged and nothing changed, so
+    /// trying again writes the entry and consumes the scan, once.
+    func testAFailedCommitCanBeRetriedWithoutLosingTheScan() async throws {
+        let disk = CommitFailingStore()
+        let library = BarcodeLibrary(persistence: disk)
+        let store = try NutritionStore(persistence: disk)
+        _ = await library.resolve(bar, meal: "Lunch", date: try XCTUnwrap(LocalDate("2026-10-20"))) { _ in .unavailable }
+        await library.resolveWaiting { [self] gtin in .found(food(gtin, "Synthetic oat bar"), attribution: "OFF") }
+        let scan = try XCTUnwrap(library.ready.first)
+        let draft = NutritionPlateDraft(store: store, date: scan.date, meal: scan.meal)
+        XCTAssertTrue(draft.stage(food(bar, "Synthetic oat bar"), amount: try NutritionStore.preview(food(bar, ""), grams: 40), pending: scan.id))
+        disk.failNextCommit = true
+        XCTAssertNil(draft.save(consuming: library))
+        XCTAssertTrue(store.entries.isEmpty && library.ready.map(\.id) == [scan.id])
+        XCTAssertEqual(draft.save(consuming: library)?.count, 1, "The retry writes it")
+        let relaunched = (try NutritionStore(persistence: disk), BarcodeLibrary(persistence: disk))
+        XCTAssertEqual(relaunched.0.entries.count, 1)
+        XCTAssertTrue(relaunched.1.pending.isEmpty)
+    }
+
+    /// Discarded while a lookup still holds the session: the plate's offline
+    /// scan is offered again at once, there and in a new scanner.
+    func testADiscardedPlateFreesItsScanWhileALookupRuns() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar"), juice: food(juice, "Synthetic apple juice")],
+                                         holding: [juice])
+        let (session, workspace) = try session(transport)
+        let ready = try await readyScan(bar, session, transport)
+        let lookup = Task { await session.scanned(ScannedCode(gtin: juice, symbology: .ean13)) }
+        let deadline = Date().addingTimeInterval(5)
+        while !transport.isWaiting(juice), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        guard case .addedToPlate = session.use(.pending(ready)) else { return XCTFail("Joins and waits") }
+        XCTAssertFalse(session.pastScans.contains(.pending(ready)))
+        session.discard()
+        XCTAssertTrue(session.pastScans.contains(.pending(ready)))
+        let (next, _) = try self.session(transport, workspace: workspace)
+        XCTAssertTrue(next.pastScans.contains(.pending(ready)), "Offered in a new scanner while the old lookup still runs")
+        transport.release(juice)
+        await lookup.value
+        XCTAssertEqual(workspace.barcodes.ready.map(\.id), [ready.id])
+    }
+
+    /// 1,000 seeded random runs of the real plate draft: offline scans put on
+    /// the scanner's plate or a meal, merged into a row, cancelled, removed,
+    /// logged with commits that sometimes fail and are retried, discarded, and
+    /// relaunched. Every scan ends pending with its intent or logged exactly once.
+    func testRandomPlateHistoriesNeverLoseOrDoubleAScan() async throws {
+        for seed in 0..<1_000 { try await randomPlateHistory(seed: UInt64(seed)) }
+    }
+
+    private func randomPlateHistory(seed: UInt64) async throws {
+        var random = PlateRandom(seed: seed)
+        let disk = CommitFailingStore()
+        var library = BarcodeLibrary(persistence: disk)
+        var store = try NutritionStore(persistence: disk)
         let date = try XCTUnwrap(LocalDate("2026-10-20"))
-        // Cancelled: the meal goes away unlogged.
-        var cancelled: BarcodeStaging? = BarcodeStaging(library: library)
-        library.stage(first.id, scope: cancelled!.scope, foodID: food(bar, "").id)
-        cancelled = nil
-        try await settle()
-        XCTAssertEqual(Set(library.ready.map(\.id)), [first.id, second.id])
-        // Logged with the bar; the juice was picked, then left out at its portion.
-        let meal = BarcodeStaging(library: library)
-        library.stage(first.id, scope: meal.scope, foodID: food(bar, "").id)
-        library.stage(second.id, scope: meal.scope, foodID: food(juice, "").id)
-        let draft = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: "Dinner")
-        XCTAssertTrue(draft.add(food(bar, "Synthetic oat bar")))
-        XCTAssertEqual(draft.save(consuming: library, scope: meal.scope)?.count, 1)
-        XCTAssertEqual(library.ready.map(\.id), [second.id], "Only the scan logged with the meal is consumed")
-        XCTAssertTrue(library.staged.isEmpty)
-        XCTAssertEqual(try openWorkspace().barcodes.ready.map(\.id), [second.id])
+        func newPlates() -> [NutritionPlateDraft] {
+            [NutritionPlateDraft(store: store, date: date, meal: "Lunch"), NutritionPlateDraft(store: store, date: date, meal: "Dinner")]
+        }
+        var plates = newPlates()
+        var intents: [UUID: (meal: String, date: LocalDate)] = [:]
+        var logged: [UUID: Int] = [:]
+        var entries = 0
+        var offline = true
+        let codes = [bar, juice, cola]
+        let portion = try NutritionStore.preview(food(bar, ""), grams: 40)
+        func onPlates() -> Set<UUID> { plates.reduce(into: Set<UUID>()) { $0.formUnion($1.pending) } }
+        func relaunch() throws {
+            library = BarcodeLibrary(persistence: disk)
+            store = try NutritionStore(persistence: disk)
+            plates = newPlates()
+        }
+        for _ in 0..<30 {
+            let plate = plates[random.next(2)]
+            switch random.next(10) {
+            case 0, 1:
+                let code = codes[random.next(3)], meal = ["Lunch", "Dinner", "Snacks"][random.next(3)]
+                if case .queued = await library.resolve(code, meal: meal, date: date, fetch: { [self] gtin in
+                    offline ? .unavailable : .found(food(gtin, "Synthetic \(gtin.display)"), attribution: "OFF")
+                }) { intents[library.pending.last!.id] = (meal, date) }
+            case 2:
+                offline.toggle()
+                if !offline { await library.resolveWaiting { [self] gtin in .found(food(gtin, "Synthetic \(gtin.display)"), attribution: "OFF") } }
+            case 3, 4:
+                // Onto a plate: a new row, or merged into its food's row.
+                guard let scan = library.ready.filter({ !onPlates().contains($0.id) }).randomElement(using: &random),
+                      let product = library.usable(scan.gtin) else { continue }
+                if let row = plate.rows.first(where: { $0.food.id == product.food.id }), random.next(2) == 0 {
+                    XCTAssertTrue(plate.stage(product.food, amount: portion, replacing: row, pending: scan.id))
+                } else {
+                    XCTAssertTrue(plate.stage(product.food, amount: portion, pending: scan.id))
+                }
+            case 5:
+                // Cancelled at its portion step: nothing reaches the draft.
+                continue
+            case 6:
+                if let row = plate.rows.randomElement(using: &random) { XCTAssertTrue(plate.remove(row)) }
+            case 7:
+                guard !plate.rows.isEmpty else { continue }
+                let ids = plate.pending, count = plate.rows.count
+                if random.next(4) == 0 {
+                    disk.failNextCommit = true
+                    XCTAssertNil(plate.save(consuming: library), "seed \(seed)")
+                    if random.next(3) == 0 { try relaunch(); continue }
+                }
+                XCTAssertNotNil(plate.save(consuming: library), "seed \(seed)")
+                for id in ids { logged[id, default: 0] += 1 }
+                entries += count
+                plates[plates.firstIndex { $0 === plate }!] = NutritionPlateDraft(store: store, date: date, meal: plate.meal)
+            case 8:
+                plate.discard()
+            default:
+                try relaunch()
+            }
+        }
+        try relaunch()
+        for (id, intent) in intents {
+            let times = logged[id] ?? 0
+            let record = library.pending.first { $0.id == id }
+            XCTAssertLessThanOrEqual(times, 1, "seed \(seed)")
+            XCTAssertNotEqual(record != nil, times == 1, "seed \(seed): pending \(record != nil), logged \(times)")
+            if let record { XCTAssertTrue(record.meal == intent.meal && record.date == intent.date, "seed \(seed)") }
+        }
+        XCTAssertEqual(store.entries.count, entries, "seed \(seed)")
     }
 
     /// Open Food Facts's licence line goes with its foods; a food the person
@@ -256,4 +382,45 @@ final class BarcodeScanSessionTests: XCTestCase {
         session.add(mine)
         XCTAssertEqual(session.plateAttributions, ["Synthetic Open Food Facts attribution, ODbL"])
     }
+}
+
+/// Storage whose next transaction fails at its commit and rolls back.
+@MainActor
+private final class CommitFailingStore: TrainingPersistence, DocumentPersistence {
+    struct CommitFailed: Error {}
+    let disk = InMemoryTrainingPersistence()
+    var failNextCommit = false
+
+    func loadSessions() throws -> [WorkoutSession] { try disk.loadSessions() }
+    func loadCustomExercises() throws -> [ExerlyCore.Exercise] { try disk.loadCustomExercises() }
+    func save(_ session: WorkoutSession) throws { try disk.save(session) }
+    func deleteSession(_ id: UUID) throws { try disk.deleteSession(id) }
+    func save(_ exercise: ExerlyCore.Exercise) throws { try disk.save(exercise) }
+    func loadValue(forKey key: String) throws -> Data? { try disk.loadValue(forKey: key) }
+    func saveValue(_ value: Data?, forKey key: String) throws { try disk.saveValue(value, forKey: key) }
+    func loadDocuments(kind: String) throws -> [Data] { try disk.loadDocuments(kind: kind) }
+    func saveDocument(kind: String, id: String, payload: Data) throws { try disk.saveDocument(kind: kind, id: id, payload: payload) }
+    func deleteDocument(kind: String, id: String) throws { try disk.deleteDocument(kind: kind, id: id) }
+    func performAtomically(_ body: () throws -> Void) throws {
+        try disk.performAtomically {
+            try body()
+            if failNextCommit {
+                failNextCommit = false
+                throw CommitFailed()
+            }
+        }
+    }
+}
+
+private struct PlateRandom: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed &+ 0xC0FFEE }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+    mutating func next(_ bound: Int) -> Int { Int(next() % UInt64(bound)) }
 }

@@ -10,6 +10,9 @@ final class NutritionPlateDraft: ObservableObject {
         let amount: LoggedAmount
         /// False while it sits at a default amount no one has looked at.
         var checked = true
+        /// The offline scans this row came from: consumed when it's logged,
+        /// released with it when it's removed.
+        var pending: Set<UUID> = []
 
         func entry(on date: LocalDate, meal: String, at time: Date) -> FoodEntry {
             FoodEntry(id: id, date: date, meal: meal, loggedAt: time, food: food.snapshot,
@@ -76,23 +79,27 @@ final class NutritionPlateDraft: ObservableObject {
     /// person logs it at, or its default. A default left unchecked stays
     /// marked until they look at it.
     @discardableResult
-    func add(_ food: ExerlyCore.Food, amount chosen: FoodPickAmount = .usual) -> Bool {
-        if case .chosen(let amount, _) = chosen { return stage(food, amount: amount) }
+    func add(_ food: ExerlyCore.Food, amount chosen: FoodPickAmount = .usual, pending: UUID? = nil) -> Bool {
+        if case .chosen(let amount, _) = chosen { return stage(food, amount: amount, pending: pending) }
         let draft = NutritionEntryDraft(store: store, food: food, date: date, meal: meal,
                                        repeating: store.rememberedEntry(for: food.id), preferredUnit: unit)
         guard let entry = draft.reviewNutrition() else { error = draft.errors.joined(separator: " "); return false }
         do {
             let amount = try NutritionStore.preview(food, grams: entry.grams, serving: entry.serving,
                 quantity: entry.quantity ?? entry.serving?.quantity(grams: entry.grams))
-            if case .unchecked = chosen { return stage(food, amount: amount, checked: false) }
-            return stage(food, amount: amount)
+            if case .unchecked = chosen { return stage(food, amount: amount, checked: false, pending: pending) }
+            return stage(food, amount: amount, pending: pending)
         } catch { self.error = NutritionDraftError.messages(error).joined(separator: " "); return false }
     }
 
     @discardableResult
-    func stage(_ food: ExerlyCore.Food, amount: LoggedAmount, replacing reviewed: Row? = nil, checked: Bool = true) -> Bool {
+    /// `pending` is an offline scan this food came from; it joins the row's
+    /// only if the row is staged.
+    func stage(_ food: ExerlyCore.Food, amount: LoggedAmount, replacing reviewed: Row? = nil, checked: Bool = true,
+               pending: UUID? = nil) -> Bool {
         guard saved == nil else { error = "This meal is already logged. Start a new meal to add more foods."; return false }
-        let row = Row(id: reviewed?.id ?? UUID(), food: food, amount: amount, checked: checked)
+        let row = Row(id: reviewed?.id ?? UUID(), food: food, amount: amount, checked: checked,
+                      pending: (reviewed?.pending ?? []).union(pending.map { [$0] } ?? []))
         var updated = rows
         if let reviewed {
             guard let index = rows.firstIndex(of: reviewed) else {
@@ -116,8 +123,20 @@ final class NutritionPlateDraft: ObservableObject {
     /// The first food still at a default amount, to look at before logging.
     var unchecked: Row? { rows.first { !$0.checked } }
 
+    /// The offline scans the plate's rows came from.
+    var pending: Set<UUID> { Set(rows.flatMap(\.pending)) }
+
+    /// Empties a plate the person discarded, releasing its offline scans.
+    func discard() {
+        guard saved == nil else { return }
+        _ = update([])
+    }
+
+    /// Logs the plate. With `library`, the offline scans its rows came from
+    /// are consumed in the same transaction; nothing here changes unless that
+    /// transaction commits, so a failed log can simply be tried again.
     @discardableResult
-    func save() -> [FoodEntry]? {
+    func save(consuming library: BarcodeLibrary? = nil) -> [FoodEntry]? {
         if let saved { return saved }
         error = nil
         guard !rows.isEmpty else { error = "Add at least one food to your meal."; return nil }
@@ -126,8 +145,9 @@ final class NutritionPlateDraft: ObservableObject {
             return nil
         }
         do {
-            let entries = try store.log(rows.map(\.item), on: date,
-                                        meal: meal.trimmingCharacters(in: .whitespacesAndNewlines), at: loggedAt)
+            let meal = meal.trimmingCharacters(in: .whitespacesAndNewlines)
+            let entries = try library.map { try $0.log(rows.map(\.item), consuming: pending, to: store, on: date, meal: meal, at: loggedAt) }
+                ?? store.log(rows.map(\.item), on: date, meal: meal, at: loggedAt)
             saved = entries
             return entries
         } catch { self.error = NutritionDraftError.messages(error).joined(separator: " "); return nil }

@@ -14,6 +14,10 @@ struct NutritionBarcodeView: View {
     let onLogged: ([FoodEntry]) -> Void
     /// Building a meal or recipe: a found food goes back to it at once.
     let onPicked: ((ExerlyCore.Food) -> Void)?
+    /// Building a meal: an offline scan goes to it with its amount and its
+    /// identity, so the meal consumes it only when it logs. False when it
+    /// couldn't join.
+    let onPickedScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Bool)?
     @StateObject private var session: BarcodeScanSession
     @StateObject private var camera = BarcodeCamera()
     #if DEBUG
@@ -30,24 +34,27 @@ struct NutritionBarcodeView: View {
     @State private var scanningLabel = false
     @State private var showingHistory = false
     @State private var discarding = false
+    /// An offline scan being added to a meal, at its portion step.
+    @State private var pickingScan: PendingPick?
+    @State private var pickedScan = false
     /// Under UI tests: how long each step took inside the app.
     @State private var timings = ""
     @FocusState private var typing: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// Building a meal: the plate an offline scan picked here joins.
-    @Environment(\.barcodeStagingScope) private var stagingScope
 
     init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions,
-         onPicked: ((ExerlyCore.Food) -> Void)? = nil, onLogged: @escaping ([FoodEntry]) -> Void) {
+         onPicked: ((ExerlyCore.Food) -> Void)? = nil, onPickedScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Bool)? = nil,
+         onLogged: @escaping ([FoodEntry]) -> Void) {
         self.workspace = workspace
         self.date = date
         self.timeZone = timeZone
         self.actions = actions
         self.onLogged = onLogged
         self.onPicked = onPicked
+        self.onPickedScan = onPickedScan
         _session = StateObject(wrappedValue: BarcodeScanSession(workspace: workspace, api: api, date: date, meal: meal,
                                                                 unit: unit, timeZone: timeZone))
     }
@@ -132,9 +139,15 @@ struct NutritionBarcodeView: View {
         .sheet(isPresented: $scanningLabel, onDismiss: addCreatedFood) {
             NutritionLabelCaptureView(workspace: workspace) { createdFood = $0 }
         }
+        .sheet(item: $pickingScan, onDismiss: { if pickedScan { pickedScan = false; dismiss() } }, content: { pick in
+            FoodPortionStep(store: workspace.nutrition, food: pick.food, unit: session.unit, title: "Portion", confirm: "Add",
+                            asking: true, identifier: "nutrition.scanPickPortion") { amount, _ in
+                pickedScan = onPickedScan?(pick.food, amount, pick.pending) == true
+            }
+        })
         .sheet(isPresented: $discarding) {
             NutritionConfirmation(title: "Discard these scans?", message: "Nothing has been logged. Your scan history keeps every code.",
-                                  confirm: "Discard", cancelLabel: "Keep scanning", destructive: true) { dismiss() }
+                                  confirm: "Discard", cancelLabel: "Keep scanning", destructive: true) { session.discard(); dismiss() }
                 cancel: { discarding = false }
         }
     }
@@ -142,7 +155,7 @@ struct NutritionBarcodeView: View {
     // MARK: Viewfinder
 
     private var picking: Bool { onPicked != nil }
-    private var presenting: Bool { editing != nil || creating || scanningLabel || discarding }
+    private var presenting: Bool { editing != nil || creating || scanningLabel || discarding || pickingScan != nil }
 
     #if DEBUG
     private var feedImage: CGImage? { feed.image }
@@ -240,9 +253,11 @@ struct NutritionBarcodeView: View {
     /// A past scan: added to the meal being built or the plate, else logged.
     private func usePast(_ past: BarcodeScanSession.PastScan) {
         if let onPicked, let product = session.library.usable(past.gtin) {
-            // The meal being built consumes an offline scan only when it logs.
-            if case .pending(let scan) = past, let stagingScope {
-                session.library.stage(scan.id, scope: stagingScope, foodID: product.food.id)
+            // An offline scan joins the meal with its identity, at the portion
+            // chosen here; cancelling that attaches nothing.
+            if case .pending(let scan) = past, onPickedScan != nil {
+                pickingScan = PendingPick(food: product.food, pending: scan.id)
+                return
             }
             onPicked(product.food)
             dismiss()
@@ -416,4 +431,11 @@ private extension Optional where Wrapped == BarcodeScanSession.Notice {
         default: false
         }
     }
+}
+
+/// An offline scan on its way into a meal being built.
+private struct PendingPick: Identifiable {
+    let food: ExerlyCore.Food
+    let pending: UUID
+    var id: UUID { pending }
 }
