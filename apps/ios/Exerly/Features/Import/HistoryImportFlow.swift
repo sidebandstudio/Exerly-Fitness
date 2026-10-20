@@ -294,7 +294,7 @@ struct HistoryImportFlow: View {
             lines(plan.lines, showExisting: true)
             if !plan.isEmpty {
                 Button { commit(plan) } label: {
-                    Label("Import \(plan.additions.formatted()) \(plan.additions == 1 ? "item" : "items")", systemImage: "square.and.arrow.down")
+                    Label("Import \(Self.amount(plan))", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(ExActionStyle()).accessibilityIdentifier("import.import")
             }
@@ -317,6 +317,17 @@ struct HistoryImportFlow: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("import.skipped")
         }
+    }
+
+    /// "2 workouts" when that's all a plan adds, otherwise "120 items".
+    static func amount(_ plan: HistoryImportPlan) -> String { amount(plan.lines, total: plan.additions) }
+
+    static func amount(_ lines: [ImportLine], total: Int) -> String {
+        let adding = lines.filter { !ImportLine.breakdowns.contains($0.key) && $0.new > 0 }
+        if adding.count == 1, ["workouts", "workout_session"].contains(adding[0].key) {
+            return "\(adding[0].new.formatted()) \(adding[0].new == 1 ? "workout" : "workouts")"
+        }
+        return "\(total.formatted()) \(total == 1 ? "item" : "items")"
     }
 
     private func previewDetail(_ plan: HistoryImportPlan) -> String {
@@ -513,7 +524,7 @@ struct HistoryImportFlow: View {
             ExEyebrow("Importing", color: .exPrimaryText)
             HStack(spacing: ExSpacing.item) {
                 ProgressView().tint(Color.exPrimaryText)
-                Text("Saving \(plan.additions.formatted()) \(plan.additions == 1 ? "item" : "items")…").font(.exH3)
+                Text("Saving \(Self.amount(plan))…").font(.exH3)
                     .foregroundStyle(Color.exTextPrimary).fixedSize(horizontal: false, vertical: true)
             }
             Text("All of it is saved, or none of it.").font(.exCaption).foregroundStyle(Color.exTextSecondary)
@@ -554,7 +565,8 @@ struct HistoryImportFlow: View {
 
     private func doneDetail(_ record: ImportRecord) -> String {
         let range = range(record.dateRange).map { " from \($0)" } ?? ""
-        return "\(record.added.formatted()) \(record.added == 1 ? "item" : "items")\(range) are saved and syncing. "
+        let total = record.lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new }
+        return "\(Self.amount(record.lines, total: total))\(range) \(total == 1 ? "is" : "are") saved and syncing. "
             + "Undo removes exactly these, now or later from Profile → Import & export."
     }
 
@@ -563,7 +575,7 @@ struct HistoryImportFlow: View {
             let result = try workspace.importer.undo(record.id)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.snappy) { phase = .undone(result) }
-            UIAccessibility.post(notification: .announcement, argument: ImportCopy.undone(result))
+            UIAccessibility.post(notification: .announcement, argument: "Import undone. " + ImportCopy.undone(result))
             changed()
             Task { await workspace.synchronize() }
         } catch {
@@ -610,6 +622,15 @@ struct ImportExerciseChooser: View {
         _query = State(initialValue: match.name.replacingOccurrences(of: #"\s*\([^)]*\)"#, with: "", options: .regularExpression))
     }
 
+    /// Exercises sharing any word of four letters or more with the search,
+    /// for a name the library has no exact match for.
+    private var closeMatches: [ExerlyCore.Exercise] {
+        var seen = Set<ExerciseID>()
+        return query.split(separator: " ").map(String.init).filter { $0.count >= 4 }
+            .flatMap { library.search($0) }
+            .filter { seen.insert($0.id).inserted }
+    }
+
     var body: some View {
         NavigationStack {
             ExList {
@@ -629,8 +650,9 @@ struct ImportExerciseChooser: View {
                             .frame(minHeight: 44).accessibilityIdentifier("import.chooser.automatic")
                     }
                 }
-                let results = library.search(query)
-                Section(query.isEmpty ? "All exercises" : "Matches") {
+                let exact = library.search(query)
+                let results = exact.isEmpty ? closeMatches : exact
+                Section(query.isEmpty ? "All exercises" : exact.isEmpty && !results.isEmpty ? "Close matches" : "Matches") {
                     if results.isEmpty { ContentUnavailableView.search(text: query) }
                     ForEach(results) { exercise in
                         Button { choose(.exercise(exercise.id)) } label: {

@@ -64,8 +64,8 @@ final class ImportExportPresentationTests: XCTestCase {
     }
 
     func testUndoSaysWhatItKept() {
-        XCTAssertEqual(ImportCopy.undone(.init(undone: 2, kept: 0)), "Import undone: 2 items removed or put back.")
+        XCTAssertEqual(ImportCopy.undone(.init(undone: 2, kept: 0)), "2 items removed or put back.")
         XCTAssertEqual(ImportCopy.undone(.init(undone: 1, kept: 1)),
-                       "Import undone: 1 item removed or put back. 1 you changed since was kept.")
+                       "1 item removed or put back. 1 you changed since was kept.")
     }
 }

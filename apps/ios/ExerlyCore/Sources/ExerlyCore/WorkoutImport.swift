@@ -72,12 +72,13 @@ public enum WorkoutImport {
         let units = format.units(columns, unit: unit, assumptions: &result.assumptions)
         result.weightUnitAssumed = units.weight != nil && result.assumptions.contains { $0.hasPrefix("Weights have no unit") }
         if let weight = units.weight {
-            result.units.append(result.weightUnitAssumed ? "Weights in \(units.weightUnit.rawValue), assumed: the file doesn't say"
+            result.units.append(result.weightUnitAssumed ? "Weights read in \(units.weightUnit.rawValue): the file doesn't name a unit"
                                 : "Weights in \(units.weightUnit.rawValue), from the \u{201C}\(weight)\u{201D} column")
         }
         if let distance = units.distance {
             let name = units.metres == 1 ? "metres" : units.metres == 1000 ? "km" : "miles"
-            result.units.append("Distances in \(name), from the \u{201C}\(distance)\u{201D} column")
+            result.units.append(distance == "Distance" ? "Distances read in \(name): the file doesn't name a unit"
+                                : "Distances in \(name), from the \u{201C}\(distance)\u{201D} column")
         }
         result.units.append("Times read in \(timeZone.identifier): the file has no time zone")
         var calendar = Calendar(identifier: .gregorian)

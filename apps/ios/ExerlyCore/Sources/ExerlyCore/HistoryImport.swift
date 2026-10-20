@@ -26,6 +26,9 @@ public struct ImportLine: Sendable, Codable, Hashable, Identifiable {
 
     public var id: String { key }
 
+    /// Lines that break another down, such as a workout's sets.
+    public static let breakdowns: Set<String> = ["exercises", "sets"]
+
     public init(key: String, title: String, new: Int, existing: Int = 0) {
         self.key = key
         self.title = title
@@ -93,7 +96,9 @@ public struct HistoryImportPlan: Sendable {
 
     /// Nothing to save: the file is empty or already in Exerly.
     public var isEmpty: Bool { writes.isEmpty }
-    public var additions: Int { lines.reduce(0) { $0 + $1.new } }
+    /// What the import adds, counting workouts rather than the exercises
+    /// and sets inside them.
+    public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new } }
 
     public init(source: ImportSource, files: [String], timeZone: TimeZone) {
         self.source = source

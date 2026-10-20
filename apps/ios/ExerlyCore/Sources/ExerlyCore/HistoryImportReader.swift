@@ -191,7 +191,8 @@ public enum HistoryImportReader {
         }
         let name = result.source == .hevy ? "Hevy" : "Strong"
         plan.lost.append("\(name)'s routines, body measurements and settings aren't in this file.")
-        plan.approximated = result.assumptions.filter { !$0.hasPrefix("Weights have no unit") }
+        // Unitless weights and distances are said under units, where the weight's can be changed.
+        plan.approximated = result.assumptions.filter { !$0.hasPrefix("Weights have no unit") && !$0.hasPrefix("Distances have no unit") }
         if result.sessions.contains(where: { $0.exercises.contains { $0.sets.contains { $0.rir != nil } } }) {
             plan.approximated.append("RPE becomes reps in reserve: RPE 8 is 2 reps in reserve.")
         }

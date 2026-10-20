@@ -1004,6 +1004,7 @@ struct MFReader {
                 // A mini-set continues the myo set before it, as one set of several efforts.
                 if mini, let last = exercises[position].sets.indices.last, exercises[position].sets[last].kind == .myo {
                     exercises[position].sets[last].efforts.append(Effort(reps: reps, load: load, duration: duration, distance: distance))
+                    export.report.exerciseSets[name, default: 1] -= 1
                     used += 1
                     continue
                 }

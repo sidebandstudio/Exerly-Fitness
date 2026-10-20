@@ -140,7 +140,7 @@ struct ImportExportView: View {
         error = nil
         do {
             let result = try workspace.importer.undo(record.id)
-            let text = ImportCopy.undone(result)
+            let text = "Import undone. " + ImportCopy.undone(result)
             message = text
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             UIAccessibility.post(notification: .announcement, argument: text)
@@ -237,7 +237,7 @@ enum ImportCopy {
     }
 
     static func undone(_ result: HistoryImporter.UndoResult) -> String {
-        let removed = "Import undone: \(result.undone.formatted()) \(result.undone == 1 ? "item" : "items") removed or put back."
+        let removed = "\(result.undone.formatted()) \(result.undone == 1 ? "item" : "items") removed or put back."
         guard result.kept > 0 else { return removed }
         return removed + " \(result.kept.formatted()) you changed since \(result.kept == 1 ? "was" : "were") kept."
     }

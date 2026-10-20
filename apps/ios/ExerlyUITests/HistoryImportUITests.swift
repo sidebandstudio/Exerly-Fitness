@@ -69,7 +69,7 @@ final class HistoryImportUITests: ExerlyUITestCase {
         tap(app.alerts.buttons["Undo import"], in: app)
         XCTAssertTrue(app.descendants(matching: .any)["import.undone"].waitForExistence(timeout: 20))
         XCTAssertEqual(app.descendants(matching: .any)["import.undoneDetail"].label,
-                       "Import undone: 2 items removed or put back.")
+                       "2 items removed or put back.")
         capture(app, "strong-08-undone")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.descendants(matching: .any)["import.record.0"].waitForExistence(timeout: 10))
@@ -149,6 +149,36 @@ final class HistoryImportUITests: ExerlyUITestCase {
         capture(app, "export-02-share")
     }
 
+    /// Each other source's start and preview, for visual review: Hevy,
+    /// MacroFactor Workouts and an Exerly export.
+    func testEachSourcesPreviewCapture() async throws {
+        guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else { throw XCTSkip("Opt-in visual review") }
+        try await control([:])
+        let files: [(source: String, name: String, data: Data)] = [
+            ("hevy", "workout_data.csv", OtherExports.hevy()),
+            ("macroFactorWorkouts", "Workout Log.csv", OtherExports.macroFactorWorkouts()),
+            ("exerly", "exerly-export.json", OtherExports.exerly()),
+        ]
+        for file in files {
+            let person = try await createAccount(prefix: "preview-\(file.source.lowercased())", units: "imperial")
+            let app = launch(file: file.data, name: file.name)
+            signIn(app, email: person.email)
+            tap(app.tabBars.buttons["Profile"], in: app)
+            reveal(app.buttons["profile.importExport"], in: app)
+            tap(app.buttons["profile.importExport"], in: app)
+            tap(app.buttons["import.source.\(file.source)"], in: app)
+            XCTAssertTrue(app.buttons["import.choose"].waitForExistence(timeout: 10))
+            capture(app, "\(file.source)-01-start")
+            tap(app.buttons["import.testFile"], in: app)
+            XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
+            capture(app, "\(file.source)-02-preview")
+            let losses = app.descendants(matching: .any)["import.losses"]
+            reveal(losses, in: app)
+            capture(app, "\(file.source)-03-losses")
+            app.terminate()
+        }
+    }
+
     /// The session the account's server has with this name, once it syncs.
     private func waitForSession(token: String, named name: String, timeout: Int = 40) async throws -> [String: Any]? {
         for _ in 0..<timeout {
@@ -200,5 +230,56 @@ private enum StrongExport {
             "\(legs),Synthetic Legs,45m,Squat (Barbell),1,225,5,,,,,",
         ]
         return Data((rows.joined(separator: "\n") + "\n").utf8)
+    }
+}
+
+/// Synthetic exports from the other sources, dated around today. Formats:
+/// Hevy, https://griptapp.com/help/export-workouts-from-hevy; MacroFactor
+/// Workouts, https://help.macrofactorapp.com/en/articles/356-export-your-data
+/// with the header of the public sample in
+/// https://github.com/matanabudy/workout-data-sync/blob/main/examples/macrofactor_export.csv;
+/// Exerly, docs/design/022-export-import.md. No real person's data.
+@MainActor
+private enum OtherExports {
+    static func hevy() -> Data {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/New_York")
+        formatter.dateFormat = "d MMM yyyy, HH:mm"
+        let day = ExerlyUITestCase.day(-2).at
+        let start = formatter.string(from: day.addingTimeInterval(11 * 3600)), end = formatter.string(from: day.addingTimeInterval(12 * 3600))
+        let head = "\"title\",\"start_time\",\"end_time\",\"description\",\"exercise_title\",\"superset_id\",\"exercise_notes\",\"set_index\",\"set_type\",\"weight_lbs\",\"reps\",\"distance_miles\",\"duration_seconds\",\"rpe\""
+        let rows = [
+            "\"Synthetic Pull\",\"\(start)\",\"\(end)\",\"\",\"Bent Over Row (Barbell)\",,\"\",0,\"warmup\",95,10,,,",
+            "\"Synthetic Pull\",\"\(start)\",\"\(end)\",\"\",\"Bent Over Row (Barbell)\",,\"\",1,\"normal\",155,8,,,8",
+            "\"Synthetic Pull\",\"\(start)\",\"\(end)\",\"\",\"Face Pull (Cable)\",0,\"\",0,\"normal\",40,15,,,",
+            "\"Synthetic Pull\",\"\(start)\",\"\(end)\",\"\",\"Hammer Curl (Dumbbell)\",0,\"\",0,\"dropset\",30,10,,,",
+            "\"Synthetic Pull\",\"\(start)\",\"\(end)\",\"\",\"Synthetic Seal Row\",,\"\",0,\"normal\",60,12,,,",
+        ]
+        return Data(([head] + rows).joined(separator: "\n").utf8)
+    }
+
+    static func macroFactorWorkouts() -> Data {
+        let date = ExerlyUITestCase.day(-1).date
+        let rows = [
+            #""Date","Workout Duration","Workout","Exercise","Exercise Base Weight (kg)","Set Type","Weight (kg)","Reps","RIR","Duration","Distance short (m)","Distance long (km)""#,
+            #""\#(date)","3600","Synthetic Push","Dumbbell Bench Press",,"Warm-Up Set","20.0","10",,,,"#,
+            #""\#(date)","3600","Synthetic Push","Dumbbell Bench Press",,"Standard Set","30.0","10","2",,,"#,
+            #""\#(date)","3600","Synthetic Push","Dumbbell Bench Press",,"Myo Set","30.0","12","1",,,"#,
+            #""\#(date)","3600","Synthetic Push","Dumbbell Bench Press",,"Mini-set","30.0","4","1",,,"#,
+            #""\#(date)","3600","Synthetic Push","Dumbbell Lateral Raise",,"Standard Set","8.0","15","2",,,"#,
+        ]
+        return Data(rows.joined(separator: "\n").utf8)
+    }
+
+    static func exerly() -> Data {
+        let days = (1...4).map { offset -> [String: Any] in
+            let date = ExerlyUITestCase.day(-offset).date
+            return ["kind": "nutrition_day", "document_id": date, "revision": 2, "deleted_at": NSNull(),
+                    "payload": ["date": date, "status": offset == 3 ? "fasting" : "complete", "notes": offset == 1 ? "Synthetic note" : ""]]
+        }
+        let export: [String: Any] = ["exported_at": "2026-10-20T12:00:00.000Z", "version": 3, "account": ["name": "Synthetic"],
+                                     "documents": days, "measurements": [["type": "waist", "value": 80]]]
+        return (try? JSONSerialization.data(withJSONObject: export)) ?? Data()
     }
 }
