@@ -150,6 +150,11 @@ public struct HistoryImporter {
         public var undone: Int
         /// Documents changed since the import, kept as they are now.
         public var kept: Int
+
+        public init(undone: Int, kept: Int) {
+            self.undone = undone
+            self.kept = kept
+        }
     }
 
     public enum ImportError: Error, Equatable {

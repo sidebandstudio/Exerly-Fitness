@@ -82,6 +82,11 @@ public enum ExportFiles {
     public struct File: Sendable, Hashable {
         public var name: String
         public var data: Data
+
+        public init(name: String, data: Data) {
+            self.name = name
+            self.data = data
+        }
     }
 
     /// One table per kind of data, header first. Empty kinds are left out.

@@ -9,6 +9,8 @@ struct SetupReviewStep: View {
     /// The last targets shown, kept on screen while a changed answer reloads.
     @State private var shown: SetupPreview?
     @Environment(\.dynamicTypeSize) private var typeSize
+    @EnvironmentObject private var authVM: AuthViewModel
+    @State private var bringHistory = false
 
     private var current: SetupPreview? { state.serverPreview ?? shown }
     private var unit: MassUnit { state.useMetric ? .kilograms : .pounds }
@@ -40,7 +42,10 @@ struct SetupReviewStep: View {
             if !state.manualTargetMode { macroSplit }
             ownTargets
             if let preview = current { basis(preview) }
-            if state.repairSteps == nil { training }
+            if state.repairSteps == nil {
+                training
+                history
+            }
         }
         .task(id: state.previewIdentity) {
             // Typing a number changes the answers at every key. Wait for a pause.
@@ -149,6 +154,27 @@ struct SetupReviewStep: View {
                      : state.equipment.map(\.label).sorted().joined(separator: ", "))
             }
         }
+    }
+
+    /// Coming from another app: the Import & export hub opens once setup is done.
+    private var history: some View {
+        SetupRows {
+            Toggle(isOn: Binding(get: { bringHistory }, set: { on in
+                bringHistory = on
+                if let id = authVM.currentUser?.id { BringHistory.remember(accountID: id, on) }
+            })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Bring your history").font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                    Text("Import from MacroFactor, Hevy or Strong next. You'll see everything before it's saved.")
+                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .tint(Color.exActionFill)
+            .padding(.horizontal, ExSpacing.content).padding(.vertical, ExSpacing.small)
+            .frame(minHeight: 60)
+            .accessibilityIdentifier("setup.bringHistory")
+        }
+        .onAppear { bringHistory = authVM.currentUser?.id.map(BringHistory.isOn(accountID:)) ?? false }
     }
 
     private func line(_ title: String, value: String) -> some View {

@@ -126,9 +126,13 @@ final class TrainingWorkspace: ObservableObject {
         persistence.close()
     }
 
-    func export(server: Data?, pending: [AccountExport.PendingRow] = []) throws -> Data {
-        try AccountExport.merging(server: server, hosts: [store, programs, nutrition, gyms, agent], state: persistence, pending: pending)
+    func export(server: Data?, pending: [AccountExport.PendingRow] = [], context: AccountExport.Context? = nil) throws -> Data {
+        try AccountExport.merging(server: server, hosts: [store, programs, nutrition, gyms, agent], state: persistence, pending: pending,
+                                  context: context, imports: (try? importer.records()) ?? [])
     }
+
+    /// Saves imports as one unit across this account's stores, and undoes them.
+    var importer: HistoryImporter { HistoryImporter(hosts: [store, programs, nutrition, gyms, agent], persistence: persistence) }
 
     func supportsChanges(in proposal: Proposal) -> Bool {
         let kinds = store.documentKinds + programs.documentKinds + nutrition.documentKinds + gyms.documentKinds

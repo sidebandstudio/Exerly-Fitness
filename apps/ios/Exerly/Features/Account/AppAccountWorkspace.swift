@@ -122,6 +122,12 @@ final class AppAccountWorkspace: ObservableObject {
             "Your account was deleted. Some saved data on this device still needs to be removed. Retry cleanup."
     }
 
+    /// The account's time zone and units, written into an export.
+    static func exportContext(_ auth: AuthViewModel) -> AccountExport.Context {
+        AccountExport.Context(timeZone: TimeZone(identifier: auth.currentUser?.timezone ?? "") ?? .current,
+                              unit: auth.currentUser?.unitSystem == "metric" ? .kilograms : .pounds)
+    }
+
     func actions(auth: AuthViewModel, accountID: String) -> AccountManagementActions {
         func checkAccount() throws {
             guard auth.accountAPI?.accountID == accountID else { throw ExerlyCore.APIError.accountChanged }
@@ -154,12 +160,14 @@ final class AppAccountWorkspace: ObservableObject {
         }, exportAccount: {
             try checkAccount()
             let server = try await auth.exportAccount()
-            return try savedTraining().export(server: server, pending: self.pendingLegacy(accountID))
+            return try savedTraining().export(server: server, pending: self.pendingLegacy(accountID), context: Self.exportContext(auth))
         }, deleteAccount: { code in
             try checkAccount()
             try await self.deleteAccount(auth: auth, confirmation: code)
         })
-        actions.exportDeviceData = { try savedTraining().export(server: nil, pending: self.pendingLegacy(accountID)) }
+        actions.exportDeviceData = {
+            try savedTraining().export(server: nil, pending: self.pendingLegacy(accountID), context: Self.exportContext(auth))
+        }
         return actions
     }
 }

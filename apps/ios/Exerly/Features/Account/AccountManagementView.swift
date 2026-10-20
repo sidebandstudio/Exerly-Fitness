@@ -97,7 +97,7 @@ struct AccountManagementView: View {
             }
             Section("Your data") {
                 NavigationLink {
-                    AccountExportView(actions: actions)
+                    DataExportView(actions: actions)
                 } label: {
                     Label("Export data", systemImage: "square.and.arrow.up")
                 }.accessibilityIdentifier("account.export")
@@ -177,85 +177,6 @@ struct AccountManagementView: View {
     private func showError(_ failure: Error) {
         error = AccountScreenError.message(failure)
         errorFocused = true
-    }
-}
-
-private struct AccountExportView: View {
-    let actions: AccountManagementActions
-    @EnvironmentObject private var sync: SyncEngine
-    @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var exportFile: AccountExportFile?
-    @State private var busy = false
-    @State private var error: String?
-    @State private var task: Task<Void, Never>?
-    @AccessibilityFocusState private var errorFocused: Bool
-
-    private var deviceOnly: Bool { sync.isOffline && actions.exportDeviceData != nil }
-
-    var body: some View {
-        ExScreen {
-            ExCard(accent: true) {
-                if !typeSize.isAccessibilitySize {
-                    Image(systemName: deviceOnly ? "iphone.and.arrow.forward" : "square.and.arrow.up")
-                        .font(.system(size: 32, weight: .light)).foregroundStyle(Color.exPrimaryText).accessibilityHidden(true)
-                }
-                Text(deviceOnly ? "Saved on this device" : "Account export").font(.exH2)
-                Button(deviceOnly ? "Share device export" : "Share account export", systemImage: "square.and.arrow.up") {
-                    prepare(deviceOnly: deviceOnly)
-                }
-                .buttonStyle(ExActionStyle()).disabled(busy).accessibilityIdentifier("account.shareExport")
-                Text(deviceOnly
-                     ? "You're offline. Share the records saved here as JSON."
-                     : "A JSON file with account records and this device's latest changes.")
-                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                if busy { ProgressView("Preparing export…") }
-                if let error {
-                    Text(error).foregroundStyle(Color.exError).accessibilityFocused($errorFocused)
-                        .accessibilityIdentifier("account.exportError")
-                }
-            }
-            ExCard {
-                ExSectionHeading(deviceOnly ? "What's included" : "Complete account export")
-                Text(deviceOnly
-                     ? "Training, foods, suggestions and entries saved on this device. Account details and records kept only on the server are left out."
-                     : "Your account information, food, workouts, body measurements and suggestions. Changes waiting to sync are included.")
-                    .font(.exBody).foregroundStyle(Color.exTextSecondary)
-                Text("Progress photos stay on this device and are not included.")
-                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                if !deviceOnly, actions.exportDeviceData != nil {
-                    Button("Export only this device") { prepare(deviceOnly: true) }
-                        .disabled(busy).accessibilityIdentifier("account.exportDevice")
-                    Text("Leaves out account details and records kept only on the server.")
-                        .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                }
-            }
-        }
-        .navigationTitle("Export data").navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $exportFile) { file in
-            AccountShareSheet(url: file.url).onDisappear { file.remove() }
-        }
-        .onDisappear { task?.cancel() }
-    }
-
-    private func prepare(deviceOnly: Bool) {
-        guard !busy else { return }
-        busy = true
-        error = nil
-        task = Task { @MainActor in
-            defer { busy = false }
-            do {
-                let data: Data
-                if deviceOnly, let exportDeviceData = actions.exportDeviceData { data = try exportDeviceData() } else {
-                    data = try await actions.exportAccount()
-                }
-                try Task.checkCancellation()
-                exportFile = try AccountExportFile(data: data, deviceOnly: deviceOnly)
-            } catch is CancellationError { } catch {
-                guard !Task.isCancelled else { return }
-                self.error = AccountScreenError.message(error)
-                errorFocused = true
-            }
-        }
     }
 }
 
@@ -465,7 +386,7 @@ struct AccountExportFile: Identifiable {
     func remove() { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 }
 
-private struct AccountShareSheet: UIViewControllerRepresentable {
+struct AccountShareSheet: UIViewControllerRepresentable {
     let url: URL
     /// Whether the file was shared or saved; false when the sheet was cancelled.
     var finished: (Bool) -> Void = { _ in }

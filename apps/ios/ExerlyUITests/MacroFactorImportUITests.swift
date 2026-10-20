@@ -1,21 +1,20 @@
 import XCTest
 
-/// Importing a synthetic MacroFactor export: the preview, the import, and the
-/// history it adds on Today and in Progress → Body. The file comes through the
+/// Importing a synthetic MacroFactor export: the preview, the import, the
+/// history it adds on Today and in Progress → Body, and Undo. The file comes through the
 /// screen's debug hook, since the system file picker runs outside the app.
 @MainActor
 final class MacroFactorImportUITests: ExerlyUITestCase {
     private var designCapture: Bool { ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" }
 
-    func testImportAddsFoodToTodayAndWeighInsToProgress() async throws {
+    func testImportAddsFoodToTodayAndWeighInsToProgressThenUndoes() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "mf-import", units: "metric")
         try await deleteSetupWeight(token: person.token)
         let app = launch(export: SyntheticExport.workbook())
         signIn(app, email: person.email)
-        tap(app.tabBars.buttons["Profile"], in: app)
-        tap(app.buttons["profile.macroFactorImport"], in: app)
-        XCTAssertTrue(app.buttons["mfImport.choose"].waitForExistence(timeout: 15))
+        openImport(app, source: "macroFactor")
+        XCTAssertTrue(app.buttons["import.choose"].waitForExistence(timeout: 15))
         capture(app, "mf-01-start")
         if designCapture {
             app.swipeUp(velocity: .slow)
@@ -23,29 +22,31 @@ final class MacroFactorImportUITests: ExerlyUITestCase {
             for _ in 0..<3 { app.swipeDown(velocity: .fast) }
         }
 
-        tap(app.buttons["mfImport.testFile"], in: app)
-        XCTAssertTrue(app.descendants(matching: .any)["mfImport.preview"].waitForExistence(timeout: 30), app.debugDescription)
-        let weights = app.descendants(matching: .any)["mfImport.count.weights"]
+        tap(app.buttons["import.testFile"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
+        let weights = app.descendants(matching: .any)["import.count.weights"]
         XCTAssertTrue(weights.waitForExistence(timeout: 5))
         XCTAssertEqual(weights.value as? String, "10 to add")
-        XCTAssertEqual(app.descendants(matching: .any)["mfImport.count.entries"].value as? String, "3 to add")
-        XCTAssertEqual(app.descendants(matching: .any)["mfImport.count.workouts"].value as? String, "1 to add")
+        XCTAssertEqual(app.descendants(matching: .any)["import.count.entries"].value as? String, "3 to add")
+        XCTAssertEqual(app.descendants(matching: .any)["import.count.workouts"].value as? String, "1 to add")
         capture(app, "mf-04-preview")
-        let unmatched = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Synthetic Zercher Hop'")).firstMatch
+        let unmatched = app.buttons.matching(NSPredicate(format: "label == 'Synthetic Zercher Hop'")).firstMatch
         reveal(unmatched, in: app)
-        XCTAssertTrue(unmatched.exists, "The unmatched exercise is reported")
-        capture(app, "mf-05-report")
-        if designCapture {
-            app.swipeUp(velocity: .slow)
-            capture(app, "mf-06-report-more")
-        }
+        XCTAssertTrue(unmatched.exists, "The unmatched exercise is listed to match")
+        XCTAssertEqual(unmatched.value as? String, "No match. Choose one, 1 set")
+        capture(app, "mf-05-exercises")
+        let trend = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'works out your trend weight'")).firstMatch
+        reveal(trend, in: app)
+        XCTAssertTrue(trend.exists, "MacroFactor's trend weight is listed as not coming across")
+        capture(app, "mf-06-losses")
 
-        tap(app.buttons["mfImport.import"], in: app)
-        XCTAssertTrue(app.descendants(matching: .any)["mfImport.done"].waitForExistence(timeout: 60), app.debugDescription)
+        reveal(app.buttons["import.import"], in: app)
+        tap(app.buttons["import.import"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.done"].waitForExistence(timeout: 60), app.debugDescription)
         capture(app, "mf-07-done")
 
         // The weigh-ins are in Progress → Body, and reach the account.
-        tap(app.buttons["mfImport.seeTrend"], in: app)
+        tap(app.buttons["import.seeTrend"], in: app)
         let yesterday = Self.day(-1).date
         XCTAssertTrue(app.descendants(matching: .any)["body.weighIn.\(yesterday)"].waitForExistence(timeout: 30), app.debugDescription)
         try await Task.sleep(for: .seconds(1))
@@ -62,17 +63,37 @@ final class MacroFactorImportUITests: ExerlyUITestCase {
         capture(app, "mf-09-today")
 
         // Importing the same file again adds nothing.
-        tap(app.tabBars.buttons["Profile"], in: app)
-        for _ in 0..<3 where !app.buttons["profile.macroFactorImport"].exists {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-            _ = app.buttons["profile.macroFactorImport"].waitForExistence(timeout: 3)
-        }
-        tap(app.buttons["profile.macroFactorImport"], in: app)
-        tap(app.buttons["mfImport.testFile"], in: app)
-        XCTAssertTrue(app.descendants(matching: .any)["mfImport.preview"].waitForExistence(timeout: 30))
-        XCTAssertFalse(app.buttons["mfImport.import"].exists, "Nothing new to import")
-        XCTAssertEqual(app.descendants(matching: .any)["mfImport.count.weights"].value as? String, "0 to add, 10 already in Exerly")
+        openImport(app, source: "macroFactor")
+        tap(app.buttons["import.testFile"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.buttons["import.import"].exists, "Nothing new to import")
+        XCTAssertEqual(app.descendants(matching: .any)["import.count.weights"].value as? String, "0 to add, 10 already in Exerly")
         capture(app, "mf-10-again")
+
+        // Undo from the hub removes what the import added, Today's food included.
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let undo = app.buttons["import.record.0.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "mf-11-hub-record")
+        tap(undo, in: app)
+        tap(app.alerts.buttons["Undo import"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.undoMessage"].waitForExistence(timeout: 20))
+        capture(app, "mf-12-undone")
+        tap(app.tabBars.buttons["Today"], in: app)
+        XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
+        XCTAssertFalse(oats.firstMatch.waitForExistence(timeout: 3), "The imported food is gone")
+    }
+
+    /// Profile → Import & export → the source's screen, from wherever the app is.
+    private func openImport(_ app: XCUIApplication, source: String) {
+        tap(app.tabBars.buttons["Profile"], in: app)
+        for _ in 0..<4 where !app.buttons["profile.importExport"].exists {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            _ = app.buttons["profile.importExport"].waitForExistence(timeout: 3)
+        }
+        reveal(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["import.source.\(source)"], in: app)
     }
 
     private func launch(export: Data) -> XCUIApplication {
@@ -86,7 +107,8 @@ final class MacroFactorImportUITests: ExerlyUITestCase {
         }
         app.launchEnvironment["EXERLY_API_BASE_URL"] = fixtureURL
         app.launchEnvironment["EXERLY_TEST_STORE_ID"] = UUID().uuidString
-        app.launchEnvironment["EXERLY_MF_IMPORT_FILE"] = export.base64EncodedString()
+        app.launchEnvironment["EXERLY_IMPORT_FILE"] = export.base64EncodedString()
+        app.launchEnvironment["EXERLY_IMPORT_FILE_NAME"] = "MacroFactor export.xlsx"
         app.launch()
         return app
     }
@@ -94,7 +116,9 @@ final class MacroFactorImportUITests: ExerlyUITestCase {
 
 /// A synthetic MacroFactor export dated around today, in New York. No real
 /// person's data. Written as a minimal .xlsx: inline strings and numbers,
-/// stored without compression.
+/// stored without compression. Sheets and headers follow MacroFactor's
+/// export (https://help.macrofactorapp.com/en/articles/356-export-your-data)
+/// as recorded in docs/MACROFACTOR.md.
 @MainActor
 private enum SyntheticExport {
     static func workbook() -> Data {

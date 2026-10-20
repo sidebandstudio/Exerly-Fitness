@@ -182,13 +182,14 @@ struct ProfileView: View {
             }
             if let workspace {
                 NavigationLink {
-                    MacroFactorImportView(workspace: workspace, unit: unit, timeZone: timeZone)
+                    ImportExportView(workspace: workspace, unit: unit, timeZone: timeZone,
+                                     exportActions: user?.id.map { account.actions(auth: authVM, accountID: $0) })
                 } label: {
-                    ProfileRow(title: "Import from MacroFactor", icon: "square.and.arrow.down",
-                               subtitle: "Food log, weigh-ins and workouts")
+                    ProfileRow(title: "Import & export", icon: "arrow.up.arrow.down.square",
+                               subtitle: "From MacroFactor, Hevy or Strong, or export everything")
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("profile.macroFactorImport")
+                .accessibilityIdentifier("profile.importExport")
             }
             if let id = user?.id {
                 NavigationLink {
