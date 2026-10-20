@@ -31,6 +31,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   weigh-ins read with time, fat, source; water's Undo in a row under its chips, which never move.
 - claude/taps (7 commits, not landed): budgets in TapBudgetUITests (CI) and TAP_BUDGETS.md;
   repeats lead Log again; keypad-first weigh-in; B03 launch 1.19 s p50 (sim), not < 1 s.
+- claude/taps (13 commits, review round 1 fixed, not landed): budgets in TapBudgetUITests (CI);
+  repeats own their Undo; weigh-ins never save a placeholder; B03 2.41 s p50 end to end (sim).
 
 ## Current outcome
 

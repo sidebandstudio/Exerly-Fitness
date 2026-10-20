@@ -168,6 +168,48 @@ final class TapBudgetUITests: ExerlyUITestCase {
         XCTAssertEqual(app.textFields["set.barbell-bench-press.1.reps"].value as? String, reps)
     }
 
+    /// Offline from the start: Start and the prefilled set take their one
+    /// tap each, the set survives the app being killed, and once back online
+    /// the finished workout reaches the server with that set done.
+    func testAPrefilledSetLogsOfflineInOneTapAndSyncsLater() async throws {
+        let (app, person) = try await budgetHome(prefix: "budget-offline-set")
+        try await control(["offline": true])
+        startCounting()
+        tap(app.buttons["today.startWorkout"], in: app)
+        XCTAssertTrue(app.buttons["training.finish"].waitForExistence(timeout: 10))
+        XCTAssertEqual(tapCount, 1)
+        let load = app.textFields["set.barbell-bench-press.1.load"]
+        XCTAssertEqual(load.value as? String, "160", "Prefilled offline too")
+        let reps = app.textFields["set.barbell-bench-press.1.reps"].value as? String
+        startCounting()
+        tap(app.buttons["Complete set 1, Barbell Bench Press"], in: app)
+        let done = app.buttons["Reopen set 1, Barbell Bench Press"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        XCTAssertEqual(tapCount, 1, "Budget: 1")
+
+        app.launchArguments.removeAll { $0 == "--ui-testing" }
+        app.terminate()
+        app.launch()
+        let resume = app.buttons["today.resumeWorkout"]
+        if !done.waitForExistence(timeout: 10), resume.waitForExistence(timeout: 10) { tap(resume, in: app) }
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "Still done after a relaunch, offline")
+
+        try await control([:])
+        tap(app.buttons["training.finish"], in: app)
+        let save = app.buttons["Save workout"]
+        if save.waitForExistence(timeout: 5) { tap(save, in: app) }
+        let synced = try await waitForDocument("workout_session", token: person.token) { session in
+            // Today's, not the Upper A seeded three days ago.
+            guard session["endedAt"] != nil, (session["startedAt"] as? String ?? "") >= Self.day(0).date,
+                  let bench = (session["exercises"] as? [[String: Any]])?.first(where: { $0["exerciseID"] as? String == "barbell-bench-press" }),
+                  let first = (bench["sets"] as? [[String: Any]])?.first else { return false }
+            return first["completedAt"] != nil
+        }
+        let effort = ((((synced?["exercises"] as? [[String: Any]])?.first { $0["exerciseID"] as? String == "barbell-bench-press" })?["sets"]
+            as? [[String: Any]])?.first?["efforts"] as? [[String: Any]])?.first
+        XCTAssertEqual(effort.flatMap { $0["reps"] as? Int }.map(String.init), reps, "The prefilled reps, synced")
+    }
+
     /// Opt-in screenshots of Log again's repeats: offered, the meal
     /// repeated, and the rest of the day once the meal has food.
     func testRepeatShelfCapture() async throws {
@@ -191,6 +233,9 @@ final class TapBudgetUITests: ExerlyUITestCase {
         capture(app, "taps-03-rest-of-day")
         reveal(app.buttons["today.repeatDay"], in: app)
         capture(app, "taps-03b-rest-of-day-row")
+        tap(app.buttons["today.repeatDay"], in: app)
+        XCTAssertTrue(app.buttons["today.repeatDay"].label.hasPrefix("Repeated yesterday"))
+        capture(app, "taps-03c-rest-repeated")
         todayScreen(app).swipeDown()
         todayScreen(app).swipeDown()
         tap(app.buttons["today.weighIn"], in: app)

@@ -2119,3 +2119,41 @@ these are what it hesitated over or got wrong, and what changed:
 Left for their owners: the workout screen doesn't mark which values are the
 suggestion, nor explain RIR; Previous is low-contrast; the confirmation covers
 the bottom of Today for six seconds.
+
+## 2026-10-20: Each repeat owns what it logged; weigh-ins never save a placeholder
+
+From an independent review of the tap-budget work:
+
+- Log again's chips now agree with each other. A food chip shows its own
+  check only for the entry it logged, and a softer "already in breakfast"
+  check when a repeated meal or day put that food there; a tap on that logs
+  nothing and leaves the other action's confirmation and Undo alone. The meal
+  chip does the same ("already logged") once a day repeat covers it. The day's
+  button stays after a tap, checked, so its Undo outlasts the six-second
+  confirmation. Every Undo, a chip's second tap or the confirmation's, takes
+  back exactly the entries its own tap created, and only those still as
+  logged.
+- Repeats match portions one by one, not foods. Yesterday's two bars at snack
+  time leave one still to come after the first is logged today; a 30 g portion
+  today stands for yesterday's 30 g, not its 60 g; a portion of neither size
+  stands for the nearest. A meal holding more of a food than yesterday's did
+  was eaten differently, and the day's repeat leaves it alone.
+- A new weigh-in's last reading is a placeholder, not a value. Save stays off
+  until a weight is typed, set on the ruler or ±, or picked again with "Same
+  as last · 181.4 lb", which saves at once (Weigh in, Same as last: two taps).
+  Clearing the typed digits with Delete, or putting the keypad away, leaves
+  nothing to save. VoiceOver reads the number as a placeholder from the last
+  reading. The shared keypad is unchanged.
+- Launch is gated end to end: from the process starting (the kernel's start
+  time, so loading the app's code counts) to the first frame drawn with Today
+  and Log again, which the app's Debug build reports to the UI-test fixture.
+  `onAppear` ran before anything was drawn, so the old interval flattered it.
+  To shorten it: a saved session, its saved entries and its workspace open as
+  the root view appears, not in tasks a render each later; the first frame
+  draws Today's first three cards and the rest a frame later; today's workout
+  is worked out for that frame, so Start shows instead of "No workout planned".
+- At the largest text sizes the standard layout puts today's workout right
+  under the shortcuts and Log again, above the ring and macros, which fill a
+  screen there, and the four shortcuts sit two by two instead of four
+  full-width rows. A layout someone chose in Customize keeps its order.
+- CI runs four of Today's undo and navigation tests next to the tap budgets.
