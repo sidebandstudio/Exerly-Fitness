@@ -166,6 +166,49 @@ import Testing
         #expect(nutrition.remaining(breakfast, on: friday) == nil)
     }
 
+    @Test func aSecondPortionOfTheSameFoodIsStillRepeated() throws {
+        let nutrition = try store()
+        let thursday = friday.adding(days: -1)
+        // Two separate bars at snack time yesterday, and lunch.
+        try nutrition.log(Foods.oats, grams: 60, on: thursday, meal: "Snacks")
+        try nutrition.log(Foods.oats, grams: 60, on: thursday, meal: "Snacks")
+        try nutrition.log(Foods.chicken, grams: 150, on: thursday, meal: "Lunch")
+        try nutrition.log(Foods.oats, grams: 60, on: friday, meal: "Snacks")
+
+        let snacks = try #require(nutrition.repeatable("Snacks", for: friday))
+        let rest = try #require(nutrition.remaining(snacks, on: friday), "One of the two bars is still to come")
+        #expect(rest.entries.map(\.grams) == [60])
+        let day = try #require(nutrition.repeatableDay(for: friday))
+        #expect(day.entries.filter { $0.meal == "Snacks" }.count == 1, "The second bar, and lunch")
+        #expect(day.entries.filter { $0.meal == "Lunch" }.count == 1)
+
+        try nutrition.log(Foods.oats, grams: 60, on: friday, meal: "Snacks")
+        #expect(nutrition.remaining(snacks, on: friday) == nil, "Both bars are in")
+        #expect(nutrition.repeatableDay(for: friday)?.entries.map(\.meal) == ["Lunch"])
+        try nutrition.log(Foods.oats, grams: 60, on: friday, meal: "Snacks")
+        #expect(nutrition.repeatableDay(for: friday)?.entries.contains { $0.meal == "Snacks" } != true,
+                "A third bar today means snacks were eaten differently")
+    }
+
+    @Test func aPortionLoggedTodayUsesUpTheMatchingOneFromYesterday() throws {
+        let nutrition = try store()
+        let thursday = friday.adding(days: -1)
+        try nutrition.log(Foods.oats, grams: 60, on: thursday, meal: "Breakfast")
+        try nutrition.log(Foods.oats, grams: 30, on: thursday, meal: "Breakfast")
+        try nutrition.log(Foods.oats, grams: 30, on: friday, meal: "Breakfast")
+        let breakfast = try #require(nutrition.repeatable("Breakfast", for: friday))
+        #expect(nutrition.remaining(breakfast, on: friday)?.entries.map(\.grams) == [60], "The 30 g matches the 30 g")
+        #expect(nutrition.repeatableDay(for: friday)?.entries.map(\.grams) == [60])
+        // A portion matching neither still stands for one of them.
+        let other = try store()
+        try other.log(Foods.oats, grams: 60, on: thursday, meal: "Breakfast")
+        try other.log(Foods.oats, grams: 30, on: thursday, meal: "Breakfast")
+        try other.log(Foods.oats, grams: 45, on: friday, meal: "Breakfast")
+        let again = try #require(other.repeatable("Breakfast", for: friday))
+        #expect(other.remaining(again, on: friday)?.entries.count == 1)
+        #expect(other.repeatableDay(for: friday)?.entries.count == 1)
+    }
+
     @Test func applyingARepeatCopiesItsEntriesOnce() throws {
         let nutrition = try store()
         let thursday = friday.adding(days: -1)

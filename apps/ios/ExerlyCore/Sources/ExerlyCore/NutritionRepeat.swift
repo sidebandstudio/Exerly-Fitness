@@ -105,28 +105,56 @@ extension NutritionStore {
 
     /// The latest day before `date`, within `days`, as far as `date` hasn't
     /// had it yet: all of it on an empty day, then meal by meal. A meal with
-    /// nothing logged gets all of that meal; one holding only foods from it
-    /// (a chip tapped first) gets the rest of them; one with anything else
+    /// nothing logged gets all of that meal; one holding only portions from it
+    /// (a chip tapped first) gets the rest of them; one with anything more
     /// was eaten differently and is left alone. Nil when nothing is left.
     public func repeatableDay(for date: LocalDate, within days: Int = 7) -> MealRepeat? {
         guard var day = repeatable(nil, for: date, within: days) else { return nil }
-        let today = Dictionary(grouping: entries(on: date), by: \.meal).mapValues { Set($0.map(\.food.foodID)) }
-        let earlier = Dictionary(grouping: day.entries, by: \.meal).mapValues { Set($0.map(\.food.foodID)) }
-        day.entries.removeAll { entry in
-            guard let logged = today[entry.meal] else { return false }
-            return !logged.isSubset(of: earlier[entry.meal] ?? []) || logged.contains(entry.food.foodID)
+        let today = Dictionary(grouping: entries(on: date), by: \.meal)
+        let earlier = Dictionary(grouping: day.entries, by: \.meal)
+        var kept = Set<UUID>()
+        for (meal, entries) in earlier {
+            let pairing = Self.pair(entries, with: today[meal] ?? [])
+            if pairing.unpaired == 0 { kept.formUnion(pairing.left.map(\.id)) }
         }
+        day.entries.removeAll { !kept.contains($0.id) }
         return day.entries.isEmpty ? nil : day
     }
 
-    /// What of a repeat isn't on `date` yet: its foods not already logged in
-    /// the same meal there. Nil once all of it is, so a repeat offered before
-    /// one of its foods was logged on its own never logs that food twice.
+    /// What of a repeat isn't on `date` yet, portion by portion: each entry in
+    /// the same meal there stands for one of the repeat's portions of that
+    /// food, so a second bar is still to come after the first. Nil once all
+    /// of it is in, so a repeat offered before one of its foods was logged on
+    /// its own never logs that portion twice.
     public func remaining(_ repeated: MealRepeat, on date: LocalDate) -> MealRepeat? {
-        let logged = Set(entries(on: date).map { [$0.meal, $0.food.foodID] })
+        let today = Dictionary(grouping: entries(on: date), by: \.meal)
+        var left = Set<UUID>()
+        for (meal, entries) in Dictionary(grouping: repeated.entries, by: \.meal) {
+            left.formUnion(Self.pair(entries, with: today[meal] ?? []).left.map(\.id))
+        }
         var rest = repeated
-        rest.entries.removeAll { logged.contains([$0.meal, $0.food.foodID]) }
+        rest.entries.removeAll { !left.contains($0.id) }
         return rest.entries.isEmpty ? nil : rest
+    }
+
+    /// Pairs each of `logged` with one of `earlier`'s portions of the same
+    /// food: the same amount first, then the nearest. `left` is `earlier`'s
+    /// portions without a partner, in order; `unpaired` counts `logged`'s.
+    static func pair(_ earlier: [FoodEntry], with logged: [FoodEntry]) -> (left: [FoodEntry], unpaired: Int) {
+        var left = earlier
+        var rest: [FoodEntry] = []
+        for entry in logged {
+            if let index = left.firstIndex(where: { $0.food.foodID == entry.food.foodID && abs($0.grams - entry.grams) < 0.5 }) {
+                left.remove(at: index)
+            } else { rest.append(entry) }
+        }
+        var unpaired = 0
+        for entry in rest {
+            let nearest = left.indices.filter { left[$0].food.foodID == entry.food.foodID }
+                .min { abs(left[$0].grams - entry.grams) < abs(left[$1].grams - entry.grams) }
+            if let nearest { left.remove(at: nearest) } else { unpaired += 1 }
+        }
+        return (left, unpaired)
     }
 
     /// Logs a repeat's entries on `date` as new entries, all or none.
