@@ -164,6 +164,13 @@ class ReleaseChecksTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 checks.validate_watch({**info, key: value}, "1.0", "2610061200")
 
+    def test_watch_app_has_its_own_privacy_manifest(self):
+        manifest = plistlib.loads((Path(__file__).parents[2] / "ExerlyWatch/PrivacyInfo.xcprivacy").read_bytes())
+        checks.validate_watch_privacy(manifest)
+        for broken in [{**manifest, "NSPrivacyTracking": True}, {**manifest, "NSPrivacyAccessedAPITypes": []}]:
+            with self.assertRaises(ValueError):
+                checks.validate_watch_privacy(broken)
+
     def test_profile_decoding_is_isolated_and_cleans_up_on_rejection(self):
         for rejected in [False, True]:
             calls = []

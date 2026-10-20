@@ -82,6 +82,16 @@ def validate_watch(info, version, build):
         require(bool(info.get(key, "").strip()), f"Missing watch {key}")
 
 
+def validate_watch_privacy(privacy):
+    """The watch app is its own bundle, so it carries its own privacy manifest for its UserDefaults."""
+    require(privacy.get("NSPrivacyTracking") is False, "Watch tracking must be disabled")
+    require(not privacy.get("NSPrivacyTrackingDomains"), "Watch tracking domains are not permitted")
+    reasons = {item.get("NSPrivacyAccessedAPIType"): item.get("NSPrivacyAccessedAPITypeReasons", [])
+               for item in privacy.get("NSPrivacyAccessedAPITypes", [])}
+    require("CA92.1" in reasons.get("NSPrivacyAccessedAPICategoryUserDefaults", []),
+            "Missing watch UserDefaults reason")
+
+
 def validate_watch_signature(entitlements):
     require(entitlements.get("application-identifier") == f"{TEAM}.{WATCH}", "Watch signature identity mismatch")
     require(entitlements.get("com.apple.developer.healthkit") is True, "Signed watch app lacks HealthKit")
@@ -124,6 +134,8 @@ def main():
     watch = app / "Watch/ExerlyWatch.app"
     require(watch.is_dir(), "Watch app missing")
     validate_watch(plistlib.loads((watch / "Info.plist").read_bytes()), args.version, args.build)
+    require((watch / "PrivacyInfo.xcprivacy").is_file(), "Watch privacy manifest missing")
+    validate_watch_privacy(plistlib.loads((watch / "PrivacyInfo.xcprivacy").read_bytes()))
     if not args.unsigned:
         validate_profile(read_profile(app / "embedded.mobileprovision"))
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)

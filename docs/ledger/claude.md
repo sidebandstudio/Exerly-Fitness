@@ -4,14 +4,12 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 
 ## Shipped (internal TestFlight)
 
-- 2610101011: Watch app; nine App Intents and four Control Center controls.
-- 2610101238: native recipes.
-- 2610101740: nutrient goals, pinned nutrients, macros that lead with what's left.
-- 2610102054: fixes from code-blind run 4; actionable reminders; Spotlight.
-- 2610110306: typed amounts in search, package sizes, multi-select copy/move,
-  hidden suggestions, Duplicate food, run 5 fixes.
-- 2610111702: recipe import from a link and sharing as a file; run 6 (iPhone SE)
-  fixes.
+- 2610101011: Watch app; nine App Intents and four Control Center controls. 2610101238: recipes.
+- 2610101740: nutrient goals, pinned nutrients, macros leading with what's left.
+  2610102054: fixes from code-blind run 4; actionable reminders; Spotlight.
+- 2610110306: typed amounts in search, package sizes, multi-select copy/move, hidden
+  suggestions, Duplicate food, run 5 fixes.
+- 2610111702: recipe import from a link and sharing as a file; run 6 (iPhone SE) fixes.
 - This landing, uploaded next:
   - Body (PARITY S06, S07, S09, S10): weight goal with ETA, weekly checkpoints and
     on-track standing, goal line and planned path on the chart; edit and
@@ -28,6 +26,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - Found by the full suite: a preference changed while its screen was still
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
+- claude/ready (not landed): Forgot password by mailed code; delete asks for the password or Apple
+  and offers export; reused refresh token ends its session; privacy per audit. Needs API deploy.
 
 ## Current outcome
 

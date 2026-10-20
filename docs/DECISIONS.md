@@ -1408,3 +1408,12 @@ response never signs anyone out.
   password don't match. Try again, or reset your password.", and a refused
   Apple sign-in says Apple couldn't confirm it.
 
+## 2026-10-20: privacy declarations follow the 2026-10-20 data-flow audit
+
+The manifest adds Search History (not linked: food searches and barcodes go to
+Open Food Facts with no identity, and the server keeps them only in a
+five-minute cache), Other Data Types (linked: age, sex and time zone), and the
+file timestamp reason C617.1 for the label-photo import. The watch app gets its
+own manifest for its UserDefaults, and release_checks.py requires it. Health
+reads and writes that stay in Health or on the device aren't collected data.
+The audit and the label table are in docs/release/privacy-review.md.
