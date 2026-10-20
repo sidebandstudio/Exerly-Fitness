@@ -590,6 +590,52 @@ private func gtin(_ digits: String) -> GTIN { GTIN(digits)! }
         #expect(library.ready.map(\.meal) == ["Lunch", "Dinner"] && library.waiting.isEmpty)
     }
 
+    /// A ready offline scan put on a plate stays until the log that uses it
+    /// saves, in the same transaction; a failed log keeps it.
+    @Test func anOfflineScanIsConsumedOnlyWithTheLogThatUsesIt() async throws {
+        let persistence = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: persistence, now: { clock })
+        let nutrition = try NutritionStore(persistence: persistence)
+        let counter = Counter()
+        _ = await library.resolve(oat, meal: "Lunch", date: day, fetch: fetch(.unavailable, counter: counter))
+        await library.resolveWaiting(fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+        let id = try #require(library.ready.first?.id)
+        library.stage(id, scope: "plate", foodID: food().id)
+        #expect(library.staged(scope: "plate", foods: [food().id]) == [id])
+        #expect(library.staged(scope: "plate", foods: []).isEmpty, "Off the plate, it isn't consumed")
+        #expect(throws: BarcodeLibrary.NotLogged.self) {
+            try library.consume([id]) { throw BarcodeLibrary.NotLogged() }
+        }
+        #expect(library.ready.map(\.id) == [id])
+        #expect(BarcodeLibrary(persistence: persistence, now: { clock }).ready.map(\.id) == [id])
+        let entry = try library.consume([id]) { try nutrition.log(food(), grams: 40, on: day, meal: "Lunch") }
+        #expect(library.ready.isEmpty && library.staged.isEmpty)
+        let reopened = BarcodeLibrary(persistence: persistence, now: { clock })
+        #expect(reopened.ready.isEmpty)
+        #expect(try NutritionStore(persistence: persistence).entries.map(\.id) == [entry.id])
+    }
+
+    /// Discarding or closing a plate leaves its offline scans ready; staging
+    /// is never written, so quitting the app does too.
+    @Test func unstagingOrRelaunchingKeepsAnOfflineScanReady() async throws {
+        let persistence = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: persistence, now: { clock })
+        let counter = Counter()
+        _ = await library.resolve(oat, meal: "Lunch", date: day, fetch: fetch(.unavailable, counter: counter))
+        await library.resolveWaiting(fetch: fetch(.found(food(), attribution: "OFF"), counter: counter))
+        let id = try #require(library.ready.first?.id)
+        library.stage(id, scope: "meal", foodID: food().id)
+        library.stage(UUID(), scope: "meal", foodID: food().id)
+        #expect(library.staged.count == 1, "Only a pending scan can be staged")
+        let relaunched = BarcodeLibrary(persistence: persistence, now: { clock })
+        #expect(relaunched.staged.isEmpty && relaunched.ready.map(\.id) == [id])
+        library.stage(id, scope: "other", foodID: food().id)
+        library.unstage(scope: "meal")
+        #expect(library.staged.count == 1)
+        library.unstage(scope: "other")
+        #expect(library.staged.isEmpty && library.ready.map(\.id) == [id])
+    }
+
     /// A store's own EAN-8 is never looked up, nor answered from a product
     /// another store's code cached; the person's own food for it still is.
     @Test func aStoresOwnCodeAnswersOnlyWithTheirOwnFood() async {

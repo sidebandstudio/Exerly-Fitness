@@ -119,6 +119,21 @@ public final class BarcodeLibrary {
     public private(set) var pending: [Pending] = []
     public private(set) var products: [GTIN: Product] = [:]
     public private(set) var error: String?
+    /// Offline scans put on a plate that isn't logged yet, by scope (the
+    /// scanner's plate, a meal being built) and food. Kept in memory only: the
+    /// durable record stays until a log consumes it, so discarding the plate
+    /// or quitting the app loses nothing.
+    public private(set) var staged: [Pending.ID: Staging] = [:]
+
+    public struct Staging: Hashable, Sendable {
+        public var scope: String
+        public var foodID: String
+    }
+
+    /// Thrown inside `consume` when the log it wraps saved nothing.
+    public struct NotLogged: Error {
+        public init() {}
+    }
 
     @ObservationIgnored private let persistence: TrainingPersistence
     @ObservationIgnored private let now: () -> Date
@@ -229,15 +244,52 @@ public final class BarcodeLibrary {
         record(Scan(gtin: gtin, scannedAt: scannedAt, state: .found))
     }
 
+    // MARK: Staging
+
+    /// An offline scan's food is on a plate in `scope`, not logged yet.
+    public func stage(_ id: Pending.ID, scope: String, foodID: String) {
+        guard pending.contains(where: { $0.id == id }) else { return }
+        staged[id] = Staging(scope: scope, foodID: foodID)
+    }
+
+    /// The plate in `scope` was discarded or closed: its offline scans are
+    /// ready to log again.
+    public func unstage(scope: String) {
+        staged = staged.filter { $0.value.scope != scope }
+    }
+
+    /// The offline scans staged in `scope` whose food is still on the plate.
+    public func staged(scope: String, foods: Set<String>) -> Set<Pending.ID> {
+        Set(staged.filter { $0.value.scope == scope && foods.contains($0.value.foodID) }.keys)
+    }
+
+    /// Runs `log` and removes these offline scans in one transaction, so a
+    /// scan is consumed exactly when the entry that logs it is saved, and is
+    /// kept if the log fails. `log` throws to save nothing.
+    @discardableResult
+    public func consume<T>(_ ids: Set<Pending.ID>, with log: () throws -> T) throws -> T {
+        let remaining = pending.filter { !ids.contains($0.id) }
+        var result: T?
+        try persistence.performAtomically {
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: remaining)), forKey: Self.key)
+            result = try log()
+        }
+        pending = remaining
+        staged = staged.filter { !ids.contains($0.key) }
+        return result!
+    }
+
     /// The person logged or dismissed an offline scan.
     public func acknowledge(_ id: Pending.ID) {
         pending.removeAll { $0.id == id }
+        staged[id] = nil
         save()
     }
 
     /// Dismisses every offline scan that has resolved; waiting ones stay.
     public func dismissResolved() {
         pending.removeAll { $0.state != .waiting }
+        staged = staged.filter { id, _ in pending.contains { $0.id == id } }
         save()
     }
 
@@ -254,6 +306,10 @@ public final class BarcodeLibrary {
         var history: [Scan]
         var products: [Product]
         var pending: [Pending]?
+    }
+
+    private func saved(pending: [Pending]) -> Saved {
+        Saved(history: history, products: products.values.sorted { $0.gtin < $1.gtin }, pending: pending)
     }
 
     /// A code now has a food: its waiting scans are ready.
@@ -275,9 +331,8 @@ public final class BarcodeLibrary {
                 .prefix(products.count - Self.productLimit)
             for product in dropped { products[product.gtin] = nil }
         }
-        let saved = Saved(history: history, products: products.values.sorted { $0.gtin < $1.gtin }, pending: pending)
         do {
-            try persistence.saveValue(try ExerlyJSON.canonical(saved), forKey: Self.key)
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: pending)), forKey: Self.key)
             error = nil
         } catch {
             self.error = "Couldn't save your scan history on this device."
