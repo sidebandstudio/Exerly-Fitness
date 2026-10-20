@@ -42,6 +42,27 @@ import Testing
         #expect(read("2 lemons") == (TypedAmount(2), "lemons"), "Only serving words move")
     }
 
+    /// Review round 1: the drained amount was rounded to 0.1 of the can's unit
+    /// before becoming grams, so a 0.4 kg can drained to 200 g and a 400 g one
+    /// to 240 g. Grams are now exact and only the label is rounded.
+    @Test func aDrainedCanWeighsTheSameWhateverUnitItsSizeIsIn() throws {
+        let beans = Food(name: "Black beans, from canned, no added fat", source: .usda, per100g: NutrientAmounts([.energy: 134]))
+        let cases: [(line: String, label: String)] = [
+            ("1 (400 g) can black beans, drained", "240 g"),
+            ("1 (0.4 kg) can black beans, drained", "0.24 kg"),
+            ("1 (14.11 oz) can black beans, drained", "8.5 oz"),
+            ("1 (0.882 lb) can black beans, drained", "0.53 lb")
+        ]
+        for (line, label) in cases {
+            let size = try #require(IngredientLine(line).size?.grams, "\(line)")
+            let portion = try #require(IngredientLine(line).portion(of: beans), "\(line)")
+            #expect(abs(portion.amount.grams - size * IngredientLine.drainedShare) < 1e-9, "\(line): \(portion.amount.grams) g")
+            #expect(abs(portion.amount.grams - 240) < 0.1, "\(line): \(portion.amount.grams) g")
+            #expect(portion.amount.serving?.name == "1 can, drained (\(label))", "\(line): \(portion.amount.serving?.name ?? "")")
+            #expect(!portion.exact)
+        }
+    }
+
     @Test func aSizeInParenthesesIsEachContainersWeightOrTheWholeAmounts() {
         let can = IngredientLine("1 (15 oz) can black beans, drained and rinsed")
         #expect(can.amount == TypedAmount(1, .serving("can")) && can.food == "black beans")
@@ -58,7 +79,8 @@ import Testing
         // Drained and rinsed: 60 % of the can's 425 g, about 340 kcal rather than 570, to check.
         let one = can.portion(of: beans)
         #expect(can.drained)
-        #expect(one?.amount.serving == Serving("1 can, drained (9 oz)", grams: 9 * USUnits.gramsPerOunce))
+        #expect(one?.amount.serving?.name == "1 can, drained (9 oz)")
+        #expect(one.map { abs($0.amount.grams - 9 * USUnits.gramsPerOunce) < 1e-9 } == true)
         #expect(one?.amount.quantity == 1 && one?.exact == false)
         #expect(one.map { ($0.amount.grams * 1.34).rounded() } == 342)
         let two = IngredientLine("2 (15 oz) cans black beans").portion(of: beans)

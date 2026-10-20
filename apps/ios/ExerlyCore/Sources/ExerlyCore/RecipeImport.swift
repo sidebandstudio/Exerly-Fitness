@@ -151,8 +151,8 @@ public struct IngredientLine: Sendable, Hashable {
                 var word = "each"
                 if case .serving(let named)? = amount?.unit { word = named }
                 let drains = drained && TypedAmount.packages.contains(word)
-                let left = TypedAmount((size.quantity * Self.drainedShare * 10).rounded() / 10, size.unit)
-                let serving = drains ? Serving("1 \(word), drained (\(left.label))", grams: left.grams ?? grams)
+                // Grams from the can's own grams; only the label is rounded, so the unit it's given in doesn't change them.
+                let serving = drains ? Serving("1 \(word), drained (\(size.scaled(by: Self.drainedShare).label))", grams: grams * Self.drainedShare)
                     : Serving("1 \(word) (\(size.label))", grams: grams)
                 return (try? NutritionStore.preview(food, serving: serving, quantity: amount?.quantity ?? 1)).map { ($0, !drains) }
             default:
@@ -182,6 +182,16 @@ extension TypedAmount {
         case .pounds?: quantity * USUnits.gramsPerOunce * 16
         default: nil
         }
+    }
+
+    /// `share` of this weight, to show: whole grams, 0.1 oz, 0.01 kg or lb.
+    func scaled(by share: Double) -> TypedAmount {
+        let step: Double = switch unit {
+        case .kilograms?, .pounds?: 0.01
+        case .ounces?: 0.1
+        default: 1
+        }
+        return TypedAmount(((quantity * share / step).rounded() * step * 100).rounded() / 100, unit)
     }
 
     /// A weight as a serving's name gives it: "15 oz", "400 g".
