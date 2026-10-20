@@ -58,9 +58,10 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         app.typeText("\n")
         XCTAssertTrue(app.alerts["Delete this account?"].waitForExistence(timeout: 10))
         tap(app.alerts.buttons["Delete account"], in: app)
+        // At the largest text the error row starts below the fold.
         let wrong = app.staticTexts["That password is incorrect."]
-        XCTAssertTrue(wrong.waitForExistence(timeout: 15))
         reveal(wrong, in: app)
+        XCTAssertTrue(wrong.exists || wrong.waitForExistence(timeout: 15))
         capture(app, "ready-delete-wrong-password")
         let alive = try await status("/api/me", token: person.token)
         XCTAssertEqual(alive, 200, "a wrong password deletes nothing and keeps the session")
@@ -76,6 +77,10 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         capture(app, "ready-delete-confirm")
         tap(app.alerts.buttons["Delete account"], in: app)
         XCTAssertTrue(app.buttons["I already have an account"].waitForExistence(timeout: 30))
+        let leaving = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                                object: app.navigationBars["Delete account"])
+        XCTAssertEqual(XCTWaiter().wait(for: [leaving], timeout: 10), .completed)
+        waitUntilStill(app.buttons["I already have an account"])
         capture(app, "ready-delete-done")
         let gone = try await status("/api/export", token: person.token)
         XCTAssertEqual(gone, 401)
@@ -106,7 +111,8 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         replace(app.secureTextFields["New password"], with: newPassword, in: app)
         app.typeText("\n")
         let refused = app.staticTexts["reset.error"]
-        XCTAssertTrue(refused.waitForExistence(timeout: 15))
+        reveal(refused, in: app)
+        XCTAssertTrue(refused.exists || refused.waitForExistence(timeout: 15))
         XCTAssertTrue(refused.label.hasPrefix("That code is wrong or has expired."), refused.label)
         capture(app, "ready-reset-wrong-code")
 
