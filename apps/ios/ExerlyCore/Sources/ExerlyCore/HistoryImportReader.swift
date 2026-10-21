@@ -149,7 +149,7 @@ public enum HistoryImportReader {
         case .exerly(let file):
             try exerly(file, into: &plan, hosts: hosts)
         }
-        try planMeasurements(parsed, into: &plan, store: measurements)
+        try planMeasurements(parsed, into: &plan, store: measurements, records: records)
         return plan
     }
 
@@ -284,7 +284,8 @@ public enum HistoryImportReader {
 
     /// The file's body measurements, less those the account already has.
     @MainActor
-    private static func planMeasurements(_ parsed: Parsed, into plan: inout HistoryImportPlan, store: ImportedMeasurementStore?) throws {
+    private static func planMeasurements(_ parsed: Parsed, into plan: inout HistoryImportPlan, store: ImportedMeasurementStore?,
+                                         records: [ImportRecord]) throws {
         let all: [ImportedMeasurement] = switch parsed {
         case .macroFactor(let export, _): export.measurements
         case .measurements(let result): result.measurements
@@ -295,9 +296,36 @@ public enum HistoryImportReader {
             plan.lost.append("\(all.count) body \(all.count == 1 ? "measurement" : "measurements"): sign in to import them.")
             return
         }
-        let have = store.existing(all.map(\.clientID))
-        plan.measurements = all.filter { !have.contains($0.clientID) }
-        plan.lines.append(ImportLine(key: "measurements", title: "Body measurements", new: plan.measurements.count, existing: have.count))
+        let have = store.values(all.map(\.clientID))
+        // What the latest import that still stands saved for each.
+        var saved: [String: Double] = [:]
+        for record in records.reversed() where record.undoneAt == nil {
+            for measurement in record.measurements ?? [] { saved[measurement.clientID] = measurement.value }
+            for change in record.measurementChanges ?? [] { saved[change.measurement.clientID] = change.measurement.value }
+        }
+        let same = { (a: Double, b: Double) in abs(a - b) < 0.000_001 }
+        var existing = 0, kept = 0
+        for measurement in all {
+            guard let value = have[measurement.clientID] else {
+                plan.measurements.append(measurement)
+                continue
+            }
+            if same(value, measurement.value) {
+                existing += 1
+            } else if let imported = saved[measurement.clientID], same(value, imported) {
+                // Corrected in the file and untouched here since the last import.
+                plan.measurementChanges.append(ImportedMeasurementChange(measurement: measurement, from: value))
+            } else {
+                existing += 1
+                kept += 1
+            }
+        }
+        plan.lines.append(ImportLine(key: "measurements", title: "Body measurements", new: plan.measurements.count, existing: existing,
+                                     updated: plan.measurementChanges.count))
+        if kept > 0 {
+            plan.lost.append(kept == 1 ? "1 body measurement you changed in Exerly since the last import is kept as it is."
+                             : "\(kept) body measurements you changed in Exerly since the last import are kept as they are.")
+        }
         if plan.dateRange == nil, let first = all.map(\.date).min(), let last = all.map(\.date).max() { plan.dateRange = first...last }
     }
 

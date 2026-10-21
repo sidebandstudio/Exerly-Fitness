@@ -467,11 +467,27 @@ import Testing
         var saved: [String: ImportedMeasurement] = [:]
         var failing = false
 
-        func existing(_ clientIDs: [String]) -> Set<String> { Set(clientIDs.filter { saved[$0] != nil }) }
+        func values(_ clientIDs: [String]) -> [String: Double] {
+            Dictionary(uniqueKeysWithValues: clientIDs.compactMap { id in saved[id].map { (id, $0.value) } })
+        }
 
         func add(_ measurements: [ImportedMeasurement]) throws {
             if failing { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
             for measurement in measurements { saved[measurement.clientID] = measurement }
+        }
+
+        func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int) {
+            if failing { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
+            var updated = 0, kept = 0
+            for change in changes {
+                if saved[change.measurement.clientID]?.value == change.from {
+                    saved[change.measurement.clientID] = change.measurement
+                    updated += 1
+                } else {
+                    kept += 1
+                }
+            }
+            return (updated, kept)
         }
 
         func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int) {
@@ -564,6 +580,36 @@ import Testing
         try importer.commit(preview)
         let weight = try #require(nutrition.weights.first)
         #expect(weight.weight == .kg(80.2) && weight.bodyFat == 18.5 && weight.source == .hevy && weight.date == october1)
+    }
+
+    @Test func aMeasurementCorrectedInTheFileUpdatesUnlessChangedInExerly() throws {
+        let (persistence, nutrition, training, _) = try stores()
+        let store = FakeMeasurements()
+        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: { Fixture.instant() })
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds)
+        let preview = { (text: String) in
+            let parsed = try HistoryImportReader.read([("measurement_data.csv", Data(text.utf8))], options: options, library: self.library)
+            return try HistoryImportReader.plan(parsed, files: ["measurement_data.csv"], options: options, hosts: [training, nutrition],
+                                                records: try importer.records(), measurements: store)
+        }
+        try importer.commit(try preview(Self.hevyMeasurements))
+        let neck = try #require(store.saved.values.first { $0.site == .neck })
+        var chest = try #require(store.saved.values.first { $0.site == .chest })
+        chest.value = 101
+        store.saved[chest.clientID] = chest
+
+        // Neck and chest corrected in Hevy; the chest was also changed in Exerly.
+        let corrected = Self.hevyMeasurements.replacingOccurrences(of: ",38,118,102,", with: ",39,118,103,")
+        let plan = try preview(corrected)
+        let line = try #require(plan.lines.first { $0.key == "measurements" })
+        #expect(line.new == 0 && line.updated == 1 && line.existing == 7)
+        #expect(plan.lost.contains("1 body measurement you changed in Exerly since the last import is kept as it is."))
+        let record = try importer.commit(plan)
+        #expect(store.saved[neck.clientID]?.value == 39, "Untouched since the last import, so updated")
+        #expect(store.saved[chest.clientID]?.value == 101, "Changed in Exerly, so kept")
+
+        try importer.undo(record.id)
+        #expect(store.saved[neck.clientID]?.value == 38, "Undo puts the earlier import's value back")
     }
 
     @Test func strongMeasurementFilesReadTheirOwnUnits() throws {

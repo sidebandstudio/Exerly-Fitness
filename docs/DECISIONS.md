@@ -1792,3 +1792,47 @@ Supersedes parts of the entry above, after an independent review.
 - When the account can't make the export, the phone's copy is offered with
   the reason before anything is shared, instead of a note behind the share
   sheet.
+
+## 2026-10-21: Restores of older tables after review round 2
+
+- A restore records what it added in `restores` (migration 0009): each row's
+  table, ID and a SHA-256 of the row as stored. `POST /v1/import` returns
+  its `restore_id`; `POST /v1/import/undo` takes that ID, works only for the
+  account that made it and only once (404 for another account's, 409 the
+  second time), refuses any row the restore didn't add, and removes a row
+  only while its fingerprint matches. That covers the tables with no
+  revision (goals, program, check-ins, library foods, recipes, workout
+  templates, target versions, coach plans) the same way as the rest. Tables
+  the phone syncs get a deletion in its feed; soft-deleted tables keep their
+  tombstones. Goals and the older program aren't in the feed, so they have
+  none to leave.
+- Importing again after Undo brings back what that Undo removed, in place
+  and a revision past its deletion. A row the person deleted stays deleted.
+- Matching: weigh-ins, water, day notes and check-ins on the day alone, so
+  a day the account has keeps its own row and counts as kept. Deleted rows
+  count, since their unique keys still hold. Food, measurements, activities
+  and sleep without a client ID match on what they are (day, name or type,
+  amount, time) and get a new client ID. Target versions match on effective
+  date, creation time, reason and targets, since several can share a day.
+- Activities and sleep get `identity_key` rebuilt for the importing account.
+- Every restored row goes through its table's route checks (the routes now
+  export them), a client ID must be a UUID, a missing revision becomes 1,
+  and a row that fails is listed under `skipped` with its table and reason
+  instead of being stored. The done screen lists them.
+- Import and Undo are limited to 10 a minute per account, each separately,
+  after sign-in. Per address, every account behind App Platform's ingress
+  shared one limit.
+- Restores insert a few hundred rows per statement and append their feed
+  changes in one statement. At three years of synthetic data (11,315
+  documents, 14,158 older rows, 7.5 MB) a restore took 185 s one row at a
+  time and 5.2 s batched, and Undo took 35 s and 3.2 s, on devbox1 at a load
+  average of about 250.
+- Workouts from Hevy, Strong and MacroFactor are known by the start minute
+  as the file writes it, not the instant it means in the account's zone, so
+  re-reading a file after a move updates rather than duplicates. A workout
+  the account already has keeps the zone it was saved in; only new ones
+  take the current zone.
+- A body measurement corrected in the source app updates the one an earlier
+  import saved, while it still has that import's value. If it was changed in
+  Exerly since, it's kept and the preview says so. Undo puts the earlier
+  value back.

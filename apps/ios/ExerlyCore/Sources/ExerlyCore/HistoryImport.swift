@@ -113,9 +113,11 @@ public struct HistoryImportPlan: Sendable {
     public var serverTables: Data?
     /// Body measurements the account doesn't have yet, for its measurement log.
     public var measurements: [ImportedMeasurement] = []
+    /// Measurements an earlier import saved whose value the file corrects.
+    public var measurementChanges: [ImportedMeasurementChange] = []
 
     /// Nothing to save: the file is empty or already in Exerly.
-    public var isEmpty: Bool { writes.isEmpty && serverTables == nil && measurements.isEmpty }
+    public var isEmpty: Bool { writes.isEmpty && serverTables == nil && measurements.isEmpty && measurementChanges.isEmpty }
     /// What the import adds or updates, counting workouts rather than the
     /// exercises and sets inside them.
     public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new + $1.updated } }
@@ -171,6 +173,8 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
     public var serverSkippedCount: Int?
     /// Body measurements the import added to the measurement log.
     public var measurements: [ImportedMeasurement]?
+    /// Measurements whose value it changed, with the value each had.
+    public var measurementChanges: [ImportedMeasurementChange]?
     public var undoneAt: Date?
 
     /// Documents the import added, rather than changed or removed.
@@ -261,12 +265,14 @@ public struct HistoryImporter {
         }
         var record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
-        let have = measurementStore?.existing(plan.measurements.map(\.clientID)) ?? []
-        let measurements = plan.measurements.filter { !have.contains($0.clientID) }
-        if !measurements.isEmpty, measurementStore == nil { throw ImportError.noStore("measurement") }
+        let have = measurementStore?.values(plan.measurements.map(\.clientID)) ?? [:]
+        let measurements = plan.measurements.filter { have[$0.clientID] == nil }
+        let corrections = plan.measurementChanges
+        if !measurements.isEmpty || !corrections.isEmpty, measurementStore == nil { throw ImportError.noStore("measurement") }
         // Nothing new, as when a file is imported again: nothing to save or undo.
-        guard !changes.isEmpty || !measurements.isEmpty else { return record }
+        guard !changes.isEmpty || !measurements.isEmpty || !corrections.isEmpty else { return record }
         if !measurements.isEmpty { record.measurements = measurements }
+        if !corrections.isEmpty { record.measurementChanges = corrections }
         // Where the documents came from, saved and undone with them. A restored
         // export brings its own provenance, so it adds none.
         if plan.source != .exerly, let store = hosts.lazy.compactMap({ $0 as? ProvenanceStore }).first {
@@ -282,9 +288,16 @@ public struct HistoryImporter {
         // again if the documents can't be, so it's all or nothing.
         if !measurements.isEmpty { try measurementStore?.add(measurements) }
         do {
+            if !corrections.isEmpty { _ = try measurementStore?.update(corrections) }
+        } catch {
+            if !measurements.isEmpty { _ = try? measurementStore?.remove(measurements) }
+            throw error
+        }
+        do {
             try apply(batches, saving: record)
         } catch {
             if !measurements.isEmpty { _ = try? measurementStore?.remove(measurements) }
+            if !corrections.isEmpty { _ = try? measurementStore?.update(corrections.map(\.reversed)) }
             throw error
         }
         return record
@@ -395,11 +408,21 @@ public struct HistoryImporter {
             result.kept += outcome.kept
             removed = measurements
         }
+        // A corrected value goes back to the earlier import's, unless changed since.
+        var reverted: [ImportedMeasurementChange] = []
+        if let corrections = record.measurementChanges, !corrections.isEmpty {
+            guard let measurementStore else { throw ImportError.noStore("measurement") }
+            reverted = corrections.map(\.reversed)
+            let outcome = try measurementStore.update(reverted)
+            result.undone += outcome.updated
+            result.kept += outcome.kept
+        }
         do {
             try apply(batches, saving: record)
         } catch {
             // Put the measurements back, so nothing is half undone.
-            if !removed.isEmpty { try? measurementStore?.add(removed.filter { !(measurementStore?.existing([$0.clientID]).isEmpty == false) }) }
+            if !removed.isEmpty { try? measurementStore?.add(removed.filter { measurementStore?.values([$0.clientID]).isEmpty == true }) }
+            if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
             throw error
         }
         return result

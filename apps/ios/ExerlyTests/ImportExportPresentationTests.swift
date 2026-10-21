@@ -66,7 +66,7 @@ final class ImportExportPresentationTests: XCTestCase {
         let waist = ImportedMeasurement(site: .waist, value: 82.5, date: date, source: .macroFactor)
         let fat = ImportedMeasurement(site: .bodyFat, value: 18, date: date, source: .macroFactor)
         try log.add([waist, fat])
-        XCTAssertEqual(log.existing([waist.clientID, fat.clientID, "other"]), [waist.clientID, fat.clientID])
+        XCTAssertEqual(log.values([waist.clientID, fat.clientID, "other"]), [waist.clientID: 82.5, fat.clientID: 18])
         let rows = try engine.pendingExportRows().filter { $0.table == "measurements" }
         XCTAssertEqual(Set(rows.map(\.clientID)), [waist.clientID, fat.clientID])
         let row = try XCTUnwrap(rows.first { $0.clientID == waist.clientID }?.row)
@@ -74,12 +74,18 @@ final class ImportExportPresentationTests: XCTestCase {
         XCTAssertEqual(json["source"] as? String, "imported")
         XCTAssertEqual(json["note"] as? String, "From MacroFactor")
 
+        // A value corrected in the source app updates the log while it's as imported.
         var corrected = waist
         corrected.value = 83
-        let outcome = try log.remove([corrected, fat])
+        let change = ImportedMeasurementChange(measurement: corrected, from: 82.5)
+        XCTAssertEqual(try log.update([change]).updated, 1)
+        XCTAssertEqual(log.values([waist.clientID]), [waist.clientID: 83])
+        XCTAssertEqual(try log.update([change]).kept, 1, "No longer 82.5, so it's kept")
+
+        let outcome = try log.remove([waist, fat])
         XCTAssertEqual(outcome.removed, 1)
         XCTAssertEqual(outcome.kept, 1, "The waist differs from what's in the log, so it's kept")
-        XCTAssertEqual(log.existing([waist.clientID, fat.clientID]), [waist.clientID])
+        XCTAssertEqual(log.values([waist.clientID, fat.clientID]), [waist.clientID: 83])
     }
 
     func testExportFilesAreWrittenForSharingAndRemovedAfter() throws {

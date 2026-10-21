@@ -4,12 +4,10 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 
 ## Shipped (internal TestFlight)
 
-- 2610101011: Watch app; nine App Intents and four Control Center controls. 2610101238: recipes.
-- 2610101740: nutrient goals, pinned nutrients, macros leading with what's left.
-  2610102054: fixes from code-blind run 4; actionable reminders; Spotlight.
-- 2610110306: typed amounts in search, package sizes, multi-select copy/move, hidden
-  suggestions, Duplicate food, run 5 fixes.
-- 2610111702: recipe import from a link and sharing as a file; run 6 (iPhone SE) fixes.
+- 2610101011: Watch app, App Intents, controls. 2610101238: recipes. 2610101740: nutrient goals,
+  pinned nutrients. 2610102054: code-blind run 4 fixes; actionable reminders; Spotlight.
+- 2610110306: typed amounts, package sizes, multi-select copy/move, hidden suggestions,
+  Duplicate food. 2610111702: recipe import from a link and as a file; runs 5–6 fixes.
 - This landing, uploaded next:
   - Body (PARITY S06, S07, S09, S10): weight goal with ETA, weekly checkpoints and
     on-track standing, goal line and planned path on the chart; edit and
@@ -27,14 +25,14 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
-    measurements; loss preview, remapping, Undo; full export, reviewed. Synthetic files only.
+    measurements; preview, Undo, full export. Review 2 fixed: restores (validated, per-account
+    Undo record, 3 years in 5 s), workouts after a move, corrected measurements. Synthetic only.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 
 ## Current outcome
 
-1 and 2 are done for every primary screen. Working on 3 (depth past MacroFactor) and
-4 (Apple integration).
+1 and 2 are done for every primary screen. Working on 3 (depth past MacroFactor) and 4.
 
 ## Next three steps
 

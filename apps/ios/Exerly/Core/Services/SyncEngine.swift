@@ -300,10 +300,40 @@ final class SyncEngine: ObservableObject {
 
     // MARK: Imported measurements
 
-    /// Which of these client IDs are measurements the account has, deleted ones aside.
-    func measurementClientIDs(_ clientIDs: [String]) throws -> Set<String> {
+    /// The values of the measurements the account has with these client IDs, deleted ones aside.
+    func measurementValues(_ clientIDs: [String]) throws -> [String: Double] {
         let wanted = Set(clientIDs)
-        return Set(try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned && wanted.contains($0.entityID) }.map(\.entityID))
+        var values: [String: Double] = [:]
+        for resource in try ownedResources() where resource.kind == "measurement" && !resource.tombstoned && wanted.contains(resource.entityID) {
+            values[resource.entityID] = (try? object(resource.payload))?["value"] as? Double
+        }
+        return values
+    }
+
+    /// Changes measurements an import saved to new values, all or none, each
+    /// only while it still has the value it's changed from.
+    func updateImportedMeasurements(_ changes: [(clientID: String, from: Double, request: BodyMeasurementRequest)]) throws
+        -> (updated: Int, kept: Int) {
+        guard let context else { throw APIError.unauthorized }
+        var updated = 0, kept = 0
+        let resources = try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned }
+        do {
+            for change in changes {
+                guard let resource = resources.first(where: { $0.entityID == change.clientID }) else { continue }
+                let current = try? JSONDecoder().decode(BodyMeasurementDTO.self, from: resource.payload)
+                guard let current, abs(current.value - change.from) < 0.000_001 else {
+                    kept += 1
+                    continue
+                }
+                try saveMeasurement(change.request, editing: current, commit: false)
+                updated += 1
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+        return (updated, kept)
     }
 
     /// Saves measurements with the client IDs an import chose: all or none.

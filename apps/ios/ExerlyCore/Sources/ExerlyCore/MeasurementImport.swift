@@ -2,7 +2,7 @@ import Foundation
 
 /// A body measurement from another app's export, for the account's
 /// measurements. Its ID comes from the source, date and site, so importing
-/// the file again adds nothing.
+/// the file again adds nothing, and a value corrected in the file updates it.
 public struct ImportedMeasurement: Sendable, Codable, Hashable {
     /// Lowercase, as the app's measurements use them.
     public var clientID: String
@@ -22,15 +22,37 @@ public struct ImportedMeasurement: Sendable, Codable, Hashable {
     }
 }
 
+/// A measurement an import changes to the file's value, from the value it had.
+public struct ImportedMeasurementChange: Sendable, Codable, Hashable {
+    /// The measurement with its new value.
+    public var measurement: ImportedMeasurement
+    public var from: Double
+
+    public init(measurement: ImportedMeasurement, from: Double) {
+        self.measurement = measurement
+        self.from = from
+    }
+
+    /// The change that puts the earlier value back.
+    var reversed: ImportedMeasurementChange {
+        var earlier = measurement
+        earlier.value = from
+        return ImportedMeasurementChange(measurement: earlier, from: measurement.value)
+    }
+}
+
 /// Where imported measurements are kept: the app's measurement log, which
 /// isn't in the account's document database. `HistoryImporter` saves to it
 /// alongside the documents, all or nothing, and undoes it with them.
 @MainActor
 public protocol ImportedMeasurementStore: AnyObject {
-    /// Which of these the account already has.
-    func existing(_ clientIDs: [String]) -> Set<String>
+    /// The values of those of these the account already has, by client ID.
+    func values(_ clientIDs: [String]) -> [String: Double]
     /// Saves all of them or, on any error, none.
     func add(_ measurements: [ImportedMeasurement]) throws
+    /// Changes each to its new value while it still has the value it's changed
+    /// from, all or none; one changed since is kept.
+    func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int)
     /// Removes those still as imported, all or none, and keeps any changed since.
     func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int)
 }

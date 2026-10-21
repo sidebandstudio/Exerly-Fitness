@@ -15,15 +15,19 @@ final class ImportedMeasurementLog: ImportedMeasurementStore {
         self.sync = sync
     }
 
-    func existing(_ clientIDs: [String]) -> Set<String> { (try? sync.measurementClientIDs(clientIDs)) ?? [] }
+    func values(_ clientIDs: [String]) -> [String: Double] { (try? sync.measurementValues(clientIDs)) ?? [:] }
 
     func add(_ measurements: [ImportedMeasurement]) throws {
-        try sync.saveImportedMeasurements(measurements.map { measurement in
-            (measurement.clientID, BodyMeasurementRequest(type: measurement.site.rawValue, value: measurement.value,
-                                                          unit: measurement.site == .bodyFat ? "%" : "cm",
-                                                          entry_date: measurement.date.description,
-                                                          note: "From \(measurement.source.name)", source: "imported"))
-        })
+        try sync.saveImportedMeasurements(measurements.map { ($0.clientID, Self.request($0)) })
+    }
+
+    func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int) {
+        try sync.updateImportedMeasurements(changes.map { ($0.measurement.clientID, $0.from, Self.request($0.measurement)) })
+    }
+
+    private static func request(_ measurement: ImportedMeasurement) -> BodyMeasurementRequest {
+        BodyMeasurementRequest(type: measurement.site.rawValue, value: measurement.value, unit: measurement.site == .bodyFat ? "%" : "cm",
+                               entry_date: measurement.date.description, note: "From \(measurement.source.name)", source: "imported")
     }
 
     func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int) {
