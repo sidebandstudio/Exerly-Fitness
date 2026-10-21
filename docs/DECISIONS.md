@@ -2228,3 +2228,43 @@ again down after launch had reported its place. The first frame now draws the
 first three cards and every card down to the last logging tool.
 LaunchToLoggingUITests launches that order too: under the earlier rule, none of
 its five launches reported Log again where it ended up.
+## 2026-10-21: Two devices' changes to one record merge by field, and real conflicts wait for the person
+
+PARITY I03 and N08. Foods, entries, weigh-ins, plans, programs, gyms and metrics merged as
+whole values, so when two devices changed one record before syncing, the side that synced
+second kept its whole version and the other edit vanished without a word. "Deleted here,
+changed there" restored the record, which logged an undone scan twice.
+
+Now every Core-synced kind merges three ways by top-level field against the version both
+last agreed on (`Merge.fields`; sessions keep their set-by-set merge and days their own). An
+entry's grams, serving, quantity and amountChanged merge as one amount, and a weigh-in's
+time and day as one, so a merge never pairs one device's grams with the other's serving
+count. Edits to different fields combine silently. When both changed one field differently,
+or one deleted what the other changed, `SyncEngine.receive` keeps this device's value, or
+keeps the record deleted, and writes a `SyncConflict` with the base and both versions in the
+same transaction. A deleted record never comes back on its own, in either direction: a
+deletion stands until the person brings a version back. The one exception is the workout in
+progress, which isn't taken away mid-session; its conflict is still recorded. Inside a
+session a set edited on one side and deleted on the other stays, as before, and is reported.
+
+Conflicts are documents of kind `sync_conflict`, stored with the account's data and synced
+like the rest, so every device sees them, they survive a relaunch, and an account never sees
+another's. Both devices may change one at once; the later `changedAt` wins, which is safe
+because a resolution's effect lives in the record it wrote, not in the conflict. The server
+accepts the kind with a light check; an older server's 400 leaves the conflict on the device
+for the next sync instead of failing sync. A device is named only by its kind ("iPhone") and
+a random per-account ID, never its user-given name; the other side is "Another device",
+since documents don't say who wrote them, with the server's `updated_at` as its time.
+
+Resolving sets the conflicting fields to the chosen version by merging it into the current
+record with that side preferred, so later edits to other fields stay. Keep both is offered for
+entries and weigh-ins, where it means two records. Undo, for the last resolution this session,
+writes the records back and reopens the conflict. When a conflict would bring back an entry
+that barcode Undo removed, `ScanConflictEffects` keeps the scan logged once: if the scan was
+logged again, that entry takes the other device's changes instead; if it is pending, bringing
+the entry back logs it. `BarcodeLibrary.undo` now also keeps the scans it put back, by entry,
+under `barcode_library.undone.v1`.
+
+Today shows "Needs a look" with a count while any conflict is open; the review lists each with
+both versions side by side and one-tap choices. Resolved conflicts are kept, not pruned, for
+now: they are rare and small.

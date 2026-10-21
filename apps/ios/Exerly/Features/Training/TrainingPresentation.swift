@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import ExerlyCore
 import Combine
 
@@ -16,6 +17,8 @@ final class TrainingWorkspace: ObservableObject {
     /// Barcodes this account resolved, scanned, or scanned offline.
     let barcodes: BarcodeLibrary
     let agent: AgentStore
+    /// What two devices changed at once, kept for review.
+    let conflicts: SyncConflictStore
     let entryChecks: TrainingEntryChecks
     private let persistence: SQLiteTrainingPersistence
     @Published private(set) var sync: ExerlyCore.SyncEngine?
@@ -45,6 +48,9 @@ final class TrainingWorkspace: ObservableObject {
         provenance = try ProvenanceStore(persistence: persistence)
         barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
+        conflicts = SyncConflictStore(state: persistence, hosts: [store, programs, nutrition, gyms, agent],
+                                      deviceName: UIDevice.current.model)
+        conflicts.effects = ScanConflictEffects(library: barcodes, store: nutrition)
         entryChecks = TrainingEntryChecks(training: store, agent: agent, accountID: accountID)
         unreadableCount = (stored?.unreadableRows ?? []).count + persistence.unreadableRows.count
         if let api { resumeSync(api: api) }
@@ -70,7 +76,7 @@ final class TrainingWorkspace: ObservableObject {
     func resumeSync(api: AccountAPI) {
         guard api.accountID == accountID, !persistence.isClosed else { return }
         accountAPI = api
-        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api)
+        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api, conflicts: conflicts)
     }
 
     func synchronize() async {

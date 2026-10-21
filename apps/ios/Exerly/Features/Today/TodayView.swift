@@ -213,6 +213,7 @@ struct TodayView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Review changes")
                 }
+                ConflictBadgeRow(workspace: workspace, unit: unit, timeZone: timeZone)
                 // The cards in the person's order. By default the logging tools come
                 // first: under the ring, a check-in or a pinned nutrient put them
                 // behind an SE's tab bar (run 6). "Log again" follows the ring, or
