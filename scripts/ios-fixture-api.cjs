@@ -17,6 +17,21 @@ const { start: startCluster } = require('../apps/api/tests/helpers/cluster');
 const recipePages = require('../apps/api/lib/recipePages');
 const mail = require('../apps/api/lib/mail');
 const passwordReset = require('../apps/api/lib/passwordReset');
+const apple = require('../apps/api/lib/apple');
+// Deleting an account connected to Apple revokes Apple's authorization when
+// that's configured. With appleRevocation on, the fixture claims it is and
+// records the codes instead of calling Apple.
+const appleRevocations = [];
+apple.revokeAuthorizationCode = async (code) => {
+  if (code !== 'synthetic-apple-code') throw new Error('Apple refused the code');
+  appleRevocations.push(code);
+};
+function setAppleRevocation(on) {
+  for (const key of ['APPLE_TEAM_ID', 'APPLE_KEY_ID', 'APPLE_PRIVATE_KEY']) {
+    if (on) process.env[key] = 'isolated-simulator';
+    else delete process.env[key];
+  }
+}
 // Synthetic recipe pages for import, since the simulator can't reach real sites.
 // One line names a food the generic table doesn't have, so it's left to resolve.
 const syntheticRecipePages = {
@@ -145,6 +160,20 @@ providers.lookupBarcode = async (identity) => ({
           await store.remove('goals', { email });
         });
       }
+      if (req.body.linkAppleEmail) {
+        const email = String(req.body.linkAppleEmail);
+        if (!email.endsWith('@exerly.test')) return res.sendStatus(400);
+        const user = await store.findOne('users', { email });
+        if (!user) return res.sendStatus(404);
+        await store.insert('account_identities', {
+          account_id: user.id,
+          provider: 'apple',
+          subject: `001234.${user.id}.0001`,
+          email: null,
+          created_at: new Date(),
+        });
+      }
+      setAppleRevocation(req.body.appleRevocation === true);
       offline = req.body.offline === true;
       disconnect = req.body.disconnect === true;
       dropSetupAcknowledgement = req.body.dropSetupAcknowledgement === true;
@@ -158,6 +187,10 @@ providers.lookupBarcode = async (identity) => ({
     }
   });
   app.get('/__test/ready', (_req, res) => res.json({ isolated: true }));
+  app.get('/__test/apple-revocations', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    res.json({ codes: appleRevocations });
+  });
   // Read by the API's own fetcher, which sends no fixture header; "plain" has no recipe data.
   app.get('/__test/recipe-pages/:slug', (req, res) => {
     const recipe = syntheticRecipePages[req.params.slug];

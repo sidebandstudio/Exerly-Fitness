@@ -26,8 +26,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - Found by the full suite: a preference changed while its screen was still
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
-- claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review round 1
-  fixed (session alone can't add Apple, a token or delete). Needs round 2, API deploy, then an app update.
+- claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
+  1-2 fixed (shared guess budget, password+Apple delete). Needs round 3, API deploy, then an app update.
 
 ## Current outcome
 

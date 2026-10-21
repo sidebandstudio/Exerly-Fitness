@@ -21,8 +21,11 @@ public protocol SessionTransport: Sendable {
 /// agent token is created. A password account always uses `.password`, even
 /// with Apple connected; an account without one uses `.apple`.
 public enum AccountConfirmation: Sendable, Equatable {
-    /// The account's password.
-    case password(String)
+    /// The account's password. When the account also has Apple connected and
+    /// the server revokes Apple's authorization on deletion, deleting needs
+    /// the authorization code of a fresh Sign in with Apple as well; the
+    /// server asks with `appleReauthorizationRequired`.
+    case password(String, authorizationCode: String? = nil)
     /// A Sign in with Apple authorization from moments ago, as an Apple ID the
     /// account already has: its identity token and raw nonce, and its
     /// authorization code, with which the server revokes Apple's authorization
@@ -31,14 +34,18 @@ public enum AccountConfirmation: Sendable, Equatable {
 
     var fields: [String: Any] {
         switch self {
-        case .password(let password): ["password": password]
+        case .password(let password, _): ["password": password]
         case let .apple(identityToken, rawNonce, _): ["identityToken": identityToken, "nonce": rawNonce]
         }
     }
 
     var body: [String: Any] {
         var body = fields.merging(["confirm": true]) { current, _ in current }
-        if case .apple(_, _, let authorizationCode?) = self { body["appleAuthorizationCode"] = authorizationCode }
+        switch self {
+        case .password(_, let authorizationCode?), .apple(_, _, let authorizationCode?):
+            body["appleAuthorizationCode"] = authorizationCode
+        default: break
+        }
         return body
     }
 
@@ -46,7 +53,7 @@ public enum AccountConfirmation: Sendable, Equatable {
     /// confirmation travels as `currentIdentityToken`.
     var linkFields: [String: Any] {
         switch self {
-        case .password(let password): ["password": password]
+        case .password(let password, _): ["password": password]
         case let .apple(identityToken, rawNonce, _): ["currentIdentityToken": identityToken, "currentNonce": rawNonce]
         }
     }

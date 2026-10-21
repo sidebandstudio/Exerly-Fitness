@@ -16,7 +16,7 @@ struct ChangePasswordView: View {
     var body: some View {
         NavigationStack {
             ExScreen {
-                Text("Use at least 8 characters, and a password you don't use anywhere else.")
+                Text("Use at least 8 characters, and a password you don't use anywhere else. Changing it signs out every device and disconnects agents you connected.")
                     .font(.exBody).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: ExSpacing.small) {
@@ -36,7 +36,9 @@ struct ChangePasswordView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if showSuccess {
-                    Label("Password changed", systemImage: "checkmark.circle.fill").font(.exLabel).foregroundStyle(Color.exSuccess)
+                    Label("Password changed. Every device is signed out, and agents you connected are disconnected.",
+                          systemImage: "checkmark.circle.fill").font(.exLabel).foregroundStyle(Color.exSuccess)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Button {
                     Task { await changePassword() }

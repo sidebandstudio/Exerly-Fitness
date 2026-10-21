@@ -1481,3 +1481,24 @@ Security review round 2.
   email provider Ali hasn't chosen yet (QUESTIONS_FOR_ALI.md). It's limited
   to 5 an hour per address and 5 an hour per email. Revisit once email
   verification exists.
+
+## 2026-10-20: a password account connected to Apple deletes with its password and Sign in with Apple
+
+This corrects two earlier entries from today. "The delete screen exports
+first" said the delete screen confirms with "the password, or Sign in with
+Apple for an account connected to Apple", and "the app asks for the password
+to connect Apple" said a password account deletes with its password alone.
+Neither holds once the server revokes Apple's authorization on deletion,
+which the launch plan turns on (docs/RELEASE.md): an account with a password
+and Apple then needs both, the password to prove who it is and a fresh Sign
+in with Apple's authorization code so the server can revoke it.
+
+- `AccountConfirmation.password` carries an optional authorization code.
+- The delete screen asks for the password first. If the server answers that
+  it needs Apple too, the password stays and a Sign in with Apple button
+  finishes the deletion with both. Before, the screen swapped the password
+  for the Apple button, every attempt was refused for lacking the password,
+  and five refusals locked deletion for an hour.
+- An account without a password still confirms with Sign in with Apple alone.
+- For UI tests, a debug-only launch variable stands in for Apple's sheet, and
+  the fixture can turn revocation on and records the codes it would revoke.

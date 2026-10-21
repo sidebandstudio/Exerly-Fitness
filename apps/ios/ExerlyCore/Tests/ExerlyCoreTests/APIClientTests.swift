@@ -225,6 +225,29 @@ func sessionJSON(_ token: String, refresh: String = "refresh-1", created: Bool? 
         #expect(bodies.last?["password"] as? String == "secret")
     }
 
+    @Test func aPasswordAccountConnectedToAppleDeletesWithItsPasswordAndApplesCode() async throws {
+        let store = InMemoryCredentialStore()
+        try store.save(Credentials(accessToken: "t", refreshToken: "r", accessExpiresAt: start.addingTimeInterval(600), sessionID: "s", accountID: "a"))
+        var bodies: [[String: Any]] = []
+        let transport = FakeTransport { request in
+            bodies.append(request.body ?? [:])
+            if request.body?["appleAuthorizationCode"] == nil {
+                return (400, ["message": "Sign in with Apple too.", "details": ["code": "apple_reauthorization_required"]])
+            }
+            return (200, ["deleted": true, "apple_revoked": true, "removed": [:]])
+        }
+        let start = self.start
+        let api = client(transport, store: store, clock: { start })
+        await #expect(throws: APIError.appleReauthorizationRequired) {
+            try await api.deleteAccount(confirmation: .password("secret"))
+        }
+        try await api.deleteAccount(confirmation: .password("secret", authorizationCode: "code"))
+        #expect(bodies.last?["password"] as? String == "secret")
+        #expect(bodies.last?["appleAuthorizationCode"] as? String == "code")
+        #expect(bodies.last?["identityToken"] == nil)
+        #expect(try store.load() == nil)
+    }
+
     @Test func deletesTheAccountAndForgetsTheSession() async throws {
         let store = InMemoryCredentialStore()
         try store.save(Credentials(accessToken: "t", refreshToken: "r", accessExpiresAt: start.addingTimeInterval(600), sessionID: "s", accountID: "a"))

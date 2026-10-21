@@ -268,6 +268,10 @@ private struct DeleteAccountView: View {
     let delete: @MainActor (AccountConfirmation) async throws -> Void
     @State private var password = ""
     @State private var needsApple = false
+    /// A password account connected to Apple, when the server also revokes
+    /// Apple's authorization: it sends its password and a fresh Sign in with
+    /// Apple's code together.
+    @State private var needsAppleToo = false
     @State private var pending: PendingDeletion?
     @State private var deleting = false
     @State private var exporting = false
@@ -319,17 +323,27 @@ private struct DeleteAccountView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .focused($passwordFocused)
                         .submitLabel(.done)
-                        .onSubmit { if !password.isEmpty { ask(.password(password)) } }
+                        .onSubmit { if !password.isEmpty && !needsAppleToo { ask(.password(password)) } }
                         .accessibilityIdentifier("account.deletePassword")
-                    Button("Delete my account", role: .destructive) { ask(.password(password)) }
-                        .disabled(password.isEmpty || busy)
-                        .accessibilityIdentifier("account.confirmDelete")
+                    if needsAppleToo {
+                        AppleAuthorizationButton { payload in
+                            guard !busy else { return }
+                            ask(.password(password, authorizationCode: payload.authorizationCode))
+                        }
+                        .disabled(busy || password.isEmpty)
+                    } else {
+                        Button("Delete my account", role: .destructive) { ask(.password(password)) }
+                            .disabled(password.isEmpty || busy)
+                            .accessibilityIdentifier("account.confirmDelete")
+                    }
                 }
             } header: {
                 Text("Confirm it’s you")
             } footer: {
                 Text(confirmsWithApple ? "Sign in with Apple again to delete this account."
-                                       : "Enter the password you sign in with.")
+                     : needsAppleToo ? "This account is connected to Apple. With your password entered, sign in with Apple to finish, so Exerly can end its access to your Apple ID."
+                     : "Enter the password you sign in with.")
+                    .accessibilityIdentifier("account.deleteFooter")
             }
             if deleting { Section { ProgressView("Deleting account…") } }
             if let error {
@@ -404,6 +418,10 @@ private struct DeleteAccountView: View {
             do { try await delete(confirmation) } catch is CancellationError { } catch {
                 guard !Task.isCancelled else { return }
                 switch error {
+                case ExerlyCore.APIError.appleReauthorizationRequired where hasPassword:
+                    // Keep the password; the footer says what else is needed.
+                    needsAppleToo = true
+                    return
                 case ExerlyCore.APIError.appleReauthorizationRequired: needsApple = true
                 case ExerlyCore.APIError.wrongPassword: password = ""
                 default: break

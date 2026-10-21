@@ -38,7 +38,7 @@ struct AccountControlsFixtureView: View {
             exportAccount: { Data(#"{"account":{"name":"Morgan Example"},"workouts":[]}"#.utf8) },
             deleteAccount: { confirmation in
                 if mode == "delete-error" { throw URLError(.cannotConnectToHost) }
-                if case .password(let password) = confirmation, password != "Synthetic-Password-1" {
+                if case .password(let password, _) = confirmation, password != "Synthetic-Password-1" {
                     throw ExerlyCore.APIError.wrongPassword
                 }
                 deleted = true

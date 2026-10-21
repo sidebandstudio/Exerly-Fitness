@@ -95,6 +95,51 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         XCTAssertEqual(gone, 401)
     }
 
+    func testAPasswordAccountConnectedToAppleDeletesWithItsPasswordAndSignInWithApple() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "delete-apple-too")
+        // Launch plans revoke Apple's authorization on deletion; the fixture
+        // records the code instead of calling Apple.
+        try await control(["linkAppleEmail": person.email, "appleRevocation": true])
+        addTeardownBlock { try? await self.control([:]) }
+        let app = launch(resetSession: true, environment: [
+            "EXERLY_TEST_APPLE_AUTHORIZATION": "synthetic-identity-token synthetic-nonce-0123456789 synthetic-apple-code",
+        ])
+        signIn(app, email: person.email)
+        openDeleteAccount(app)
+
+        let field = app.secureTextFields["account.deletePassword"]
+        replace(field, with: password, in: app)
+        app.typeText("\n")
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
+
+        // The server needs Sign in with Apple as well: the password stays, and
+        // Apple is offered to finish.
+        let apple = app.buttons["account.appleAuthorization"]
+        reveal(apple, in: app)
+        XCTAssertTrue(apple.waitForExistence(timeout: 15))
+        XCTAssertTrue(apple.isEnabled, "the typed password is kept")
+        XCTAssertTrue(field.exists)
+        let footer = app.staticTexts["account.deleteFooter"]
+        reveal(footer, in: app)
+        XCTAssertTrue(footer.label.contains("connected to Apple"), footer.label)
+        XCTAssertFalse(app.staticTexts["account.deleteError"].exists)
+        capture(app, "ready-delete-apple-too")
+        let alive = try await status("/api/me", token: person.token)
+        XCTAssertEqual(alive, 200)
+
+        reveal(apple, in: app)
+        tap(apple, in: app)
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
+        XCTAssertTrue(app.buttons["I already have an account"].waitForExistence(timeout: 30))
+        let revoked = try await request("GET", "/__test/apple-revocations")
+        XCTAssertTrue((revoked["codes"] as? [String] ?? []).contains("synthetic-apple-code"))
+        let gone = try await status("/api/export", token: person.token)
+        XCTAssertEqual(gone, 401)
+    }
+
     func testForgotPasswordEmailsACodeThatSetsANewPassword() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "reset-password")

@@ -200,12 +200,21 @@ private struct NewAgentConnectionView: View {
                             }
                             .disabled(model.isBusy || nameMissing)
                         } else {
-                            SecureField("Password", text: $password)
-                                .textContentType(.password)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .focused($passwordFocused).submitLabel(.done)
-                                .onSubmit { passwordFocused = false }
-                                .accessibilityIdentifier("agents.password")
+                            // A visible label: a filled password field shows nothing
+                            // in screenshots, and the placeholder is gone once typed.
+                            VStack(alignment: .leading, spacing: ExSpacing.small) {
+                                Text("Password").font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                                    .accessibilityHidden(true)
+                                SecureField("Password", text: $password,
+                                            prompt: Text("Your sign-in password").foregroundStyle(Color.exTextSecondary))
+                                    .textContentType(.password)
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                    .focused($passwordFocused).submitLabel(.done)
+                                    .onSubmit { passwordFocused = false }
+                                    .padding(ExSpacing.content)
+                                    .background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))
+                                    .accessibilityIdentifier("agents.password")
+                            }
                         }
                         if model.isBusy { ProgressView("Creating access…") }
                         if !model.confirmsWithApple {
