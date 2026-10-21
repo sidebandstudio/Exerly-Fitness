@@ -202,6 +202,55 @@ enum LoggingActions {
                          left(store, today))
     }
 
+    /// The first of their foods matching a name, as Log a food finds it
+    /// when the name is typed or spoken, logged with its usual portion.
+    static func logFood(named name: String, servings: Double?, meal: String?, in account: IntentAccess.Account,
+                        now: Date = .now) throws -> String {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let food = foods(matching: name, in: account).first else {
+            throw LoggingIntentError.invalid("None of your foods is called \(name). Search for it in Exerly.")
+        }
+        return try logFood(food.id, servings: servings, meal: meal, in: account, now: now)
+    }
+
+    /// One of their foods by the digits under its barcode, with its usual
+    /// portion. A barcode never logged before isn't looked up: its portion is
+    /// checked in the scanner first.
+    static func logBarcode(_ digits: String, servings: Double?, meal: String?, in account: IntentAccess.Account,
+                           now: Date = .now) throws -> String {
+        guard !GTIN.candidates(typed: digits).isEmpty else {
+            throw LoggingIntentError.invalid("Enter the 8 to 14 digits under the barcode.")
+        }
+        guard let foodID = account.store.ownFoodID(barcode: digits) else {
+            throw LoggingIntentError.invalid("That barcode isn't one of your foods yet. Scan it once in Exerly, and after that this logs it.")
+        }
+        return try logFood(foodID, servings: servings, meal: meal, in: account, now: now)
+    }
+
+    /// A food from another app's shortcut, in the "Log by JSON" format,
+    /// into the meal given or the one for this time.
+    static func logJSON(_ text: String, meal: String?, in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        let store = account.store, today = LocalDate(now, in: account.timeZone)
+        let meal = meal ?? store.suggestedMeal(at: now, timeZone: account.timeZone)
+        let data = Data(text.utf8)
+        guard (try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed])) != nil else {
+            throw LoggingIntentError.invalid("Nothing was logged: that isn't JSON.")
+        }
+        let entry: FoodEntry
+        do {
+            entry = try store.logShortcutFood(data, on: today, meal: meal, at: now)
+        } catch let problem as ShortcutsJSON.Problem {
+            throw LoggingIntentError.invalid("Nothing was logged: \(problem).")
+        }
+        return sentences("Logged \(entry.food.name), \(FoodFormat.kcal(entry.nutrients.energy)) kcal, to \(meal).", left(store, today))
+    }
+
+    /// Today's consumption and what remains of each goal, as JSON for another
+    /// app's shortcut.
+    static func todaySummary(in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        String(bytes: try account.store.todaySummaryJSON(on: LocalDate(now, in: account.timeZone)), encoding: .utf8) ?? "{}"
+    }
+
     /// Today's repeat button: the last time in the past week (or `days`
     /// days) the meal was logged, copied to today. Like Today, only into a
     /// meal still empty, so running it twice doesn't log the meal twice.
@@ -215,15 +264,33 @@ enum LoggingActions {
             return "There's no \(meal.lowercased()) \(days == 1 ? "from yesterday" : "in the last week") to repeat."
         }
         let copied = try store.apply(repeated, to: today)
-        var day = "yesterday"
-        if repeated.source != today.adding(days: -1) {
-            var style = Date.FormatStyle.dateTime.weekday(.wide)
-            style.timeZone = zone
-            day = NutritionFormat.pickerDate(repeated.source, timeZone: zone).formatted(style)
-        }
         let foods = copied.count == 1 ? "1 food" : "\(copied.count) foods"
-        return sentences("Repeated \(day)'s \(meal.lowercased()): \(foods), \(FoodFormat.kcal(repeated.energy)) kcal.",
+        return sentences("Repeated \(day(repeated.source, today: today, zone: zone))'s \(meal.lowercased()): \(foods), "
+            + "\(FoodFormat.kcal(repeated.energy)) kcal.", left(store, today))
+    }
+
+    /// Today's repeat-the-day button: the latest day in the past week with
+    /// food, all of it copied to today. Only into an empty day, so running it
+    /// twice doesn't log the day twice.
+    static func repeatDay(within days: Int = 7, in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        let store = account.store, zone = account.timeZone, today = LocalDate(now, in: zone)
+        guard store.entries(on: today).isEmpty else { return "Today already has food, so nothing was repeated." }
+        guard let repeated = store.repeatable(nil, for: today, within: days) else {
+            return "There's no day with food in the last week to repeat."
+        }
+        let copied = try store.apply(repeated, to: today)
+        let foods = copied.count == 1 ? "1 food" : "\(copied.count) foods"
+        let source = day(repeated.source, today: today, zone: zone)
+        return sentences("Repeated \(source == "yesterday" ? source : source + "'s food"): \(foods), \(FoodFormat.kcal(repeated.energy)) kcal.",
                          left(store, today))
+    }
+
+    /// "yesterday", else the weekday.
+    private static func day(_ source: LocalDate, today: LocalDate, zone: TimeZone) -> String {
+        guard source != today.adding(days: -1) else { return "yesterday" }
+        var style = Date.FormatStyle.dateTime.weekday(.wide)
+        style.timeZone = zone
+        return NutritionFormat.pickerDate(source, timeZone: zone).formatted(style)
     }
 
     /// Today's calories against the target, and protein.

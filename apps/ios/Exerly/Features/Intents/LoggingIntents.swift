@@ -129,6 +129,98 @@ struct LogFoodIntent: AppIntent {
     }
 }
 
+struct LogFoodNamedIntent: AppIntent {
+    static let title: LocalizedStringResource = "Log a food by name"
+    static let description = IntentDescription("Logs the first of your recent or saved foods with this name, with the portion you last had.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "Name", requestValueDialog: "Which food?") var name: String
+    @Parameter(title: "Servings", description: "Leave empty for your usual portion.") var servings: Double?
+    @Parameter(title: "Meal", description: "Leave empty for the meal you usually log at this time.") var meal: IntentMeal?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Log \(\.$name)") {
+            \.$servings
+            \.$meal
+        }
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let text = try await IntentAccess().perform {
+            try LoggingActions.logFood(named: name, servings: servings, meal: meal?.rawValue, in: $0)
+        }
+        return .result(dialog: "\(text)")
+    }
+}
+
+struct LogBarcodeIntent: AppIntent {
+    static let title: LocalizedStringResource = "Log a barcode"
+    static let description = IntentDescription("Logs one of your foods by the digits under its barcode, with the portion you last had.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "Barcode", description: "The 8 to 14 digits under the barcode.", requestValueDialog: "What are the barcode's digits?")
+    var digits: String
+    @Parameter(title: "Servings", description: "Leave empty for your usual portion.") var servings: Double?
+    @Parameter(title: "Meal", description: "Leave empty for the meal you usually log at this time.") var meal: IntentMeal?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Log barcode \(\.$digits)") {
+            \.$servings
+            \.$meal
+        }
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let text = try await IntentAccess().perform {
+            try LoggingActions.logBarcode(digits, servings: servings, meal: meal?.rawValue, in: $0)
+        }
+        return .result(dialog: "\(text)")
+    }
+}
+
+/// MacroFactor's "Log by JSON", so a shortcut written for it, or another
+/// app's, logs to Exerly. The format is checked, and nothing is logged
+/// unless all of it is valid.
+struct LogJSONIntent: AppIntent {
+    static let title: LocalizedStringResource = "Log by JSON"
+    static let description = IntentDescription("""
+        Logs a food another shortcut describes: name, source, nutrients, and a serving of one, per100Grams, per100ML, \
+        {amount, unit} or {amount, label, weight}. Nothing is logged unless all of it is valid.
+        """)
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "JSON", inputOptions: String.IntentInputOptions(capitalizationType: .none, multiline: true, autocorrect: false),
+               requestValueDialog: "What's the food's JSON?")
+    var json: String
+    @Parameter(title: "Meal", description: "Leave empty for the meal you usually log at this time.") var meal: IntentMeal?
+
+    static var parameterSummary: some ParameterSummary { Summary("Log \(\.$json) to \(\.$meal)") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let text = try await IntentAccess().perform { try LoggingActions.logJSON(json, meal: meal?.rawValue, in: $0) }
+        return .result(dialog: "\(text)")
+    }
+}
+
+/// Today in the Shortcuts JSON format, for another shortcut to read: what's
+/// been eaten, and what remains of each goal's minimum, target and maximum.
+struct TodaySummaryIntent: AppIntent {
+    static let title: LocalizedStringResource = "Today summary"
+    static let description = IntentDescription("Gives today's food and what's left of each goal as JSON, and says your calories left.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
+        let (json, text) = try await IntentAccess().perform(changing: false) {
+            (try LoggingActions.todaySummary(in: $0), LoggingActions.caloriesLeft(in: $0))
+        }
+        return .result(value: json, dialog: "\(text)")
+    }
+}
+
 struct QuickAddIntent: AppIntent {
     static let title: LocalizedStringResource = "Quick add"
     static let description = IntentDescription("Logs calories, and any macros you know, to a meal.")
@@ -169,6 +261,18 @@ struct RepeatMealIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let text = try await IntentAccess().perform { try LoggingActions.repeatMeal(meal?.rawValue, in: $0) }
+        return .result(dialog: "\(text)")
+    }
+}
+
+struct RepeatDayIntent: AppIntent {
+    static let title: LocalizedStringResource = "Repeat a day"
+    static let description = IntentDescription("Logs the last day you logged food this week again today, if today is still empty.")
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let text = try await IntentAccess().perform { try LoggingActions.repeatDay(in: $0) }
         return .result(dialog: "\(text)")
     }
 }
@@ -262,13 +366,17 @@ struct ExerlyShortcuts: AppShortcutsProvider {
             "Scan a barcode in \(.applicationName)",
             "Scan food in \(.applicationName)",
         ], shortTitle: "Scan barcode", systemImageName: "barcode.viewfinder")
-        AppShortcut(intent: WeighInIntent(), phrases: [
-            "Weigh in with \(.applicationName)",
-            "Open a weigh-in in \(.applicationName)",
-        ], shortTitle: "Weigh in", systemImageName: "scalemass")
-        AppShortcut(intent: SearchFoodsIntent(), phrases: [
-            "Search foods in \(.applicationName)",
-            "Find a food in \(.applicationName)",
-        ], shortTitle: "Search foods", systemImageName: "magnifyingglass")
+        // Ten is the most an app can have. Weigh in and Search foods, which
+        // only open screens, stay actions and controls without a phrase.
+        AppShortcut(intent: LogNextSetIntent(), phrases: [
+            "Log my set in \(.applicationName)",
+            "Log the next set in \(.applicationName)",
+            "Done with my set in \(.applicationName)",
+        ], shortTitle: "Log the next set", systemImageName: "checkmark.circle.fill")
+        AppShortcut(intent: RestIntent(), phrases: [
+            "Rest in \(.applicationName)",
+            "More rest in \(.applicationName)",
+            "Start my rest in \(.applicationName)",
+        ], shortTitle: "Rest", systemImageName: "timer")
     }
 }

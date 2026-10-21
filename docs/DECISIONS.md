@@ -2559,3 +2559,26 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   them at launch took quadratic time, and so did every sync lookup. Persistence now keeps a
   set beside the ordered list, notes every row (its own reads' too) through one path in
   canonical form, and answers `isUnreadable` from the set.
+## 2026-10-21: Shortcuts and Siri for every logging action
+
+- New actions: Log a food by name, Log a barcode, Repeat a day, Log by JSON,
+  Today summary, Log the next set and Rest. Each makes the same store call
+  as the screen it stands in for, and says what it did.
+- An app can have at most ten App Shortcuts with phrases. Log the next set
+  and Rest take the places of Weigh in and Search foods, which only open
+  screens and duplicate Log weight and the Search control. Those two stay
+  as actions and controls.
+- Log a barcode logs only one of the person's own foods: a saved food with
+  that barcode, or a database food logged before. A barcode never logged
+  isn't looked up and logged unseen; it says to scan it once in Exerly,
+  where its portion is checked first.
+- Log by JSON checks the text is JSON, then logs through
+  `NutritionStore.logShortcutFood`, so it gets that function's food IDs. The
+  fix for foods from one source sharing an ID lands with the nutrition
+  branch, not here.
+- Rest adds 30 seconds (or the seconds given) to a rest that's running, and
+  otherwise starts the rest the person's settings give after the set
+  completed last. It refuses anything over 30 minutes.
+- The release check for Apple product names in App Intent text now also
+  reads phrase lines, which name the app, so it catches a phrase on its own
+  line.

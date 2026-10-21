@@ -129,8 +129,9 @@ pathlib.Path(sys.argv[1]).write_bytes(plistlib.dumps({
 PY
 fi
 
-# Apple rejects App Intent phrases containing Apple product names.
-if rg -n -i '(IntentDescription|LocalizedStringResource|shortTitle|phrases).*\b(apple|iphone|ipad|ipod|siri|ios|macos|mac|watchos|airpods|homepod|vision ?pro|health)\b' "$ROOT/Exerly" "$ROOT/Shared" "$ROOT/ExerlyWidgets" "$ROOT/ExerlyWatch" --glob '*.swift'; then
+# Apple rejects App Intent phrases containing Apple product names. Each phrase
+# names the app, so its line matches applicationName.
+if rg -n -i '(IntentDescription|LocalizedStringResource|shortTitle|phrases|applicationName).*\b(apple|iphone|ipad|ipod|siri|ios|macos|mac|watchos|airpods|homepod|vision ?pro|health)\b' "$ROOT/Exerly" "$ROOT/Shared" "$ROOT/ExerlyWidgets" "$ROOT/ExerlyWatch" --glob '*.swift'; then
   echo 'Remove Apple product names from App Intent titles and phrases' >&2
   exit 2
 fi
