@@ -677,6 +677,38 @@ test('hidden suggestions sync as documents named by their food', async () => {
   assert.equal(unnamed.status, 400);
 });
 
+test('import provenance syncs as documents named by import and part', async () => {
+  const { token } = await signUp(api);
+  const id = `${randomUUID().toUpperCase()}.0`;
+  const provenance = {
+    id,
+    importID: id.slice(0, 36),
+    part: 0,
+    parts: 1,
+    source: 'strong',
+    files: ['strong.csv'],
+    importedAt: '2026-10-20T12:00:00.000Z',
+    timeZoneID: 'America/New_York',
+    lines: [{ key: 'workouts', title: 'Workouts', new: 2, existing: 0, updated: 0 }],
+    documents: [`workout_session/${randomUUID().toUpperCase()}`],
+  };
+  const saved = await api.put(
+    `/v1/documents/import_provenance/${id}`,
+    { payload: provenance, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/import_provenance/${id}`, { token });
+  assert.deepEqual(read.body.payload, provenance);
+  const otherID = `${randomUUID().toUpperCase()}.0`;
+  const partless = await api.put(
+    `/v1/documents/import_provenance/${otherID}`,
+    { payload: { ...provenance, id: otherID, part: undefined }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(partless.status, 400);
+});
+
 test('legacy food logs and saved foods stay in their own feeds', async () => {
   const { token } = await signUp(api);
   await api.post('/api/food', { name: 'Logged oats', calories: 300 }, { token });

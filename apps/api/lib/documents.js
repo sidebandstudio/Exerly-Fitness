@@ -80,6 +80,15 @@ const KINDS = {
     typeof p.name === 'string' && p.name.trim() && typeof p.hiddenAt === 'string'
       ? []
       : ['a hidden suggestion needs the food name and when it was hidden'],
+  // Where imported records came from: written with them, never changed.
+  import_provenance: (p) =>
+    typeof p.source === 'string' &&
+    typeof p.importedAt === 'string' &&
+    Array.isArray(p.documents) &&
+    Number.isInteger(p.part) &&
+    Number.isInteger(p.parts)
+      ? []
+      : ['provenance needs a source, importedAt, its documents and its part'],
   proposal: proposalProblems,
   audit_event: auditEventProblems,
 };

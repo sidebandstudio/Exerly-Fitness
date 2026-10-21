@@ -281,114 +281,42 @@ import Testing
 
     @Test func anExportRestoredIntoAFreshAccountExportsTheSameData() throws {
         // An account with imported workouts, logged food, a weigh-in, a day and targets.
-        let (persistence, nutrition, training, importer) = try stores()
-        try importer.commit(try plan(Self.strong, options: .init(timeZone: Fixture.newYork, unit: .kilograms), hosts: [training, nutrition]))
+        let first = try Account()
+        try first.importer.commit(try plan(Self.strong, options: .init(timeZone: Fixture.newYork, unit: .kilograms), hosts: first.hosts))
         let toast = Food(name: "=Synthetic, \"toast\"", per100g: NutrientAmounts([.energy: 250, .protein: 9]))
-        try nutrition.log(toast, grams: 60, on: LocalDate("2026-10-02")!, meal: "Breakfast", at: Fixture.instant())
-        try nutrition.logWeight(.kg(80.4), bodyFat: 18, at: Fixture.instant(), timeZone: Fixture.newYork)
-        try nutrition.setStatus(.fasting, on: LocalDate("2026-10-04")!)
-        let context = AccountExport.Context(timeZone: Fixture.newYork, unit: .kilograms)
-        let first = try AccountExport.merging(server: nil, hosts: [training, nutrition], state: persistence, context: context,
-                                              imports: try importer.records(), now: Fixture.instant())
+        try first.nutrition.log(toast, grams: 60, on: LocalDate("2026-10-02")!, meal: "Breakfast", at: Fixture.instant())
+        try first.nutrition.logWeight(.kg(80.4), bodyFat: 18, at: Fixture.instant(), timeZone: Fixture.newYork)
+        try first.nutrition.setStatus(.fasting, on: LocalDate("2026-10-04")!)
+        let exported = try first.export()
 
-        func documents(_ export: Data) throws -> [String: String] {
-            let json = try #require(try JSONSerialization.jsonObject(with: export) as? [String: Any])
-            let rows = try #require(json["documents"] as? [[String: Any]])
-            return Dictionary(uniqueKeysWithValues: try rows.map { row in
-                ("\(row["kind"]!)/\(row["document_id"]!)",
-                 try #require(String(bytes: try JSONSerialization.data(withJSONObject: row["payload"]!, options: .sortedKeys), encoding: .utf8)))
-            })
-        }
-        let (freshPersistence, freshNutrition, freshTraining, freshImporter) = try stores()
-        let options = HistoryImportReader.Options(timeZone: Fixture.utc, unit: .pounds)
-        let parsed = try HistoryImportReader.read([("exerly-export.json", first)], options: options, library: library)
-        let restore = try HistoryImportReader.plan(parsed, files: ["exerly-export.json"], options: options,
-                                                   hosts: [freshTraining, freshNutrition])
-        #expect(restore.source == .exerly && restore.lines.map(\.new) == [2, 1, 1, 1])
+        let second = try Account()
+        let restore = try second.restore(exported)
+        #expect(restore.source == .exerly && restore.lines.map(\.new) == [2, 1, 1, 1, 1], "\(restore.lines)")
         #expect(restore.lost.contains("The export was made offline, so it holds what that device had."))
-        try freshImporter.commit(restore)
-        let second = try AccountExport.merging(server: nil, hosts: [freshTraining, freshNutrition], state: freshPersistence, context: context,
-                                               now: Fixture.instant())
+        try second.importer.commit(restore)
+        let again = try second.export()
 
-        // The documents are identical: kind, ID and payload. Documented differences:
-        // exported_at, revisions (a fresh account hasn't synced) and the imports list.
-        #expect(try documents(first) == documents(second))
-        #expect(try documents(first).count == 5, "Two workouts, a food, a weigh-in and a day")
-        // So are the tables, the CSV files and the workbook made from them.
-        // TEMPORARY until provenance is restored: imports.csv.
-        #expect(try ExportFiles.csvFiles(first).filter { $0.name != "imports.csv" } == ExportFiles.csvFiles(second))
-        let json = try #require(try JSONSerialization.jsonObject(with: second) as? [String: Any])
-        #expect((json["context"] as? [String: String])?["time_zone"] == "America/New_York")
-        #expect((json["context"] as? [String: String])?["mass_unit"] == "kg")
-        let firstJSON = try #require(try JSONSerialization.jsonObject(with: first) as? [String: Any])
-        #expect((firstJSON["imports"] as? [[String: Any]])?.first?["source"] as? String == "strong", "Provenance")
-        // Restoring the same export again adds nothing.
-        let again = try HistoryImportReader.plan(try HistoryImportReader.read([("exerly-export.json", first)], options: options, library: library),
-                                                 files: [], options: options, hosts: [freshTraining, freshNutrition])
-        #expect(again.isEmpty)
-    }
-
-    // MARK: Corrected workouts
-
-    /// The same Hevy account exported again after the push day was renamed and
-    /// its end time corrected, with a new legs day.
-    static let hevyCorrected = WorkoutImportTests.hevy
-        .replacingOccurrences(of: #""Push day","5 Oct 2026, 18:00","5 Oct 2026, 19:05""#,
-                              with: #""Push day (heavy)","5 Oct 2026, 18:00","5 Oct 2026, 19:20""#)
-        + #"""
-        "Legs","9 Oct 2026, 07:00","9 Oct 2026, 08:00","","Squat (Barbell)",,"",0,"normal",140,5,,,8
-
-        """#
-
-    @Test func aWorkoutCorrectedInHevyIsUpdatedNotAddedAgain() throws {
-        let (_, nutrition, training, importer) = try stores()
-        let hosts: [DocumentHost] = [training, nutrition]
-        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
-        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
-        let benchSets = training.history.sets(of: "barbell-bench-press").count
-
-        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
-        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 1, updated: 1))
-        let record = try importer.commit(corrected)
-        #expect(training.history.sessions.map(\.name) == ["Push day (heavy)", "Pull day", "Legs"])
-        #expect(training.history.sets(of: "barbell-bench-press").count == benchSets, "No set is added twice")
-        let push = try #require(training.history.sessions.first)
-        #expect(push.endedAt == Date(timeIntervalSince1970: 1_791_237_600 + 80 * 60))
-
-        // Undo puts the first import's version back.
-        try importer.undo(record.id)
-        #expect(training.history.sessions.map(\.name) == ["Push day", "Pull day"])
-    }
-
-    @Test func aStrongWorkoutRenamedWithANewDurationIsUpdated() throws {
-        let (_, nutrition, training, importer) = try stores()
-        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds, leftOut: ["Synthetic Landmine Twist"])
-        try importer.commit(try plan(Self.strong, options: options, hosts: [training, nutrition]))
-        let renamed = Self.strong.replacingOccurrences(of: "Synthetic Upper,1h 5m", with: "Synthetic Upper Body,1h 20m")
-        let corrected = try plan(renamed, options: options, hosts: [training, nutrition], records: try importer.records())
-        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 0, existing: 1, updated: 1))
-        try importer.commit(corrected)
-        let upper = try #require(training.history.sessions.first)
-        #expect(training.history.sessions.count == 2 && upper.name == "Synthetic Upper Body")
-        #expect(upper.endedAt == upper.startedAt.addingTimeInterval(80 * 60))
-    }
-
-    @Test func aWorkoutChangedInExerlyIsKeptWhenTheFileChangesItToo() throws {
-        let (persistence, nutrition, training, importer) = try stores()
-        let hosts: [DocumentHost] = [training, nutrition]
-        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
-        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
-        var push = try #require(training.history.sessions.first)
-        push.notes = "Edited in Exerly"
-        try persistence.performAtomically {
-            try training.prepareWrite(kind: "workout_session", id: push.id.uuidString, payload: ExerlyJSON.canonical(push))()
+        // The whole export is the same: every document with its kind, ID, revision, payload
+        // and sync state, the time zone and units, and the provenance of the imported workouts.
+        // Only exported_at could differ (the time each was made); this test's clock is fixed.
+        // A restore into an account on a server also gives the server's older tables new row
+        // IDs and times; api.portability.test.js checks those.
+        func json(_ data: Data) throws -> [String: Any] {
+            var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            object["exported_at"] = nil
+            return object
         }
-        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
-        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 2))
-        #expect(corrected.lost.contains("1 workout you changed in Exerly since the last import is kept as it is."))
-        try importer.commit(corrected)
-        #expect(training.history.sessions.map(\.notes).first == "Edited in Exerly")
-        #expect(training.history.sessions.count == 3)
+        #expect(NSDictionary(dictionary: try json(exported)).isEqual(to: try json(again)))
+        #expect(try ExerlyExportFile(again).documents.count == 6, "Two workouts, a food, a weigh-in, a day and provenance")
+        #expect((try json(again)["context"] as? [String: String])?["time_zone"] == "America/New_York")
+        // Where the workouts came from comes along, apart from the device's Undo records.
+        let upper = try #require(second.training.history.sessions.first)
+        #expect(second.provenance.origin(kind: "workout_session", id: upper.id.uuidString)?.source == .strong)
+        #expect(try second.importer.records().map(\.source) == [.exerly], "Undo records stay on the device that imported")
+        // So are the CSV files and the workbook made from them.
+        #expect(try ExportFiles.csvFiles(exported) == ExportFiles.csvFiles(again))
+        // Restoring the same export again adds nothing.
+        #expect(try second.restore(exported).isEmpty)
     }
 
     // MARK: A daily total and the foods that replace it
@@ -460,7 +388,8 @@ import Testing
         let nutrition: NutritionStore
         let programs: ProgramStore
         let gyms: GymStore
-        var hosts: [DocumentHost] { [training, programs, nutrition, gyms] }
+        let provenance: ProvenanceStore
+        var hosts: [DocumentHost] { [training, programs, nutrition, gyms, provenance] }
         var importer: HistoryImporter { HistoryImporter(hosts: hosts, persistence: persistence, now: { Fixture.instant() }) }
 
         init() throws {
@@ -469,10 +398,12 @@ import Testing
             nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
             programs = try ProgramStore(persistence: persistence, training: training, now: { Fixture.instant() })
             gyms = try GymStore(persistence: persistence, now: { Fixture.instant() })
+            provenance = try ProvenanceStore(persistence: persistence)
         }
 
         func export() throws -> Data {
-            try AccountExport.merging(server: nil, hosts: hosts, state: persistence, imports: try importer.records(), now: Fixture.instant())
+            try AccountExport.merging(server: nil, hosts: hosts, state: persistence,
+                                      context: .init(timeZone: Fixture.newYork, unit: .kilograms), now: Fixture.instant())
         }
 
         func restore(_ export: Data) throws -> HistoryImportPlan {

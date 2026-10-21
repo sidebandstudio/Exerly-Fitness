@@ -255,7 +255,7 @@ struct HistoryImportFlow: View {
             let parsed = await Task.detached(priority: .userInitiated) {
                 Result { try HistoryImportReader.read(files.map { ($0.name, $0.data) }, options: options, library: library) }
             }.value
-            let hosts: [DocumentHost] = [workspace.store, workspace.programs, workspace.nutrition, workspace.gyms, workspace.agent]
+            let hosts = workspace.documentHosts
             let result = parsed.flatMap { parsed in
                 Result {
                     try HistoryImportReader.plan(parsed, files: files.map(\.name), options: options, hosts: hosts,

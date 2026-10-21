@@ -11,6 +11,7 @@ final class TrainingWorkspace: ObservableObject {
     let store: TrainingStore
     let programs: ProgramStore
     let gyms: GymStore
+    let provenance: ProvenanceStore
     let nutrition: NutritionStore
     /// Barcodes this account resolved, scanned, or scanned offline.
     let barcodes: BarcodeLibrary
@@ -42,6 +43,7 @@ final class TrainingWorkspace: ObservableObject {
         store = try TrainingStore(persistence: persistence)
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
+        provenance = try ProvenanceStore(persistence: persistence)
         nutrition = try NutritionStore(persistence: persistence)
         barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
@@ -53,7 +55,7 @@ final class TrainingWorkspace: ObservableObject {
     func resumeSync(api: AccountAPI) {
         guard api.accountID == accountID, !persistence.isClosed else { return }
         accountAPI = api
-        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent], state: persistence, api: api)
+        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api)
     }
 
     func synchronize() async {
@@ -127,12 +129,14 @@ final class TrainingWorkspace: ObservableObject {
     }
 
     func export(server: Data?, pending: [AccountExport.PendingRow] = [], context: AccountExport.Context? = nil) throws -> Data {
-        try AccountExport.merging(server: server, hosts: [store, programs, nutrition, gyms, agent], state: persistence, pending: pending,
-                                  context: context, imports: (try? importer.records()) ?? [])
+        try AccountExport.merging(server: server, hosts: documentHosts, state: persistence, pending: pending, context: context)
     }
 
     /// Saves imports as one unit across this account's stores, and undoes them.
-    var importer: HistoryImporter { HistoryImporter(hosts: [store, programs, nutrition, gyms, agent], persistence: persistence) }
+    var importer: HistoryImporter { HistoryImporter(hosts: documentHosts, persistence: persistence) }
+
+    /// Every store whose records are documents: what imports write and exports hold.
+    var documentHosts: [DocumentHost] { [store, programs, nutrition, gyms, agent, provenance] }
 
     func supportsChanges(in proposal: Proposal) -> Bool {
         let kinds = store.documentKinds + programs.documentKinds + nutrition.documentKinds + gyms.documentKinds

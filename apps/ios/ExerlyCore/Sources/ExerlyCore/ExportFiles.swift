@@ -162,15 +162,17 @@ public enum ExportFiles {
 
     exerly-export-<date>.json holds everything: every document with its ID, revision and payload. It is the file Exerly \
     imports back (Profile, Import & export, Restore an Exerly export).
-    csv/ and the .xlsx workbook hold the same data as tables, one per kind:
-    food_entries, saved_foods, weigh_ins, days, sets, nutrition_targets, metrics and metric_values.
+    csv/ and the .xlsx workbook hold the same data as tables, one per kind: food_entries, saved_foods, weigh_ins,
+    days, sets, nutrition_targets, metrics and metric_values in columns; every other kind of record (programs, gyms,
+    custom exercises and so on) with its payload as JSON; the account and the server's older tables as they are.
 
     - IDs are stable: the same document has the same ID in every export.
     - Instants (logged_at, at, started_at, completed_at, updated_at) are UTC, ISO 8601. Dates are your local dates;
       workouts carry their time zone, and the JSON's "context" gives the account's time zone and units.
     - Nutrient columns name their unit (energy_kcal, sodium_mg). An empty cell means unknown, never zero.
     - Weights and loads have a unit column beside them.
-    - Provenance: a food's source and ID, a weigh-in's source, a workout's program, and in the JSON the imports that added data.
+    - Provenance: a food's source and ID, a weigh-in's source, a workout's program, and import_provenance records saying
+      which app and file each imported record came from.
     - updated_at is empty for changes this device hasn't synced yet; they are marked "pending_sync" in the JSON.
 
     © Sideband · https://sideband.studio

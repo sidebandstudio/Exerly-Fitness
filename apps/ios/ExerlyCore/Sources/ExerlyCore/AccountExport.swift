@@ -31,10 +31,10 @@ public enum AccountExport {
     /// anything deleted on this device but not yet on the server is left out.
     /// With no server export (offline), the result holds this device's data
     /// only, and says so in `note`. `context` records the account's time zone
-    /// and units, and `imports` where imported documents came from.
+    /// and units. Where imported documents came from is in the documents
+    /// themselves, as `import_provenance`.
     public static func merging(server: Data?, hosts: [DocumentHost], state: SyncStateStore,
-                               pending: [PendingRow] = [], context: Context? = nil, imports: [ImportRecord] = [],
-                               now: Date = Date()) throws -> Data {
+                               pending: [PendingRow] = [], context: Context? = nil, now: Date = Date()) throws -> Data {
         var export: [String: Any]
         if let server {
             guard let parsed = try JSONSerialization.jsonObject(with: server) as? [String: Any] else {
@@ -109,17 +109,6 @@ public enum AccountExport {
         if let context {
             export["context"] = ["time_zone": context.timeZone.identifier, "mass_unit": context.unit.rawValue,
                                  "instants": "UTC, ISO 8601", "dates": "local dates in time_zone"]
-        }
-        if !imports.isEmpty {
-            export["imports"] = imports.map { record -> [String: Any] in
-                var row: [String: Any] = [
-                    "id": record.id.uuidString, "source": record.source.rawValue, "files": record.files,
-                    "imported_at": ISOMilliseconds.format(record.importedAt.millisecondsSince1970), "time_zone": record.timeZoneID,
-                    "documents": record.changes.filter { $0.after != nil }.map { "\($0.kind)/\($0.id)" },
-                ]
-                if let undone = record.undoneAt { row["undone_at"] = ISOMilliseconds.format(undone.millisecondsSince1970) }
-                return row
-            }
         }
         return try JSONSerialization.data(withJSONObject: export, options: [.sortedKeys, .withoutEscapingSlashes])
     }

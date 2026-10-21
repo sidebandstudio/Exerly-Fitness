@@ -22,7 +22,7 @@ final class ImportExportPresentationTests: XCTestCase {
         let options = HistoryImportReader.Options(timeZone: TimeZone(identifier: "America/New_York")!, unit: .pounds)
         let parsed = try HistoryImportReader.read([("strong.csv", Data(strong.utf8))], options: options, library: mine.store.library)
         let plan = try HistoryImportReader.plan(parsed, files: ["strong.csv"], options: options,
-                                                hosts: [mine.store, mine.programs, mine.nutrition, mine.gyms, mine.agent])
+                                                hosts: mine.documentHosts)
         let record = try mine.importer.commit(plan)
         XCTAssertEqual(mine.store.history.sessions.map(\.name), ["Synthetic Upper", "Synthetic Legs"])
         XCTAssertTrue(other.store.history.sessions.isEmpty)
@@ -36,7 +36,9 @@ final class ImportExportPresentationTests: XCTestCase {
         let export = try reopened.export(server: nil, context: .init(timeZone: TimeZone(identifier: "America/New_York")!, unit: .pounds))
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: export) as? [String: Any])
         XCTAssertEqual((json["context"] as? [String: String])?["mass_unit"], "lb")
-        XCTAssertEqual((json["imports"] as? [[String: Any]])?.first?["source"] as? String, "strong")
+        let documents = try XCTUnwrap(json["documents"] as? [[String: Any]])
+        let provenance = documents.first { $0["kind"] as? String == "import_provenance" }?["payload"] as? [String: Any]
+        XCTAssertEqual(provenance?["source"] as? String, "strong", "Where the workouts came from is in the export")
         let sets = try XCTUnwrap(try ExportFiles.tables(export).first { $0.name == "sets" })
         XCTAssertEqual(sets.rows.count, 3, "A header and two sets")
 

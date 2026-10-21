@@ -878,6 +878,7 @@ components:
           - experiment
           - gym_profile
           - hidden_suggestion
+          - import_provenance
           - proposal
           - audit_event
       description: |

@@ -240,11 +240,21 @@ public struct HistoryImporter {
         if let stray = plan.writes.first(where: { write in !hosts.contains { $0.documentKinds.contains(write.kind) } }) {
             throw ImportError.noStore(stray.kind)
         }
-        try validate(batches)
-        let record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
+        var record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
         // Nothing new, as when a file is imported again: nothing to save or undo.
         guard !changes.isEmpty else { return record }
+        // Where the documents came from, saved and undone with them. A restored
+        // export brings its own provenance, so it adds none.
+        if plan.source != .exerly, let store = hosts.lazy.compactMap({ $0 as? ProvenanceStore }).first {
+            let saved = changes.filter { $0.after != nil }.map { "\($0.kind)/\($0.id)" }
+            let parts = try ImportProvenance.parts(for: record, documents: saved).map { part in
+                DocumentWrite(kind: ProvenanceStore.kind, id: part.id, payload: try ExerlyJSON.canonical(part))
+            }
+            batches.append((store, ProvenanceStore.kind, parts))
+            record.changes += parts.map { .init(kind: $0.kind, id: $0.id, before: nil, after: $0.payload.map(Self.fingerprint)) }
+        }
+        try validate(batches)
         try apply(batches, saving: record)
         return record
     }
