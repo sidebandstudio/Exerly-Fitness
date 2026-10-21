@@ -305,6 +305,46 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertTrue(relaunched.nutrition.entries.isEmpty)
     }
 
+    /// Review round 5, defects 1 and 2: two offline scans of one food, each
+    /// logged alone, make one row in the food list, and 21 more logs and a
+    /// relaunch come before its Undo. Undoing one entry puts back only its own
+    /// scan, so the other can't be logged twice; the row's Undo, spanning
+    /// two logs, puts back both.
+    func testARowsUndoPutsBackExactlyItsEntriesScans() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar")])
+        let workspace = try openWorkspace()
+        let date = try XCTUnwrap(LocalDate("2026-10-20"))
+        transport.setOffline(true)
+        for meal in ["Lunch", "Dinner"] {
+            let (scanner, _) = try session(transport, workspace: workspace)
+            scanner.plate.meal = meal
+            await scanner.scanned(ScannedCode(gtin: bar, symbology: .ean13))
+        }
+        transport.setOffline(false)
+        let (scanner, _) = try session(transport, workspace: workspace)
+        await scanner.resolveWaiting()
+        let scans = workspace.barcodes.ready
+        XCTAssertEqual(scans.map(\.meal), ["Lunch", "Dinner"])
+        guard case .logged(let first) = scanner.use(.pending(scans[0])), case .logged(let second) = scanner.use(.pending(scans[1])) else {
+            return XCTFail("Each logs alone on an empty plate")
+        }
+        for _ in 0..<21 {
+            try workspace.barcodes.log([NutritionStore.PlateItem(food(juice, "Synthetic apple juice"), grams: 40)], consuming: [[]],
+                                       to: workspace.nutrition, on: date, meal: "Snacks")
+        }
+        let relaunched = try openWorkspace()
+        let current = { (entry: FoodEntry) in try XCTUnwrap(relaunched.nutrition.entries.first { $0.id == entry.id }) }
+        XCTAssertEqual(try relaunched.barcodes.unlog([try current(first)], from: relaunched.nutrition).count, 1)
+        XCTAssertEqual(relaunched.barcodes.pending.map(\.id), [scans[0].id], "Only the undone entry's scan is back")
+        XCTAssertThrowsError(try relaunched.barcodes.log([NutritionStore.PlateItem(food(bar, ""), grams: 40)], consuming: [[scans[1].id]],
+                                                         to: relaunched.nutrition, on: date, meal: "Dinner"))
+        let (again, _) = try session(transport, workspace: relaunched)
+        guard case .logged(let relogged) = again.use(.pending(relaunched.barcodes.pending[0])) else { return XCTFail("Logs again") }
+        XCTAssertEqual(try relaunched.barcodes.unlog([relogged, try current(second)], from: relaunched.nutrition).count, 2)
+        XCTAssertEqual(relaunched.barcodes.pending.map { [$0.id.uuidString, $0.meal] }, scans.map { [$0.id.uuidString, $0.meal] })
+        XCTAssertEqual(relaunched.nutrition.entries.count, 21)
+    }
+
     /// Two plates hold one offline scan and the first logs it: the second
     /// isn't logged, says which food was already logged, and keeps that food
     /// as a plain food, so logging again adds it once more on purpose.
@@ -386,20 +426,18 @@ final class BarcodeScanSessionTests: XCTestCase {
     /// scanner offers. Scans offline and online, picks and re-picks from a
     /// scanner opened again, cancels at a portion, merges, removes rows, logs
     /// alone or as a plate with commits that fail and are edited and retried,
-    /// undoes all or part of a log, says Not needed, removes history,
-    /// discards, and relaunches. Every offline scan ends exactly one way:
-    /// pending with its meal, day and time, logged once, or dismissed.
+    /// undoes a food list row's entries across logs or one of several of the
+    /// same food at any age, deletes from Today and undoes that, logs 21
+    /// times in a row, runs logs and an Undo in one caller's transaction beside
+    /// a sibling that fails, says Not needed, removes history, discards, and
+    /// relaunches. Every offline scan ends exactly one way: pending with its
+    /// meal, day and time, logged once, or dismissed. Memory matches the disk.
     func testRandomPlateHistoriesNeverLoseOrDoubleAScan() async throws {
         for seed in 0..<1_000 { try await randomPlateHistory(seed: UInt64(seed)) }
     }
 
-    private struct ModelLog {
-        var entries: [FoodEntry]
-        /// The scans each food's rows came from.
-        var scans: [String: Set<UUID>]
-    }
-
     private func randomPlateHistory(seed: UInt64) async throws {
+        struct Injected: Error {}
         var random = PlateRandom(seed: seed)
         let disk = CommitFailingStore(), clock = PlateClock()
         let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar"), juice: food(juice, "Synthetic apple juice"),
@@ -410,11 +448,14 @@ final class BarcodeScanSessionTests: XCTestCase {
         let portions = [try NutritionStore.preview(food(bar, ""), grams: 40), try NutritionStore.preview(food(bar, ""), grams: 80)]
         var library = BarcodeLibrary(persistence: disk, now: { clock.now })
         var store = try NutritionStore(persistence: disk)
+        var today = NutritionDiaryActions(store: store)
         var intents: [UUID: (meal: String, at: Date)] = [:]
         var logged: [UUID: Int] = [:]
         var dismissed: Set<UUID> = []
-        var entries = 0
-        var lastLog: ModelLog?
+        /// Every entry that should be logged, with the scans it came from.
+        var alive: [UUID: Set<UUID>] = [:]
+        /// What Today deleted last, for its Undo.
+        var deleted: Set<UUID>?
         var offline = true
         func session(excluding excluded: @escaping () -> Set<UUID> = { [] }) -> BarcodeScanSession {
             BarcodeScanSession(library: library, store: store, api: api, date: date, meal: "Lunch", unit: .kilograms, timeZone: .gmt,
@@ -426,10 +467,11 @@ final class BarcodeScanSessionTests: XCTestCase {
         func relaunch() throws {
             library = BarcodeLibrary(persistence: disk, now: { clock.now })
             store = try NutritionStore(persistence: disk)
+            today = NutritionDiaryActions(store: store)
+            deleted = nil
             scanner = session()
             meal = NutritionPlateDraft(store: store, date: date, meal: "Dinner")
             mealScanner = nil
-            lastLog = nil
         }
         /// The offline scans a scanner offers that can be used now.
         func offered(_ session: BarcodeScanSession) -> [BarcodeLibrary.Pending] {
@@ -438,19 +480,26 @@ final class BarcodeScanSessionTests: XCTestCase {
                 return scan
             }
         }
-        func record(_ rows: [(food: String, pending: Set<UUID>)], _ written: [FoodEntry]) {
-            var scans: [String: Set<UUID>] = [:]
-            for row in rows {
-                for id in row.pending { logged[id, default: 0] += 1 }
-                scans[row.food, default: []].formUnion(row.pending)
+        func record(_ rows: [Set<UUID>], _ written: [FoodEntry]) {
+            XCTAssertEqual(rows.count, written.count, "seed \(seed): one entry per row")
+            for (scans, entry) in zip(rows, written) {
+                alive[entry.id] = scans
+                for id in scans { logged[id, default: 0] += 1 }
             }
-            entries += written.count
-            lastLog = ModelLog(entries: written, scans: scans)
+        }
+        func undid(_ ids: [UUID]) {
+            for id in ids { for scan in alive.removeValue(forKey: id) ?? [] { logged[scan, default: 0] -= 1 } }
+        }
+        /// A ready scan logged alone, to the meal and time it was scanned for.
+        func logAlone(_ scan: BarcodeLibrary.Pending) throws -> [FoodEntry] {
+            let food = try XCTUnwrap(library.usable(scan.gtin)).food
+            return try library.log([NutritionStore.PlateItem(food, grams: 40)], consuming: [[scan.id]], to: store, on: scan.date,
+                                   meal: scan.meal, at: scan.scannedAt)
         }
         transport.setOffline(offline)
         for _ in 0..<40 {
             clock.now += 60
-            switch random.next(15) {
+            switch random.next(19) {
             case 0, 1:
                 // A scan for a meal; offline, it's saved with that meal.
                 let chosen = meals[random.next(3)]
@@ -464,7 +513,7 @@ final class BarcodeScanSessionTests: XCTestCase {
                 if !offline { await scanner.resolveWaiting() }
             case 3, 4:
                 // The scanner's Recent scans: joins its plate, or logs alone.
-                guard let scan = offered(scanner).randomElement(using: &random), let product = library.usable(scan.gtin) else { continue }
+                guard let scan = offered(scanner).randomElement(using: &random) else { continue }
                 if !scanner.pastScansJoinThePlate, random.next(4) == 0 {
                     disk.failNextCommit = true
                     guard case .failed = scanner.use(.pending(scan)) else { return XCTFail("seed \(seed): a failed commit logs nothing") }
@@ -473,7 +522,7 @@ final class BarcodeScanSessionTests: XCTestCase {
                 switch scanner.use(.pending(scan)) {
                 case .logged(let entry):
                     XCTAssertEqual(entry.meal, intents[scan.id]?.meal, "seed \(seed)")
-                    record([(product.food.id, [scan.id])], [entry])
+                    record([[scan.id]], [entry])
                 case .addedToPlate: break
                 case .failed: XCTFail("seed \(seed): a scan the scanner offers can be used")
                 }
@@ -506,7 +555,7 @@ final class BarcodeScanSessionTests: XCTestCase {
                         XCTAssertTrue(plate.stage(row.food, amount: portions[random.next(2)], replacing: row))
                     }
                 }
-                let rows = plate.rows.map { (food: $0.food.id, pending: $0.pending) }
+                let rows = plate.rows.map(\.pending)
                 guard let written = onScanner ? scanner.logAll() : plate.save(consuming: library) else {
                     // Only a scan logged elsewhere stops it; the food stays to log on purpose.
                     XCTAssertEqual(plate.error?.contains("already logged"), true, "seed \(seed): \(plate.error ?? "")")
@@ -520,22 +569,18 @@ final class BarcodeScanSessionTests: XCTestCase {
                     mealScanner = nil
                 }
             case 10:
-                // Undo, all of the last log or one food of it, sometimes failing.
-                guard var last = lastLog else { continue }
-                let foods = Set(last.entries.map(\.food.foodID))
-                let only = random.next(2) == 0 ? foods : [foods.randomElement(using: &random)!]
-                let undone = last.entries.filter { only.contains($0.food.foodID) }
+                // A food list row's Undo, at any age: its entries of one food
+                // across logs, or one of several. Sometimes the commit fails.
+                guard let food = Set(store.entries.map(\.food.foodID)).sorted().randomElement(using: &random) else { continue }
+                let same = store.entries.filter { $0.food.foodID == food }
+                let undone = random.next(2) == 0 ? same : [same.randomElement(using: &random)!]
                 if random.next(4) == 0 {
                     disk.failNextCommit = true
                     XCTAssertThrowsError(try library.unlog(undone, from: store), "seed \(seed)")
                     continue
                 }
                 XCTAssertEqual(try library.unlog(undone, from: store).count, undone.count, "seed \(seed)")
-                for food in only { for id in last.scans[food] ?? [] { logged[id, default: 0] -= 1 } }
-                entries -= undone.count
-                last.entries.removeAll { only.contains($0.food.foodID) }
-                for food in only { last.scans[food] = nil }
-                lastLog = last.entries.isEmpty ? nil : last
+                undid(undone.map(\.id))
             case 11:
                 // Not needed, on either scanner: resolved scans not on its plates go.
                 let onMeal = random.next(2) == 0 && mealScanner != nil
@@ -548,9 +593,69 @@ final class BarcodeScanSessionTests: XCTestCase {
                 if let scan = library.history.randomElement(using: &random) { library.remove(scan.gtin) }
             case 13:
                 if random.next(2) == 0 { scanner.discard() } else { meal.discard() }
+            case 14:
+                // Deleted from Today: "I didn't eat it" dismisses its scans.
+                guard let entry = store.entries.randomElement(using: &random), let scans = alive.removeValue(forKey: entry.id) else { continue }
+                XCTAssertTrue(today.delete(entry), "seed \(seed)")
+                for id in scans { logged[id, default: 0] -= 1 }
+                dismissed.formUnion(scans)
+                deleted = scans
+            case 15:
+                // Today's Undo of that delete: the entry is its scans' one log again.
+                guard let scans = deleted, let entry = today.deleted else { continue }
+                XCTAssertTrue(today.undoDeletion(), "seed \(seed)")
+                alive[entry.id] = scans
+                for id in scans { logged[id, default: 0] += 1 }
+                dismissed.subtract(scans)
+                deleted = nil
+            case 16:
+                // 21 logs in a row, more than any recent-log memory held.
+                for index in 0..<21 {
+                    let item = NutritionStore.PlateItem(food(codes[index % 3], "Synthetic food"), grams: 40)
+                    record([[]], try library.log([item], consuming: [[]], to: store, on: date, meal: "Snacks"))
+                }
+            case 17:
+                // One caller's transaction: a scan logged alone; the same
+                // again, refused; a sibling that logs then fails; a row's Undo
+                // and a log of a scan it put back. Sometimes it all fails.
+                var effects: [() -> Void] = []
+                let failing = random.next(4) == 0
+                let ready = library.ready.filter { !scanner.plate.pending.contains($0.id) && !meal.pending.contains($0.id) }
+                let first = ready.randomElement(using: &random)
+                let sibling = ready.filter { $0.id != first?.id }.randomElement(using: &random)
+                let undone = store.entries.randomElement(using: &random)
+                do {
+                    try disk.performAtomically {
+                        if let first {
+                            let entries = try logAlone(first)
+                            effects.append { record([[first.id]], entries) }
+                            XCTAssertThrowsError(try logAlone(first), "seed \(seed): a second log in one transaction sees the first")
+                        }
+                        if let sibling {
+                            try? disk.performAtomically {
+                                _ = try logAlone(sibling)
+                                throw Injected()
+                            }
+                        }
+                        if let undone {
+                            try library.unlog([undone], from: store)
+                            effects.append { undid([undone.id]) }
+                            let back = BarcodeLibrary(persistence: disk).pending.filter { alive[undone.id]?.contains($0.id) ?? false }
+                            if let scan = back.first, library.usable(scan.gtin) != nil {
+                                let entries = try logAlone(scan)
+                                effects.append { record([[scan.id]], entries) }
+                            }
+                        }
+                        if failing { throw Injected() }
+                    }
+                    effects.forEach { $0() }
+                } catch is Injected {}
             default:
                 try relaunch()
             }
+            XCTAssertEqual(library.pending, BarcodeLibrary(persistence: disk).pending, "seed \(seed): pending in memory isn't on disk")
+            XCTAssertEqual(Set(store.entries.map(\.id)), Set(alive.keys), "seed \(seed): entries in memory")
+            XCTAssertEqual(Set(try NutritionStore(persistence: disk).entries.map(\.id)), Set(alive.keys), "seed \(seed): entries on disk")
         }
         try relaunch()
         for (id, intent) in intents {
@@ -563,7 +668,6 @@ final class BarcodeScanSessionTests: XCTestCase {
                 XCTAssertTrue(record.meal == intent.meal && record.date == date && record.scannedAt == intent.at, "seed \(seed)")
             }
         }
-        XCTAssertEqual(store.entries.count, entries, "seed \(seed)")
     }
 
     /// Open Food Facts's licence line goes with its foods; a food the person

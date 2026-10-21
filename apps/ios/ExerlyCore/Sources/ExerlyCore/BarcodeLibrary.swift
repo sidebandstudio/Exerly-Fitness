@@ -112,6 +112,9 @@ public final class BarcodeLibrary {
     /// A cached product older than this is fetched again in the background.
     public static let refreshAge: TimeInterval = 30 * 24 * 3600
     static let key = "barcode_library.v1"
+    /// The offline scans each logged entry consumed, by entry ID. Undo reads
+    /// only this, so it needs nothing kept in memory.
+    static let provenanceKey = "barcode_library.consumed.v1"
 
     /// Latest first, one per code.
     public private(set) var history: [Scan] = []
@@ -172,7 +175,8 @@ public final class BarcodeLibrary {
             record(Scan(gtin: gtin, scannedAt: time, state: .missing))
             return .missing
         case .unavailable:
-            pending.append(Pending(gtin: gtin, scannedAt: time, meal: meal, date: date))
+            // Kept to the millisecond, as stored, so memory always matches the disk.
+            pending.append(Pending(gtin: gtin, scannedAt: time.roundedToMilliseconds, meal: meal, date: date))
             record(Scan(gtin: gtin, scannedAt: time, state: .waiting))
             return .queued
         }
@@ -237,69 +241,63 @@ public final class BarcodeLibrary {
         case alreadyLogged(Set<Pending.ID>)
     }
 
-    /// What one log wrote: its entries, and the offline scans it consumed,
-    /// with their meal, day and time, so Undo can put both back.
-    public struct Logged: Hashable, Sendable {
-        public var entries: [FoodEntry]
-        public var consumed: [Pending]
-    }
-
-    /// Logs recently, for Undo to find by their entries. Memory only: Undo is
-    /// offered right after a log.
-    @ObservationIgnored private var recent: [Logged] = []
-
-    /// Logs a plate's foods and consumes exactly these offline scans, the ones
-    /// its rows came from, in one transaction. A scan no longer pending throws
-    /// `alreadyLogged`, so nothing logs it twice. Memory changes only after
-    /// the outermost transaction commits, so this may run inside a caller's
-    /// transaction; a failed commit leaves scans and entries as they were.
+    /// Logs a plate's foods and consumes exactly the offline scans each item
+    /// came from (`consuming[i]` for `plate[i]`), in one transaction, keeping
+    /// each scan beside the entry it became so Undo can put it back. A scan
+    /// no longer pending throws `alreadyLogged`, so nothing logs it twice.
+    /// Pending scans are read from the transaction itself, so two logs in one
+    /// caller's transaction see each other; memory changes only after the
+    /// outermost commit, and a failed one leaves scans and entries as they were.
     @discardableResult
-    public func log(_ plate: [NutritionStore.PlateItem], consuming ids: Set<Pending.ID>, to store: NutritionStore,
-                    on date: LocalDate, meal: String, at time: Date? = nil) throws -> Logged {
+    public func log(_ plate: [NutritionStore.PlateItem], consuming scans: [Set<Pending.ID>], to store: NutritionStore,
+                    on date: LocalDate, meal: String, at time: Date? = nil) throws -> [FoodEntry] {
         guard (store.persistence as AnyObject) === (persistence as AnyObject) else { throw LogError.separateStores }
-        let consumed = pending.filter { ids.contains($0.id) }
-        guard consumed.count == ids.count else { throw LogError.alreadyLogged(ids.subtracting(consumed.map(\.id))) }
-        var logged = Logged(entries: [], consumed: consumed)
+        let ids = scans.reduce(into: Set<Pending.ID>()) { $0.formUnion($1) }
+        precondition(scans.count == plate.count && scans.map(\.count).reduce(0, +) == ids.count,
+                     "Each plate item names its own scans")
+        var entries: [FoodEntry] = []
         try persistence.performAtomically {
-            let remaining = pending.filter { !ids.contains($0.id) }
-            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: remaining)), forKey: Self.key)
+            let stored = try storedPending()
+            let consumed = stored.filter { ids.contains($0.id) }
+            guard consumed.count == ids.count else { throw LogError.alreadyLogged(ids.subtracting(consumed.map(\.id))) }
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: stored.filter { !ids.contains($0.id) })), forKey: Self.key)
             let written = try store.writeLog(plate, on: date, meal: meal, at: time)
-            logged.entries = written.entries
-            let record = logged
+            var provenance = try storedProvenance()
+            for (entry, own) in zip(written.entries, scans) where !own.isEmpty {
+                provenance[entry.id.uuidString] = consumed.filter { own.contains($0.id) }
+            }
+            try persistence.saveValue(try ExerlyJSON.canonical(provenance), forKey: Self.provenanceKey)
+            entries = written.entries
             persistence.afterCommit { [self] in
                 written.publish()
                 pending.removeAll { ids.contains($0.id) }
-                recent = Array((recent + [record]).suffix(20))
             }
         }
-        return logged
+        return entries
     }
 
-    /// The recent log that wrote all of these entries, for Undo.
-    public func recentLog(writing entryIDs: Set<UUID>) -> Logged? {
-        recent.last { log in !entryIDs.isEmpty && entryIDs.isSubset(of: Set(log.entries.map(\.id))) }
-    }
-
-    /// Undoes a log, or only its entries in `only`: deletes them and puts
-    /// back the offline scans of their foods, with their meal, day and time,
-    /// in one transaction.
-    public func undo(_ logged: Logged, only ids: Set<UUID>? = nil, from store: NutritionStore) throws {
+    /// Undoes logging these entries, from any log of any age: deletes those
+    /// still logged and puts back exactly the offline scans kept with them,
+    /// with their meal, day and time, in one transaction. A plain delete
+    /// leaves the scans consumed: "I didn't eat it" dismisses them too, and
+    /// restoring the entry later makes it the scan's one log again.
+    public func undo(_ entryIDs: Set<UUID>, from store: NutritionStore) throws {
         guard (store.persistence as AnyObject) === (persistence as AnyObject) else { throw LogError.separateStores }
-        let removed = logged.entries.filter { ids?.contains($0.id) ?? true }
-        let foods = Set(removed.map(\.food.foodID))
-        let undone = ids == nil ? logged.consumed : logged.consumed.filter { scan in products[scan.gtin].map { foods.contains($0.food.id) } ?? false }
-        let restored = undone.filter { scan in !pending.contains { $0.id == scan.id } }
         let order = { (a: Pending, b: Pending) in (a.scannedAt, a.id.uuidString) < (b.scannedAt, b.id.uuidString) }
         try persistence.performAtomically {
-            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: (pending + restored).sorted(by: order))), forKey: Self.key)
-            let publish = try store.writeDeletes(removed.map(\.id))
+            let deleted = try store.writeDeletes(Array(entryIDs))
+            var provenance = try storedProvenance()
+            let stored = try storedPending()
+            var restored: [Pending] = []
+            for id in deleted.ids {
+                let kept = provenance.removeValue(forKey: id.uuidString) ?? []
+                restored += kept.filter { scan in !(stored + restored).contains { $0.id == scan.id } }
+            }
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: (stored + restored).sorted(by: order))), forKey: Self.key)
+            try persistence.saveValue(try ExerlyJSON.canonical(provenance), forKey: Self.provenanceKey)
             persistence.afterCommit { [self] in
-                publish()
+                deleted.publish()
                 pending = (pending + restored.filter { scan in !pending.contains { $0.id == scan.id } }).sorted(by: order)
-                var rest = logged
-                rest.entries.removeAll { entry in removed.contains { $0.id == entry.id } }
-                rest.consumed.removeAll { scan in undone.contains { $0.id == scan.id } }
-                recent = recent.compactMap { $0 != logged ? $0 : rest.entries.isEmpty ? nil : rest }
             }
         }
     }
@@ -330,6 +328,17 @@ public final class BarcodeLibrary {
         var history: [Scan]
         var products: [Product]
         var pending: [Pending]?
+    }
+
+    /// The pending scans as stored, as an open transaction sees them.
+    private func storedPending() throws -> [Pending] {
+        guard let data = try persistence.loadValue(forKey: Self.key) else { return [] }
+        return try ExerlyJSON.decoder.decode(Saved.self, from: data).pending ?? []
+    }
+
+    private func storedProvenance() throws -> [String: [Pending]] {
+        guard let data = try persistence.loadValue(forKey: Self.provenanceKey) else { return [:] }
+        return try ExerlyJSON.decoder.decode([String: [Pending]].self, from: data)
     }
 
     private func saved(pending: [Pending]) -> Saved {

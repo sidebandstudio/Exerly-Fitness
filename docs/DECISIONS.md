@@ -1662,3 +1662,24 @@ it in a larger transaction is safe rather than forbidden. Undo goes through
 in one transaction. Undo is offered only while the app keeps the log in memory, as the toast
 is. A liquid's amount now reads in ml, or fl oz for US units, from its density.
 
+
+## 2026-10-21: An entry keeps the offline scans it consumed; Undo restores only those
+
+Review round 5. Undo found a log's scans in memory, among the last 20 logs, and chose them
+by food: a row's Undo spanning two logs, or one after 20 more logs or a relaunch, deleted
+entries without their scans, and undoing one of two same-food entries put back both scans,
+so the other could be logged twice. When `BarcodeLibrary.log` consumes a scan it now stores
+the scan's whole pending record (ID, code, meal, day, time) against the entry it became,
+under `barcode_library.consumed.v1` in the account's store, in the same transaction.
+`BarcodeLibrary.undo(entryIDs)` deletes the entries still logged and puts back exactly the
+scans stored against those, in one transaction; nothing in memory decides what returns, so
+Undo of any log at any age, from any screen or after a relaunch, works the same.
+
+A plain delete (Today, the entry editor) does not restore the scan. Deleting says "I didn't
+eat it", which dismisses the scan too; its record stays, so undoing that delete makes the
+entry the scan's one log again and a later Undo can still put it back.
+
+`log` and `undo` read pending scans from the transaction they run in, not from memory, so
+two calls in one caller's transaction see each other. A transaction's rollback now drops
+only the after-commit actions it added; it used to drop every action at its depth, a saved
+sibling's included. A pending scan's time is kept to the millisecond, as stored.

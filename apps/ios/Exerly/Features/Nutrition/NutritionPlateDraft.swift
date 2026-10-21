@@ -150,7 +150,7 @@ final class NutritionPlateDraft: ObservableObject {
         }
         do {
             let meal = meal.trimmingCharacters(in: .whitespacesAndNewlines)
-            let entries = try library.map { try $0.log(rows.map(\.item), consuming: pending, to: store, on: date, meal: meal, at: loggedAt) }?.entries
+            let entries = try library.map { try $0.log(rows.map(\.item), consuming: rows.map(\.pending), to: store, on: date, meal: meal, at: loggedAt) }
                 ?? store.log(rows.map(\.item), on: date, meal: meal, at: loggedAt)
             saved = entries
             return entries

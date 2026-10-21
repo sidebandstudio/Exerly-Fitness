@@ -24,12 +24,7 @@ extension BarcodeLibrary {
     @discardableResult
     func unlog(_ entries: [FoodEntry], from store: NutritionStore) throws -> [FoodEntry] {
         let current = entries.filter { entry in store.entries.first { $0.id == entry.id } == entry }
-        let ids = Set(current.map(\.id))
-        if let scans = recentLog(writing: ids) {
-            try undo(scans, only: ids, from: store)
-        } else {
-            for entry in current { try store.deleteEntry(entry.id) }
-        }
+        try undo(Set(current.map(\.id)), from: store)
         return current
     }
 }
@@ -311,8 +306,8 @@ final class BarcodeScanSession: ObservableObject {
             let entry: FoodEntry
             if case .pending(let scan) = past {
                 let item = NutritionStore.PlateItem(product.food, grams: portion.grams, serving: portion.serving, quantity: portion.quantity)
-                guard let logged = try library.log([item], consuming: [scan.id], to: store, on: scan.date, meal: scan.meal,
-                                                   at: scan.scannedAt).entries.first else { return .failed }
+                guard let logged = try library.log([item], consuming: [[scan.id]], to: store, on: scan.date, meal: scan.meal,
+                                                   at: scan.scannedAt).first else { return .failed }
                 entry = logged
             } else {
                 entry = try store.log(portion, on: plate.date, meal: plate.meal)

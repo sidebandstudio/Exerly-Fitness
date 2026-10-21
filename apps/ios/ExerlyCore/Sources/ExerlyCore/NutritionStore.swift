@@ -136,11 +136,11 @@ public final class NutritionStore {
     }
 
     /// Deletes these entries, those still logged, inside the caller's
-    /// transaction; hand the result to `afterCommit`.
-    func writeDeletes(_ ids: [UUID]) throws -> () -> Void {
-        let publish = try ids.filter { id in entries.contains { $0.id == id } }
-            .map { try prepareWrite(kind: Self.entryKind, id: $0.uuidString, payload: nil) }
-        return { publish.forEach { $0() } }
+    /// transaction; returns those it deleted. Hand `publish` to `afterCommit`.
+    func writeDeletes(_ ids: [UUID]) throws -> (ids: [UUID], publish: () -> Void) {
+        let deleted = ids.filter { id in entries.contains { $0.id == id } }
+        let publish = try deleted.map { try prepareWrite(kind: Self.entryKind, id: $0.uuidString, payload: nil) }
+        return (deleted, { publish.forEach { $0() } })
     }
 
     public func deleteEntry(_ id: UUID) throws {
