@@ -276,7 +276,8 @@ struct BarcodeAttribution: View {
         let credits = lines.map(FoodDataCredit.short)
         if let first = credits.first {
             HStack(spacing: ExSpacing.tight) {
-                Text(credits.map(\.label).joined(separator: " · ")).lineLimit(1)
+                // Scaled rather than cut: the licence's name must stay whole.
+                Text(credits.map(\.label).joined(separator: " · ")).lineLimit(1).minimumScaleFactor(0.6)
                 if let url = first.url {
                     Link(destination: url) { Image(systemName: "info.circle") }
                         .frame(minWidth: 44, minHeight: 44)

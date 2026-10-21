@@ -349,6 +349,7 @@ struct NutritionBarcodeView: View {
                     }.frame(minHeight: 44).contentShape(Rectangle())
                 }.font(.exLabel).buttonStyle(.plain).foregroundStyle(Color.exPrimaryText)
                     .accessibilityIdentifier("nutrition.enterBarcodeDigits")
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility3)
                     .accessibilityValue(enteringDigits ? "Expanded" : "Collapsed")
             }
             if enteringDigits || !hasViewfinder {
