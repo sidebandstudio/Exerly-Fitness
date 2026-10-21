@@ -220,14 +220,18 @@ struct WeighInSheet: View {
                 : "Weight, \(shown) \(BodyFormat.unitName(unit))")
             .accessibilityHint(fromHealth ? "" : placeholder ? "Type today's weight on the keypad" : "Double-tap to type a weight")
             .accessibilityIdentifier("weighIn.value")
+            // A new weigh-in keeps Same as last's row while the keypad is up,
+            // shown only before a digit is typed, so the keys never move under
+            // a finger as typing starts or Delete empties it (review round 2).
+            let keepsRow = editing == nil && lastReading != nil && typing == .weight
             let offersLast = editing == nil && placeholder && lastReading != nil
             // At the largest sizes Same as last names the last reading, and the
             // line above it would push the keypad's bottom row under Save.
-            if let context, !(offersLast && typeSize.isAccessibilitySize) {
+            if let context, !((keepsRow || offersLast) && typeSize.isAccessibilitySize) {
                 Text(context).font(.exCaption).foregroundStyle(Color.exTextSecondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("weighIn.context")
             }
-            if offersLast, let lastReading {
+            if keepsRow || offersLast, let lastReading {
                 // Weighing the same is a choice of its own, not what an untouched Save does.
                 Button {
                     value = lastReading
@@ -241,6 +245,9 @@ struct WeighInSheet: View {
                         .frame(minHeight: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .opacity(offersLast ? 1 : 0)
+                .disabled(!offersLast)
+                .accessibilityHidden(!offersLast)
                 .accessibilityLabel("Same as last, \(Self.display(lastReading)) \(BodyFormat.unitName(unit))")
                 .accessibilityHint("Saves that weight again for today")
                 .accessibilityIdentifier("weighIn.sameAsLast")
