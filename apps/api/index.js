@@ -7,7 +7,7 @@ require('dotenv').config();
 const store = require('./data');
 const { createApp } = require('./app');
 const webhooks = require('./lib/webhooks');
-const { shutdown: stop } = require('./lib/shutdown');
+const { shutdown: stop, deadlineMs } = require('./lib/shutdown');
 
 const PORT = Number(process.env.PORT) || 3001;
 // Binding to all interfaces so a phone on the same network, or another machine
@@ -61,7 +61,7 @@ async function main() {
   // request that was mid-write when the signal arrived.
   const shutdown = (signal) => async () => {
     console.log(`\n${signal} received, shutting down.`);
-    setTimeout(() => process.exit(1), 10000).unref();
+    setTimeout(() => process.exit(1), deadlineMs()).unref();
     await stop({ server, store });
     process.exit(0);
   };

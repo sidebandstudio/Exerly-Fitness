@@ -49,8 +49,9 @@ const deliverable = (email) => !email.endsWith('.invalid');
 // Anything that depends on whether an address has an account runs after the
 // response has gone, so how long the response takes says nothing about it.
 const pending = new Set();
-// The person was told a code was sent, so a failure is counted where
-// /api/health reports it, as well as logged.
+// The person was told a code was sent, so a failure is counted and the count
+// logged. Never public: a failure only happens when the address has an
+// account, so a public count would tell anyone who asked for a reset.
 const metrics = { deliveryFailures: 0 };
 
 /** Runs `work` for `email` after the current response. Failures are logged without the address. */

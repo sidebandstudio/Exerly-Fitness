@@ -228,13 +228,34 @@ test('shutting down finishes queued reset mail before closing the database', asy
   assert.deepEqual(order, ['server closed', 'mail sent', 'database closed']);
 });
 
-test('a reset email that fails to send is counted where health reports it', async () => {
+test('a reset email that fails to send is logged and counted, but public health says nothing', async () => {
   const before = passwordReset.metrics.deliveryFailures;
-  passwordReset.afterResponse('synthetic@exerly.test', async () => {
-    throw new Error('No mail transport for synthetic@exerly.test');
-  });
-  await passwordReset.settle();
+  const logged = [];
+  const original = console.error;
+  console.error = (...args) => logged.push(args.join(' '));
+  try {
+    passwordReset.afterResponse('synthetic@exerly.test', async () => {
+      throw new Error('No mail transport for synthetic@exerly.test');
+    });
+    await passwordReset.settle();
+  } finally {
+    console.error = original;
+  }
   assert.equal(passwordReset.metrics.deliveryFailures, before + 1);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], new RegExp(`failures since start: ${before + 1}`));
+  assert.ok(!logged[0].includes('synthetic@exerly.test'));
+  // A public counter would tell anyone whether a reset found an account.
   const health = await api.get('/api/health');
-  assert.equal(health.body.password_reset.delivery_failures, before + 1);
+  assert.ok(!JSON.stringify(health.body).includes('delivery_failures'));
+  assert.equal(health.body.password_reset, undefined);
+});
+
+test('the forced exit at shutdown waits less than App Platform allows, and can be set', () => {
+  const { deadlineMs } = require('../lib/shutdown');
+  assert.equal(deadlineMs({}), 100_000);
+  assert.ok(deadlineMs({}) < 120_000, 'under the default grace period');
+  assert.equal(deadlineMs({ SHUTDOWN_DEADLINE_SECONDS: '45' }), 45_000);
+  assert.equal(deadlineMs({ SHUTDOWN_DEADLINE_SECONDS: 'soon' }), 100_000);
+  assert.equal(deadlineMs({ SHUTDOWN_DEADLINE_SECONDS: '0' }), 100_000);
 });
