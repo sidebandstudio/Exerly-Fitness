@@ -87,7 +87,8 @@ struct ReminderPlan {
         }
         if snapshot.value("reminders.sleep") == .bool(true) {
             if let date = components(snapshot.value("reminderTimes.sleep")) {
-                reminders.append(ReminderSpec(id: prefix + "sleep", title: "Sleep reminder", body: "Time to start your bedtime routine.", components: date))
+                reminders.append(ReminderSpec(id: prefix + "sleep", title: "Sleep reminder", body: "Time to start your bedtime routine.", components: date,
+                                              category: ReminderActions.sleepCategory))
             } else { missing.append("Choose a sleep reminder time.") }
         }
         if snapshot.value("reminders.weighIn") == .bool(true) {

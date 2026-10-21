@@ -2601,3 +2601,12 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   samples, then the name.
 - No data shows as missing, never zero, with what to check in Health,
   because Health doesn't say whether reading was allowed.
+
+## 2026-10-21: A one-tap button on every reminder
+
+- The sleep reminder was the only one without a button. It now has "Remind
+  me in 15 minutes". That changes no data, so it needs no unlock and opens
+  nothing. It works from the Lock Screen and while Exerly isn't running.
+- The reminder that comes back has an ID under `exerly.again.`, outside
+  `exerly.reminder.`, so rescheduling leaves it alone. It keeps its button,
+  and it comes back only for the signed-in account.

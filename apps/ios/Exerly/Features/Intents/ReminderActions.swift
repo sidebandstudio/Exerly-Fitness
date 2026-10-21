@@ -15,6 +15,8 @@ enum ReminderActions {
         case repeatMeal(String)
         /// A weight typed into the notification.
         case logWeight(String)
+        /// The same reminder again in `minutes`, without opening anything.
+        case remindAgain(minutes: Int)
         case open(URL)
     }
 
@@ -24,11 +26,15 @@ enum ReminderActions {
         var body: String
     }
 
-    static let workoutCategory = "exerly.workout", weighInCategory = "exerly.weighIn"
+    static let workoutCategory = "exerly.workout", weighInCategory = "exerly.weighIn", sleepCategory = "exerly.sleep"
+    /// A reminder shown again later. Outside "exerly.reminder.", so
+    /// rescheduling the reminders leaves it.
+    static let againPrefix = "exerly.again."
     static func mealCategory(_ meal: String) -> String { "exerly.meal.\(meal)" }
 
     /// The buttons of each kind of reminder. Logging asks for an unlocked
-    /// phone, as the intents do.
+    /// phone, as the intents do; Remind me again changes nothing, so it
+    /// works from the Lock Screen as it is.
     static var categories: Set<UNNotificationCategory> {
         func button(_ id: String, _ title: String, _ icon: String, opens: Bool = false) -> UNNotificationAction {
             UNNotificationAction(identifier: id, title: title, options: opens ? .foreground : .authenticationRequired,
@@ -49,6 +55,10 @@ enum ReminderActions {
                 button("startWorkout", "Start workout", "figure.strengthtraining.traditional", opens: true),
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: weighInCategory, actions: [weight], intentIdentifiers: []),
+            UNNotificationCategory(identifier: sleepCategory, actions: [
+                UNNotificationAction(identifier: "remindAgain", title: "Remind me in 15 minutes", options: [],
+                                     icon: UNNotificationActionIcon(systemImageName: "moon.zzz")),
+            ], intentIdentifiers: []),
         ])
     }
 
@@ -59,6 +69,7 @@ enum ReminderActions {
         case "logUsual": info["meal"].map { .logUsual(meal: $0, time: info["time"] ?? "") }
         case "repeat": info["meal"].map(Action.repeatMeal)
         case "logWeight": .logWeight(text ?? "")
+        case "remindAgain": .remindAgain(minutes: 15)
         case "search": .open(ExerlyLinks.search)
         // The Start workout intent's path: today's workout, started on Train.
         case "startWorkout": .open(ExerlyLinks.startWorkout)
@@ -69,16 +80,27 @@ enum ReminderActions {
 
     /// Runs an action from the reminder `id`. Opening ones hand the app their
     /// link; logging ones say how it went.
-    static func perform(_ action: Action, reminder id: String, access: IntentAccess? = nil,
-                        namespace: String = APIClient.shared.storageNamespace, now: Date = .now) async -> Notice? {
+    static func perform(_ action: Action, reminder id: String, content: UNNotificationContent? = nil, access: IntentAccess? = nil,
+                        namespace: String = APIClient.shared.storageNamespace, now: Date = .now,
+                        add: (UNNotificationRequest) async throws -> Void = { try await UNUserNotificationCenter.current().add($0) })
+        async -> Notice? {
         if case .open(let url) = action {
             ExerlyLinkHandler.open?(url)
             return nil
         }
         let access = access ?? IntentAccess()
+        let accountID = APIClient.accountID(in: access.token)
+        let original = id.hasPrefix(againPrefix) ? String(id.dropFirst(againPrefix.count)) : id
+        let theirs = accountID.map { original.hasPrefix(ReminderPlan.prefix(namespace: namespace, accountID: $0)) } ?? false
+        if case .remindAgain(let minutes) = action {
+            // Only the signed-in account's reminders come back.
+            guard theirs, let copy = content?.mutableCopy() as? UNMutableNotificationContent else { return nil }
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(minutes * 60), repeats: false)
+            try? await add(UNNotificationRequest(identifier: againPrefix + original, content: copy, trigger: trigger))
+            return nil
+        }
         // A reminder left on this phone by another account logs nothing.
-        if let accountID = APIClient.accountID(in: access.token),
-           !id.hasPrefix(ReminderPlan.prefix(namespace: namespace, accountID: accountID)) {
+        if accountID != nil, !theirs {
             return Notice(title: "Nothing was logged", body: "That reminder was for another account. Open Exerly to log.")
         }
         do {
@@ -88,7 +110,7 @@ enum ReminderActions {
                     try LoggingActions.logUsual(meal, at: today(at: time, now: now, timeZone: account.timeZone), in: account)
                 case .repeatMeal(let meal): try LoggingActions.repeatMeal(meal, within: 1, in: account, now: now)
                 case .logWeight(let text): try LoggingActions.logWeight(try weight(text, unit: account.unit), in: account, now: now)
-                case .open: ""
+                case .open, .remindAgain: ""
                 }
             })
         } catch {
@@ -147,7 +169,7 @@ final class ReminderResponder: NSObject, UNUserNotificationCenterDelegate {
         let identifier = response.actionIdentifier, text = (response as? UNTextInputNotificationResponse)?.userText
         Task { @MainActor in
             if let action = ReminderActions.action(identifier, category: content.categoryIdentifier, info: info, text: text),
-               let notice = await ReminderActions.perform(action, reminder: request.identifier) {
+               let notice = await ReminderActions.perform(action, reminder: request.identifier, content: content) {
                 await ReminderActions.post(notice)
             }
             completionHandler()
