@@ -325,6 +325,21 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertEqual(workspace.nutrition.entries.count, 2)
     }
 
+    /// A liquid's package reads as a volume, in the person's units, not the
+    /// weight its density gives.
+    func testALiquidsPackageReadsAsItsVolume() throws {
+        var juice = food(juice, "Synthetic apple juice")
+        juice.volume = VolumeBasis(density: 1.04, assumed: true)
+        juice.servings = [Serving("1 package", grams: 1_040)]
+        let package = try NutritionStore.preview(juice, grams: 1_040, serving: juice.servings[0], quantity: 1)
+        XCTAssertEqual(FoodFormat.amount(grams: package.grams, serving: package.serving, quantity: package.quantity, food: juice,
+                                         unit: .kilograms), "1 package · 1,000 ml")
+        XCTAssertEqual(FoodFormat.amount(grams: package.grams, serving: package.serving, quantity: package.quantity, food: juice,
+                                         unit: .pounds), "1 package · 33.8 fl oz")
+        let bar = food(bar, "Synthetic oat bar")
+        XCTAssertEqual(FoodFormat.amount(grams: 80, serving: bar.servings[0], quantity: 2, food: bar, unit: .kilograms), "2 × 1 pack · 80 g")
+    }
+
     /// The commit fails: the draft isn't marked logged and nothing changed, so
     /// trying again writes the entry and consumes the scan, once.
     func testAFailedCommitCanBeRetriedWithoutLosingTheScan() async throws {
