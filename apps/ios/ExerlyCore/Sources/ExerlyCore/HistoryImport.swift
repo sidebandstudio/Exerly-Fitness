@@ -175,6 +175,8 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
     public var measurements: [ImportedMeasurement]?
     /// Measurements whose value it changed, with the value each had.
     public var measurementChanges: [ImportedMeasurementChange]?
+    /// Measurements its Undo deleted from the log, by client ID.
+    public var removedMeasurements: [String]?
     public var undoneAt: Date?
 
     /// Documents the import added, rather than changed or removed.
@@ -265,14 +267,14 @@ public struct HistoryImporter {
         }
         var record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
-        let have = measurementStore?.values(plan.measurements.map(\.clientID)) ?? [:]
-        let measurements = plan.measurements.filter { have[$0.clientID] == nil }
-        // Only corrections still at the value the preview saw: one changed since,
-        // even to the file's value, isn't the import's to change or to undo.
-        let current = measurementStore?.values(plan.measurementChanges.map(\.measurement.clientID)) ?? [:]
-        let corrections = plan.measurementChanges.filter { change in
-            current[change.measurement.clientID].map { abs($0 - change.from) < 0.000_001 } == true
-        }
+        // New ones, or ones the preview found an earlier Undo deleted.
+        let have = measurementStore?.states(plan.measurements.map(\.clientID)) ?? [:]
+        let measurements = plan.measurements.filter { have[$0.clientID]?.deleted != false }
+        // Only corrections still exactly as the preview saw them: one changed
+        // since in any way, even to the file's value, isn't the import's to
+        // change or to undo.
+        let current = measurementStore?.states(plan.measurementChanges.map(\.measurement.clientID)) ?? [:]
+        let corrections = plan.measurementChanges.filter { current[$0.measurement.clientID] == $0.earlier.state }
         if !measurements.isEmpty || !corrections.isEmpty, measurementStore == nil { throw ImportError.noStore("measurement") }
         // Nothing new, as when a file is imported again: nothing to save or undo.
         guard !changes.isEmpty || !measurements.isEmpty || !corrections.isEmpty else { return record }
@@ -408,16 +410,19 @@ public struct HistoryImporter {
         let added = record.measurements ?? [], corrections = record.measurementChanges ?? []
         if (!added.isEmpty || !corrections.isEmpty) && measurementStore == nil { throw ImportError.noStore("measurement") }
         // Corrected values go back to the earlier import's first, then what the
-        // import added is removed, each only while as the import left it. A
+        // import added is removed, each only while exactly as the import left
+        // it: a new value, unit, site, day, source or note is an edit. A
         // failure at any step puts back what the steps before it did, so
         // nothing is half undone.
-        let before = measurementStore?.values(added.map(\.clientID) + corrections.map(\.measurement.clientID)) ?? [:]
-        let same = { (a: Double?, b: Double) in a.map { abs($0 - b) < 0.000_001 } == true }
-        let reverted = corrections.map(\.reversed).filter { same(before[$0.measurement.clientID], $0.from) }
-        let removed = added.filter { same(before[$0.clientID], $0.value) }
-        // Still in the log but changed since: kept as it is.
-        result.kept += corrections.filter { before[$0.measurement.clientID] != nil }.count - reverted.count
-            + added.filter { before[$0.clientID] != nil }.count - removed.count
+        let before = measurementStore?.states(added.map(\.clientID) + corrections.map(\.measurement.clientID)) ?? [:]
+        let reverted = corrections.filter { before[$0.measurement.clientID] == $0.measurement.state }.map(\.reversed)
+        let removed = added.filter { before[$0.clientID] == $0.state }
+        // Still in the log but edited since: kept as it is.
+        let present = { (id: String) in before[id].map { !$0.deleted } == true }
+        result.kept += corrections.filter { present($0.measurement.clientID) }.count - reverted.count
+            + added.filter { present($0.clientID) }.count - removed.count
+        // Which this Undo deleted, so importing again may bring back those and no others.
+        if !removed.isEmpty { record.removedMeasurements = removed.map(\.clientID) }
         if !reverted.isEmpty { result.undone += try measurementStore?.update(reverted).updated ?? 0 }
         do {
             if !removed.isEmpty { result.undone += try measurementStore?.remove(removed).removed ?? 0 }
@@ -428,7 +433,7 @@ public struct HistoryImporter {
         do {
             try apply(batches, saving: record)
         } catch {
-            if !removed.isEmpty { try? measurementStore?.add(removed) }
+            if !removed.isEmpty { try? measurementStore?.restore(removed) }
             if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
             throw error
         }

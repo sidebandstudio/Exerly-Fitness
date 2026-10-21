@@ -1863,3 +1863,25 @@ Supersedes parts of the entry above, after an independent review.
   corrected values back, then removes what the import added, each only
   while it's as the import left it. A failure at any step puts back what the
   earlier steps did.
+
+## 2026-10-21: Restores and measurement Undo after review round 4
+
+- Migration 0010 is folded into 0009, which now creates `restores` with
+  `outcome` and the undone index. Neither had reached main or been deployed,
+  so no database holds a 0009 receipt to upgrade. This replaces the round-3
+  note that 0010 adds `outcome`. A test checks that receipts are created whole
+  by one migration and that no later one changes them.
+- An import compares a measurement's whole state (site, value, unit, day,
+  source and note) before correcting or removing it. Any difference, a new
+  day included, is an edit and keeps the measurement. Measurements have a day
+  but no time of day.
+- Taking back a measurement removal (when an Undo's record can't be saved)
+  cancels a DELETE not yet sent, or queues the server's `/restore`, keeping
+  the server ID and revision. It no longer re-adds, which queued a second
+  create with the same client ID. Importing again after Undo goes the same
+  way, followed by a change if the file's version differs.
+- Importing again brings back a deleted measurement only when the latest
+  import that touched it was undone and its Undo deleted it. Otherwise the
+  person's deletion stands, and the preview says so.
+- During cleanup, a restore receipt drops references whose tombstone is gone,
+  no longer deleted, or at a different revision from the one Undo left.

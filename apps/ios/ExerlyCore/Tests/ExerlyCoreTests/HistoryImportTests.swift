@@ -465,23 +465,37 @@ import Testing
     @MainActor
     final class FakeMeasurements: ImportedMeasurementStore {
         var saved: [String: ImportedMeasurement] = [:]
+        /// Deleted from the log, with how they were.
+        var tombstones: [String: ImportedMeasurement] = [:]
         var failing = false
         var failingUpdate = false
 
-        func values(_ clientIDs: [String]) -> [String: Double] {
-            Dictionary(uniqueKeysWithValues: clientIDs.compactMap { id in saved[id].map { (id, $0.value) } })
+        func states(_ clientIDs: [String]) -> [String: MeasurementState] {
+            var states: [String: MeasurementState] = [:]
+            for id in clientIDs {
+                if let measurement = saved[id] {
+                    states[id] = measurement.state
+                } else if var state = tombstones[id]?.state {
+                    state.deleted = true
+                    states[id] = state
+                }
+            }
+            return states
         }
 
         func add(_ measurements: [ImportedMeasurement]) throws {
             if failing { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
-            for measurement in measurements { saved[measurement.clientID] = measurement }
+            for measurement in measurements {
+                saved[measurement.clientID] = measurement
+                tombstones[measurement.clientID] = nil
+            }
         }
 
         func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int) {
             if failing || failingUpdate { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
             var updated = 0, kept = 0
             for change in changes {
-                if saved[change.measurement.clientID]?.value == change.from {
+                if saved[change.measurement.clientID]?.state == change.earlier.state {
                     saved[change.measurement.clientID] = change.measurement
                     updated += 1
                 } else {
@@ -494,14 +508,20 @@ import Testing
         func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int) {
             var removed = 0, kept = 0
             for measurement in measurements {
-                if saved[measurement.clientID] == measurement {
-                    saved[measurement.clientID] = nil
+                if saved[measurement.clientID]?.state == measurement.state {
+                    tombstones[measurement.clientID] = saved.removeValue(forKey: measurement.clientID)
                     removed += 1
                 } else if saved[measurement.clientID] != nil {
                     kept += 1
                 }
             }
             return (removed, kept)
+        }
+
+        func restore(_ measurements: [ImportedMeasurement]) throws {
+            for measurement in measurements {
+                if let deleted = tombstones.removeValue(forKey: measurement.clientID) { saved[measurement.clientID] = deleted }
+            }
         }
     }
 
@@ -621,7 +641,12 @@ import Testing
     func measurementImporter() throws -> (HistoryImporter, FakeMeasurements, (String) throws -> HistoryImportPlan) {
         let (persistence, nutrition, training, _) = try stores()
         let store = FakeMeasurements()
-        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: { Fixture.instant() })
+        // Each import a minute after the one before, so the latest is known.
+        var minutes = 0.0
+        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: {
+            minutes += 1
+            return Fixture.instant().addingTimeInterval(minutes * 60)
+        })
         let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds)
         let preview = { (text: String) in
             let parsed = try HistoryImportReader.read([("measurement_data.csv", Data(text.utf8))], options: options, library: self.library)
@@ -659,6 +684,43 @@ import Testing
         store.failingUpdate = false
         let undone = try importer.undo(record.id)
         #expect(store.saved[added.clientID] == nil && store.saved[neck.clientID]?.value == 38 && undone.undone == 2)
+    }
+
+    @Test func aMeasurementMovedToAnotherDayIsKeptByUndo() throws {
+        let (importer, store, preview) = try measurementImporter()
+        let record = try importer.commit(try preview(Self.hevyMeasurements))
+        var neck = try #require(store.saved.values.first { $0.site == .neck })
+        neck.date = try #require(LocalDate("2026-10-02"))
+        store.saved[neck.clientID] = neck
+        let undone = try importer.undo(record.id)
+        #expect(store.saved[neck.clientID]?.date.description == "2026-10-02", "Moved to Oct 2 with its value unchanged: an edit")
+        #expect(undone.kept == 1)
+    }
+
+    @Test func undoingACorrectionLeavesTheDayYouMovedItTo() throws {
+        let (importer, store, preview) = try measurementImporter()
+        try importer.commit(try preview(Self.hevyMeasurements))
+        let record = try importer.commit(try preview(Self.hevyMeasurementsCorrected))
+        let id = try #require(record.measurementChanges?.first?.measurement.clientID)
+        store.saved[id]?.date = try #require(LocalDate("2026-10-02"))
+        try importer.undo(record.id)
+        #expect(store.saved[id]?.date.description == "2026-10-02" && store.saved[id]?.value == 39)
+    }
+
+    @Test func importingAgainAfterUndoBringsBackWhatUndoDeletedButNotWhatYouDeleted() throws {
+        let (importer, store, preview) = try measurementImporter()
+        let first = try importer.commit(try preview(Self.hevyMeasurements))
+        try importer.undo(first.id)
+        #expect(store.saved.isEmpty && store.tombstones.count == 8)
+        let again = try preview(Self.hevyMeasurements)
+        #expect(again.measurements.count == 8, "Undo deleted them, so they come back")
+        try importer.commit(again)
+        #expect(store.saved.count == 8 && store.tombstones.isEmpty, "Brought back, not created twice")
+
+        let neck = try #require(store.saved.values.first { $0.site == .neck })
+        store.tombstones[neck.clientID] = store.saved.removeValue(forKey: neck.clientID)
+        let third = try preview(Self.hevyMeasurements)
+        #expect(third.measurements.isEmpty && third.lost.contains("1 body measurement you deleted in Exerly stays deleted."))
     }
 
     @Test func strongMeasurementFilesReadTheirOwnUnits() throws {

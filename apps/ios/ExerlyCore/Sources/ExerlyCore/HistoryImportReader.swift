@@ -296,25 +296,37 @@ public enum HistoryImportReader {
             plan.lost.append("\(all.count) body \(all.count == 1 ? "measurement" : "measurements"): sign in to import them.")
             return
         }
-        let have = store.values(all.map(\.clientID))
-        // What the latest import that still stands saved for each.
-        var saved: [String: Double] = [:]
-        for record in records.reversed() where record.undoneAt == nil {
-            for measurement in record.measurements ?? [] { saved[measurement.clientID] = measurement.value }
-            for change in record.measurementChanges ?? [] { saved[change.measurement.clientID] = change.measurement.value }
+        let have = store.states(all.map(\.clientID))
+        // What the latest import that still stands saved for each, and whether
+        // the latest import to touch each was undone with its Undo deleting it.
+        var saved: [String: ImportedMeasurement] = [:]
+        var undoneHere: [String: Bool] = [:]
+        for record in records.reversed() {
+            let touched = (record.measurements ?? []).map(\.clientID) + (record.measurementChanges ?? []).map(\.measurement.clientID)
+            for id in touched { undoneHere[id] = record.undoneAt != nil && record.removedMeasurements?.contains(id) == true }
+            guard record.undoneAt == nil else { continue }
+            for measurement in record.measurements ?? [] { saved[measurement.clientID] = measurement }
+            for change in record.measurementChanges ?? [] { saved[change.measurement.clientID] = change.measurement }
         }
-        let same = { (a: Double, b: Double) in abs(a - b) < 0.000_001 }
-        var existing = 0, kept = 0
+        var existing = 0, kept = 0, deleted = 0
         for measurement in all {
-            guard let value = have[measurement.clientID] else {
+            guard let state = have[measurement.clientID] else {
                 plan.measurements.append(measurement)
                 continue
             }
-            if same(value, measurement.value) {
+            if state.deleted {
+                // Brought back only if an import's Undo deleted it; a deletion of the person's own stands.
+                if undoneHere[measurement.clientID] == true {
+                    plan.measurements.append(measurement)
+                } else {
+                    existing += 1
+                    deleted += 1
+                }
+            } else if state == measurement.state {
                 existing += 1
-            } else if let imported = saved[measurement.clientID], same(value, imported) {
-                // Corrected in the file and untouched here since the last import.
-                plan.measurementChanges.append(ImportedMeasurementChange(measurement: measurement, from: value))
+            } else if let imported = saved[measurement.clientID], state == imported.state {
+                // Corrected in the file and exactly as the last import left it here.
+                plan.measurementChanges.append(ImportedMeasurementChange(measurement: measurement, from: imported.value))
             } else {
                 existing += 1
                 kept += 1
@@ -325,6 +337,10 @@ public enum HistoryImportReader {
         if kept > 0 {
             plan.lost.append(kept == 1 ? "1 body measurement you changed in Exerly since the last import is kept as it is."
                              : "\(kept) body measurements you changed in Exerly since the last import are kept as they are.")
+        }
+        if deleted > 0 {
+            plan.lost.append(deleted == 1 ? "1 body measurement you deleted in Exerly stays deleted."
+                             : "\(deleted) body measurements you deleted in Exerly stay deleted.")
         }
         if plan.dateRange == nil, let first = all.map(\.date).min(), let last = all.map(\.date).max() { plan.dateRange = first...last }
     }

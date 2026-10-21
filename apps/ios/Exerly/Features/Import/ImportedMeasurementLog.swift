@@ -15,22 +15,28 @@ final class ImportedMeasurementLog: ImportedMeasurementStore {
         self.sync = sync
     }
 
-    func values(_ clientIDs: [String]) -> [String: Double] { (try? sync.measurementValues(clientIDs)) ?? [:] }
+    func states(_ clientIDs: [String]) -> [String: MeasurementState] { (try? sync.measurementStates(clientIDs)) ?? [:] }
 
     func add(_ measurements: [ImportedMeasurement]) throws {
         try sync.saveImportedMeasurements(measurements.map { ($0.clientID, Self.request($0)) })
     }
 
     func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int) {
-        try sync.updateImportedMeasurements(changes.map { ($0.measurement.clientID, $0.from, Self.request($0.measurement)) })
-    }
-
-    private static func request(_ measurement: ImportedMeasurement) -> BodyMeasurementRequest {
-        BodyMeasurementRequest(type: measurement.site.rawValue, value: measurement.value, unit: measurement.site == .bodyFat ? "%" : "cm",
-                               entry_date: measurement.date.description, note: "From \(measurement.source.name)", source: "imported")
+        try sync.updateImportedMeasurements(changes.map { ($0.measurement.clientID, $0.earlier.state, Self.request($0.measurement)) })
     }
 
     func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int) {
-        try sync.removeImportedMeasurements(measurements.map { ($0.clientID, $0.value) })
+        try sync.removeImportedMeasurements(measurements.map { ($0.clientID, $0.state) })
+    }
+
+    func restore(_ measurements: [ImportedMeasurement]) throws {
+        try sync.restoreImportedMeasurements(measurements.map(\.clientID))
+    }
+
+    /// The measurement as its state says, with its app named in the note.
+    private static func request(_ measurement: ImportedMeasurement) -> BodyMeasurementRequest {
+        let state = measurement.state
+        return BodyMeasurementRequest(type: state.type, value: state.value, unit: state.unit, entry_date: state.date,
+                                      note: state.note, source: state.source ?? "imported")
     }
 }

@@ -20,6 +20,37 @@ public struct ImportedMeasurement: Sendable, Codable, Hashable {
         self.date = date
         self.source = source
     }
+
+    /// The measurement as the log keeps it once imported.
+    public var state: MeasurementState {
+        MeasurementState(type: site.rawValue, value: value, unit: site == .bodyFat ? "%" : "cm", date: date.description,
+                         source: "imported", note: "From \(source.name)")
+    }
+}
+
+/// Everything a measurement in the log says: a change to any of it, such as
+/// moving it to another day, is an edit, and an import leaves an edited
+/// measurement as it is.
+public struct MeasurementState: Sendable, Codable, Hashable {
+    public var type: String
+    /// To four decimal places, as the server keeps it.
+    public var value: Double
+    public var unit: String
+    public var date: String
+    public var source: String?
+    public var note: String?
+    /// Deleted from the log, with this as its last state.
+    public var deleted: Bool
+
+    public init(type: String, value: Double, unit: String, date: String, source: String?, note: String?, deleted: Bool = false) {
+        self.type = type
+        self.value = (value * 10_000).rounded() / 10_000
+        self.unit = unit
+        self.date = date
+        self.source = source
+        self.note = note
+        self.deleted = deleted
+    }
 }
 
 /// A measurement an import changes to the file's value, from the value it had.
@@ -31,6 +62,13 @@ public struct ImportedMeasurementChange: Sendable, Codable, Hashable {
     public init(measurement: ImportedMeasurement, from: Double) {
         self.measurement = measurement
         self.from = from
+    }
+
+    /// The measurement as it was before the change.
+    public var earlier: ImportedMeasurement {
+        var earlier = measurement
+        earlier.value = from
+        return earlier
     }
 
     /// The change that puts the earlier value back.
@@ -46,15 +84,19 @@ public struct ImportedMeasurementChange: Sendable, Codable, Hashable {
 /// alongside the documents, all or nothing, and undoes it with them.
 @MainActor
 public protocol ImportedMeasurementStore: AnyObject {
-    /// The values of those of these the account already has, by client ID.
-    func values(_ clientIDs: [String]) -> [String: Double]
-    /// Saves all of them or, on any error, none.
+    /// The states of those of these the log has, deleted ones included, by client ID.
+    func states(_ clientIDs: [String]) -> [String: MeasurementState]
+    /// Saves all of them or, on any error, none. One deleted from the log is
+    /// brought back with its own identity rather than created again.
     func add(_ measurements: [ImportedMeasurement]) throws
-    /// Changes each to its new value while it still has the value it's changed
-    /// from, all or none; one changed since is kept.
+    /// Changes each to its new value while it's still exactly as it was before
+    /// the change, all or none; one edited in any way since is kept.
     func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int)
-    /// Removes those still as imported, all or none, and keeps any changed since.
+    /// Removes those still exactly as imported, all or none, and keeps any edited since.
     func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int)
+    /// Takes back a removal that couldn't be finished: the deletions are
+    /// cancelled if they haven't been sent, or reversed if they have. All or none.
+    func restore(_ measurements: [ImportedMeasurement]) throws
 }
 
 /// Body measurements and weigh-ins from MacroFactor's Body Metrics sheet,
