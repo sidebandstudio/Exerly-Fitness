@@ -24,8 +24,6 @@ struct AppleAuthorizationButton: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             appleButton
-                .frame(height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
                 .disabled(pending != nil || submitting)
                 .accessibilityIdentifier("account.appleAuthorization")
             if submitting {
@@ -68,6 +66,8 @@ struct AppleAuthorizationButton: View {
     private var signInWithApple: some View {
         SignInWithAppleButton(label, onRequest: prepare, onCompletion: complete)
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(height: 50)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     #if DEBUG
