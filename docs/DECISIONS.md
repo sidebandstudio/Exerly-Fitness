@@ -2021,3 +2021,15 @@ Goal weight works the same from Targets and from Progress → Body:
 - Targets said "already at or past this goal" in green under a loss rate, while
   Progress said "Goal reached". Targets now shows the same "Goal reached" pill
   and says to edit the plan to maintain or aim for a new goal.
+
+## 2026-10-20: Next on the number keypad follows an order each form declares
+
+Review round 1 found Next skipping Fat in the food editor at a larger text
+size: it took the field below or beside on screen, within 8 pt, and
+"Carbohydrate (g)" wrapping onto two lines moved Fat out of its row. In quick
+add it also went from Fat on to the entry's name. Each form now names its
+fields in order with `exFieldOrder` (the food and entry nutrient editors,
+quick add, measurements, nutrient goals, manual targets, recipe yield,
+activity and program targets). Next goes to the next one on screen, skipping
+any not shown, such as a closed group of nutrients; a field outside an order
+has no Next. Place on screen isn't used at all, so text size can't change it.

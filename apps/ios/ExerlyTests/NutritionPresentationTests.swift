@@ -757,6 +757,19 @@ final class NutritionPresentationTests: XCTestCase {
         XCTAssertNil(actions.deleted)
         XCTAssertNotNil(actions.error)
     }
+
+    /// Review round 1: Next went by place on screen and skipped Fat when
+    /// "Carbohydrate (g)" wrapped. It follows the form's declared order.
+    func testNextFollowsTheFormsDeclaredOrder() {
+        let order = NutritionFoodEditor.fieldOrder
+        XCTAssertEqual(Array(order.prefix(5)), ["nutrition.labelGrams", "nutrition.nutrient.energy", "nutrition.nutrient.protein",
+                                                "nutrition.nutrient.carbohydrate", "nutrition.nutrient.fat"])
+        XCTAssertEqual(ExFieldOrder.following("nutrition.nutrient.carbohydrate", in: order).first, "nutrition.nutrient.fat")
+        XCTAssertEqual(Set(order).count, order.count, "Each field once")
+        XCTAssertTrue(ExFieldOrder.following("nutrition.nutrient.energy", in: ["nutrition.nutrient.energy"]).isEmpty, "Last: no Next")
+        XCTAssertTrue(ExFieldOrder.following("elsewhere", in: order).isEmpty, "A field outside the order has no Next")
+        XCTAssertTrue(ExFieldOrder.following("", in: order).isEmpty)
+    }
 }
 
 @MainActor

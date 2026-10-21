@@ -65,6 +65,9 @@ struct MeasurementEntrySheet: View {
                 if let error { Text(error).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("measurementEntry.error") }
             }
             .scrollDismissesKeyboard(.interactively)
+            // Torso, arms and legs row by row, each left beside its right, then body fat.
+            .exFieldOrder(([BodySite.Group.torso, .arms, .legs].flatMap { group in BodySite.entry.filter { $0.group == group } } + [.bodyFat])
+                .map { "measurementEntry.\($0.rawValue)" })
             .exFooter {
                 Button(action: save) {
                     Text(changes.isEmpty ? "Nothing changed yet" : "Save \(changes.count) \(changes.count == 1 ? "measurement" : "measurements")")

@@ -387,6 +387,7 @@ struct TargetsPlanEditor: View {
                 manualField("Carbs", unit: "g", text: $manualText.carbohydrate, id: "carbohydrate")
                 manualField("Fat", unit: "g", text: $manualText.fat, id: "fat")
             }
+            .exFieldOrder(["energy", "protein", "carbohydrate", "fat"].map { "planEditor.manual.\($0)" })
             let supplied = draft.manual.macroEnergy
             let off = draft.manual.energy > 0 && abs(supplied - draft.manual.energy) > 0.05 * draft.manual.energy
             Label("Protein, carbs and fat supply \(TargetsFormat.kcal(supplied)) kcal", systemImage: off ? "exclamationmark.triangle" : "equal.circle")

@@ -21,6 +21,8 @@ struct ExNumericTextField: UIViewRepresentable {
     /// Each change focuses the field, as a tap on its caption does.
     var focusRequest = 0
     @Environment(\.colorScheme) private var colorScheme
+    /// The form's fields in the order Next visits them, by identifier.
+    @Environment(\.exFieldOrder) private var fieldOrder
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -100,7 +102,7 @@ struct ExNumericTextField: UIViewRepresentable {
         }, done: { [weak field] in field?.resignFirstResponder() },
            next: coordinator.hasNext ? { [weak field] in
                guard let field else { return }
-               if let next = Coordinator.field(after: field) { next.becomeFirstResponder() } else { field.resignFirstResponder() }
+               if let next = coordinator.field(after: field) { next.becomeFirstResponder() } else { field.resignFirstResponder() }
            } : nil)
             .environment(\.colorScheme, colorScheme))
     }
@@ -109,7 +111,7 @@ struct ExNumericTextField: UIViewRepresentable {
         var parent: ExNumericTextField
         var host: UIHostingController<AnyView>?
         var focusRequest: Int
-        /// Whether a field follows this one on its screen, for the keypad's Next.
+        /// Whether a field follows this one in its form's order, for the keypad's Next.
         var hasNext = false
 
         init(_ parent: ExNumericTextField) {
@@ -123,7 +125,7 @@ struct ExNumericTextField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ field: UITextField) {
             field.attributedPlaceholder = nil
-            if hasNext != (Self.field(after: field) != nil) {
+            if hasNext != (self.field(after: field) != nil) {
                 hasNext.toggle()
                 host?.rootView = parent.keypad(for: field, coordinator: self)
             }
@@ -144,31 +146,25 @@ struct ExNumericTextField: UIViewRepresentable {
             }
         }
 
-        /// The next field on the same screen (the sheet or page on top), below
-        /// this one or beside it to the right: run 7 had to hide the keypad and
-        /// tap each of a new food's numbers in turn.
-        static func field(after field: UITextField) -> UITextField? {
-            guard let window = field.window else { return nil }
+        /// The next field in the form's declared order that's on the same
+        /// screen (the sheet or page on top), skipping any not shown: run 7 had
+        /// to hide the keypad and tap each of a new food's numbers in turn.
+        /// Its place on screen isn't used, since a caption that wraps moves a
+        /// field out of its row (review round 1).
+        func field(after field: UITextField) -> UITextField? {
+            let following = ExFieldOrder.following(parent.identifier, in: parent.fieldOrder)
+            guard !following.isEmpty, let window = field.window else { return nil }
             var top = window.rootViewController
             while let presented = top?.presentedViewController, !presented.isBeingDismissed { top = presented }
             guard let screen = top?.view, field.isDescendant(of: screen) else { return nil }
-            var fields: [UITextField] = []
+            var shown: [String: UITextField] = [:]
             func collect(_ view: UIView) {
-                if let text = view as? UITextField, text !== field, text.isEnabled, !text.isHidden, text.alpha > 0.01 { fields.append(text) }
+                if let text = view as? UITextField, text !== field, text.isEnabled, !text.isHidden, text.alpha > 0.01,
+                   let identifier = text.accessibilityIdentifier, shown[identifier] == nil { shown[identifier] = text }
                 view.subviews.forEach(collect)
             }
             collect(screen)
-            let mine = field.convert(field.bounds, to: window)
-            var best: (field: UITextField, frame: CGRect)?
-            for other in fields {
-                let frame = other.convert(other.bounds, to: window)
-                let below = frame.minY > mine.maxY - 4
-                let beside = abs(frame.midY - mine.midY) < 8 && frame.minX > mine.minX
-                guard below || beside else { continue }
-                if let current = best?.frame, (current.minY, current.minX) <= (frame.minY, frame.minX) { continue }
-                best = (other, frame)
-            }
-            return best?.field
+            return following.lazy.compactMap { shown[$0] }.first
         }
 
         static func selectAll(_ field: UITextField) {
@@ -243,4 +239,30 @@ struct ExNumericKeypad: View {
                 .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: ExRadius.control))
         }.buttonStyle(.plain).accessibilityIdentifier("exerly.keypad.\(title)")
     }
+}
+
+/// The order a form's number fields take Next in, by their identifiers.
+enum ExFieldOrder {
+    /// The identifiers after `identifier` in `order`; none when it isn't in it.
+    static func following(_ identifier: String, in order: [String]) -> ArraySlice<String> {
+        guard !identifier.isEmpty, let index = order.firstIndex(of: identifier) else { return [] }
+        return order[(index + 1)...]
+    }
+}
+
+private struct ExFieldOrderKey: EnvironmentKey {
+    static let defaultValue: [String] = []
+}
+
+extension EnvironmentValues {
+    var exFieldOrder: [String] {
+        get { self[ExFieldOrderKey.self] }
+        set { self[ExFieldOrderKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Next on the number keypad visits the fields with these identifiers in
+    /// this order, skipping any not on screen; a field outside it has no Next.
+    func exFieldOrder(_ identifiers: [String]) -> some View { environment(\.exFieldOrder, identifiers) }
 }

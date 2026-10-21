@@ -47,6 +47,7 @@ struct LogActivityView: View {
                 }
                 if let error { Text(error).foregroundStyle(Color.exError) }
             }
+            .exFieldOrder(["activity.minutes", "activity.calories"])
             .navigationTitle(editing == nil ? "Log activity" : "Edit activity")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

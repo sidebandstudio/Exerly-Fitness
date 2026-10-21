@@ -40,7 +40,8 @@ struct NutritionFoodEditor: View {
                         ExChoiceChips(values: NutritionFoodDraft.Basis.allCases, selection: $draft.basis) { $0.rawValue }
                             .accessibilityIdentifier("nutrition.labelBasis")
                         if draft.basis == .perServing {
-                            NutritionNumberInput(title: scan?.reading.basis == .per100ml ? "Weight of 100 ml (g)" : "Label serving weight (g)", text: $draft.labelGrams.text)
+                            NutritionNumberInput(title: scan?.reading.basis == .per100ml ? "Weight of 100 ml (g)" : "Label serving weight (g)", text: $draft.labelGrams.text,
+                                                 identifier: "nutrition.labelGrams")
                                 .accessibilityIdentifier("nutrition.labelGrams")
                         }
                         Text("Blank means unknown. Use 0 only when the label says zero.")
@@ -89,6 +90,7 @@ struct NutritionFoodEditor: View {
                 }
             }
             .scrollContentBackground(.hidden).background(Color.exBackground)
+            .exFieldOrder(Self.fieldOrder)
             .navigationTitle("Food label").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -123,9 +125,16 @@ struct NutritionFoodEditor: View {
         NutritionNumberInput(title: "\(nutrient == .energy ? "Calories" : nutrient.name) (\(nutrient.unit.rawValue))", text: Binding(
             get: { draft.nutrients[nutrient]?.text ?? "" },
             set: { draft.nutrients[nutrient]?.text = $0 }
-        ))
+        ), identifier: "nutrition.nutrient.\(nutrient.rawValue)")
         .accessibilityIdentifier("nutrition.nutrient.\(nutrient.rawValue)")
     }
+
+    /// Next's order: the label's serving weight, calories and macros, then each
+    /// open group of more nutrients, as they're laid out.
+    static let fieldOrder: [String] = ["nutrition.labelGrams"]
+        + ([Nutrient.energy, .protein, .carbohydrate, .fat] + Nutrient.Group.allCases.filter { $0 != .energy && $0 != .macros }
+            .flatMap { group in Nutrient.allCases.filter { $0.group == group } })
+            .map { "nutrition.nutrient.\($0.rawValue)" }
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }

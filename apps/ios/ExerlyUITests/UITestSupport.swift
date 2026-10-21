@@ -117,8 +117,9 @@ class ExerlyUITestCase: XCTestCase {
             Thread.sleep(forTimeInterval: 0.4)
         }
     }
+    /// `contentSize` names a text size, such as "UICTContentSizeCategoryXXXL", for that launch only.
     func launch(resetSession: Bool, legacyToken: String? = nil, accountControls: String? = nil,
-                environment: [String: String] = [:]) -> XCUIApplication {
+                environment: [String: String] = [:], contentSize: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = resetSession ? ["--ui-testing"] : []
         if let appearance = ProcessInfo.processInfo.environment["EXERLY_TEST_APPEARANCE"],
@@ -128,6 +129,7 @@ class ExerlyUITestCase: XCTestCase {
         if ProcessInfo.processInfo.environment["EXERLY_TEST_LARGEST_TYPE"] == "1" {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
+        if let contentSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize] }
         app.launchEnvironment["EXERLY_API_BASE_URL"] = fixtureURL
         app.launchEnvironment["EXERLY_TEST_STORE_ID"] = UUID().uuidString
         app.launchEnvironment["EXERLY_TEST_LEGACY_TOKEN"] = legacyToken

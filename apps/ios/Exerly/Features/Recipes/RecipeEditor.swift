@@ -71,6 +71,7 @@ struct RecipeEditor: View {
                         NutritionNumberInput(title: "Cooked weight (\(draft.unit == .pounds ? "oz" : "g"))", text: $draft.cookedWeight.text,
                                              identifier: "recipe.cookedWeight", placeholder: "Optional")
                     } header: { Text("Yield") } footer: { Text(yieldNote) }
+                    .exFieldOrder(["recipe.servings", "recipe.cookedWeight"])
                     Section {
                         TextField("Preparation", text: $draft.preparation, prompt: Text("Steps, pan size, cooking time").foregroundColor(.exTextSecondary),
                                   axis: .vertical)

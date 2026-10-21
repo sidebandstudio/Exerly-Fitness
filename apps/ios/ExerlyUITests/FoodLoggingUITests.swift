@@ -577,6 +577,71 @@ final class FoodLoggingUITests: ExerlyUITestCase {
     }
 
     /// Opens food search from the home screen and counts it as one tap.
+    /// Review round 1: Next found the field after by its place on screen, so
+    /// at a larger text size, where "Carbohydrate (g)" wraps and "Fat (g)"
+    /// beside it doesn't, Fat was skipped. The editor names its order.
+    func testNextWalksANewFoodsNumbersInOrderAtLargerTextSizes() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "food-next-order")
+        for size in ["UICTContentSizeCategoryXXXL", "UICTContentSizeCategoryAccessibilityXXXL"] {
+            let app = launch(resetSession: true, contentSize: size)
+            signIn(app, email: person.email)
+            tap(app.buttons["nutrition.addFood"], in: app)
+            tap(app.buttons["nutrition.createFood"], in: app)
+            let name = app.textFields["nutrition.foodName"]
+            XCTAssertTrue(name.waitForExistence(timeout: 10))
+            replace(name, with: "Synthetic rye crisp", in: app)
+            dismissKeyboard(app)
+            let energy = app.textFields["nutrition.nutrient.energy"]
+            reveal(energy, in: app)
+            tap(energy, in: app)
+            let order = ["energy", "protein", "carbohydrate", "fat"]
+            for (index, nutrient) in order.enumerated() {
+                let field = app.textFields["nutrition.nutrient.\(nutrient)"]
+                await fulfillment(of: [expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: field)], timeout: 5)
+                app.typeText("\(index + 1)")
+                XCTAssertEqual(field.value as? String, "\(index + 1)", "\(size): \(nutrient)")
+                let next = app.buttons["exerly.keypadNext"]
+                if index < order.count - 1 {
+                    XCTAssertTrue(next.waitForExistence(timeout: 5), "\(size): Next after \(nutrient)")
+                    next.tap()
+                } else {
+                    XCTAssertFalse(next.exists, "\(size): nothing open after Fat")
+                }
+            }
+            capture(app, "food-next-\(size.hasSuffix("AccessibilityXXXL") ? "largest" : "xxxl")")
+            app.terminate()
+        }
+    }
+
+    /// Quick add's macros share a row, under calories and above the entry's
+    /// name. By place on screen, Next after Fat went on to the name; by the
+    /// form's order it stops at Fat.
+    func testNextWalksQuickAddsNumbersInOrderAtLargerTextSizes() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "quick-next-order")
+        for size in ["UICTContentSizeCategoryXXXL", "UICTContentSizeCategoryAccessibilityXXXL"] {
+            let app = launch(resetSession: true, contentSize: size)
+            signIn(app, email: person.email)
+            tap(app.buttons["today.quickAdd"], in: app)
+            let order = ["energy", "protein", "carbohydrate", "fat"]
+            for (index, part) in order.enumerated() {
+                let field = app.textFields["nutrition.quick.\(part)"]
+                await fulfillment(of: [expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: field)], timeout: 5)
+                app.typeText("\(index + 1)")
+                let next = app.buttons["exerly.keypadNext"]
+                if index < order.count - 1 {
+                    XCTAssertTrue(next.waitForExistence(timeout: 5), "\(size): Next after \(part)")
+                    next.tap()
+                } else {
+                    XCTAssertFalse(next.exists, "\(size): Fat is quick add's last number")
+                }
+            }
+            capture(app, "quick-next-\(size.hasSuffix("AccessibilityXXXL") ? "largest" : "xxxl")")
+            app.terminate()
+        }
+    }
+
     private func openSearch(_ app: XCUIApplication) {
         tap(app.buttons["nutrition.addFood"], in: app)
         XCTAssertTrue(app.navigationBars["Add food"].waitForExistence(timeout: 10))

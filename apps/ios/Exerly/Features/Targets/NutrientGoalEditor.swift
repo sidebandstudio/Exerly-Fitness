@@ -139,6 +139,7 @@ struct NutrientGoalEditor: View {
                             field(.target, title: "Target", hint: "about")
                             field(.ceiling, title: "Ceiling", hint: "at most")
                         }
+                        .exFieldOrder(NutrientGoal.Part.allCases.map { "goalEditor.\($0.rawValue)" })
                     }
                     Text(detail).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                     if let problem = typed.problem {
