@@ -315,6 +315,38 @@ final class BarcodeScannerUITests: ExerlyUITestCase {
         XCTAssertEqual((requests["requests"] as? [[String: Any]])?.filter { $0["type"] as? String == "barcode" }.count, 0)
     }
 
+    /// At the largest text the offline card says where the scan will log
+    /// before its button, on screen, and the tray's food credit sits at its
+    /// top, clear of the Log button however many foods there are.
+    func testAtTheLargestTextTheOfflineCardAndTheCreditStayInView() async throws {
+        let previous = ProcessInfo.processInfo.environment["EXERLY_TEST_LARGEST_TYPE"]
+        setenv("EXERLY_TEST_LARGEST_TYPE", "1", 1)
+        defer { if let previous { setenv("EXERLY_TEST_LARGEST_TYPE", previous, 1) } else { unsetenv("EXERLY_TEST_LARGEST_TYPE") } }
+        let (app, _) = try await launchScanner(prefix: "scan-largest")
+        try await control(["offline": true])
+        openScanner(app)
+        try await scan("ean13:7612345678900", in: app)
+        let message = app.staticTexts["nutrition.barcodeQueued"]
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        XCTAssertTrue(message.label.contains("Logs to"), message.label)
+        XCTAssertLessThan(message.frame.minY, app.buttons["nutrition.barcodeKeepScanning"].frame.minY, "Where it logs comes before the button")
+        XCTAssertLessThanOrEqual(message.frame.maxY, app.windows.firstMatch.frame.maxY, "On screen")
+        tap(app.buttons["nutrition.barcodeKeepScanning"], in: app)
+        try await control([:])
+
+        try await scan("ean13:\(Self.oatBar)", in: app)
+        let first = app.buttons["nutrition.scanRow.off:\(Self.oatBar)"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        try await scan("ean13:\(Self.juice)", in: app)
+        XCTAssertTrue(app.buttons["nutrition.scanRow.off:\(Self.juice)"].waitForExistence(timeout: 10))
+        try await scan("upca:\(Self.cola.dropFirst())", in: app)
+        XCTAssertTrue(app.buttons["nutrition.scanRow.off:\(Self.cola)"].waitForExistence(timeout: 10))
+        let credit = app.descendants(matching: .any)["nutrition.scanAttribution"].firstMatch
+        XCTAssertTrue(credit.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(credit.frame.minY, 0)
+        XCTAssertLessThanOrEqual(credit.frame.maxY, first.frame.minY, "The credit is above the foods, not behind the Log button")
+    }
+
     // MARK: Capture
 
     func testBarcodeCapture() async throws {

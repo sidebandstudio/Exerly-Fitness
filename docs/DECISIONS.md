@@ -1649,3 +1649,16 @@ cancelled carries none away. `BarcodeLibrary.log` writes the entries and removes
 those scans in one transaction, and the store's entries, the library's pending list and
 the draft's logged state change only after it commits. Discarding a plate needs no
 cleanup elsewhere, so a running lookup can't hold scans hidden.
+
+## 2026-10-20: Undo restores offline scans; a meal's scanner hides what's on the meal
+
+Review round 4. A meal builder's scanner offered a scan already on the meal, and Undo after
+logging offline scans deleted the entries but lost the scans. The meal's scanner now treats
+the meal's scans as its own plate's: not offered, not counted as ready, not dismissed by Not
+needed; a draft refuses a second row for one scan. `BarcodeLibrary.log` returns the scans it
+consumed, refuses a scan no longer pending, and publishes through `afterCommit`, so nesting
+it in a larger transaction is safe rather than forbidden. Undo goes through
+`BarcodeLibrary.undo`, which deletes the entries and restores the scans of the foods undone
+in one transaction. Undo is offered only while the app keeps the log in memory, as the toast
+is. A liquid's amount now reads in ml, or fl oz for US units, from its density.
+

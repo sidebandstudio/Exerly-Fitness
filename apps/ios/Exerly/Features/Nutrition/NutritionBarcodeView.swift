@@ -301,7 +301,7 @@ struct NutritionBarcodeView: View {
         case .queued(let gtin):
             BarcodeNoticeCard(icon: "wifi.slash", title: "Saved for when you're online", gtin: gtin,
                               message: "It's looked up when you're back online, then waits in Recent scans to log to \(session.plate.meal).",
-                              identifier: "nutrition.barcodeQueued") {
+                              short: "Logs to \(session.plate.meal) once found.", identifier: "nutrition.barcodeQueued") {
                 Button("Keep scanning", systemImage: "barcode.viewfinder") { session.dismissNotice() }
                     .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("nutrition.barcodeKeepScanning")
             }

@@ -181,6 +181,8 @@ struct BarcodeNoticeCard<Actions: View>: View {
     let title: String
     let gtin: GTIN?
     let message: String
+    /// What the message comes to in a line, said first at the largest sizes.
+    var short: String?
     let identifier: String
     @ViewBuilder let actions: Actions
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -195,11 +197,13 @@ struct BarcodeNoticeCard<Actions: View>: View {
                     .textSelection(.enabled)
                     .accessibilityLabel("Barcode \(BarcodeText.spoken(gtin))").accessibilityIdentifier("nutrition.barcodeShown")
             }
-            // At the largest sizes what to do comes first, on screen; the why follows.
-            if typeSize.isAccessibilitySize { actions }
-            Text(message).font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+            // At the largest sizes what to do comes first, on screen; the why
+            // follows, unless a line says it before the buttons.
+            let short = typeSize.isAccessibilitySize ? short : nil
+            if typeSize.isAccessibilitySize, short == nil { actions }
+            Text(short ?? message).font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier)
-            if !typeSize.isAccessibilitySize { actions }
+            if !typeSize.isAccessibilitySize || short != nil { actions }
         }
     }
 }
@@ -220,6 +224,8 @@ struct BarcodeTray: View {
                 // One small line, so the foods themselves are on screen at the largest sizes.
                 Text(["\(count) \(count == 1 ? "food" : "foods")", energy].compactMap { $0 }.joined(separator: " · "))
                     .font(.exCaption.weight(.semibold)).foregroundStyle(Color.exPrimaryText).accessibilityIdentifier("nutrition.scanPlate")
+                // Under the summary, so the credit isn't left behind the Log button.
+                BarcodeAttribution(lines: session.plateAttributions)
             } else {
                 HStack(alignment: .firstTextBaseline) {
                     ExEyebrow("Your plate · \(count) \(count == 1 ? "food" : "foods")", color: .exPrimaryText)
@@ -232,8 +238,10 @@ struct BarcodeTray: View {
                 if !typeSize.isAccessibilitySize || row.id != session.plate.rows.last?.id { Divider().overlay(Color.exBorder.opacity(0.3)) }
             }
             // At the largest sizes the meal is chosen in the navigation bar.
-            if !typeSize.isAccessibilitySize { BarcodeMealMenu(session: session) }
-            BarcodeAttribution(lines: session.plateAttributions)
+            if !typeSize.isAccessibilitySize {
+                BarcodeMealMenu(session: session)
+                BarcodeAttribution(lines: session.plateAttributions)
+            }
         }
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
     }

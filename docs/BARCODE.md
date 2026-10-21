@@ -76,10 +76,23 @@ row it became (`NutritionPlateDraft.Row.pending`): attached only once the row is
 released when the row is removed, never attached if its portion step is cancelled. Logging
 consumes exactly the scans of the rows logged, in the same transaction as their entries
 (`BarcodeLibrary.log(_:consuming:to:on:meal:at:)`), and memory changes only after that
-transaction commits. Discarding the plate, cancelling the meal, a failed commit or quitting
-the app before logging leave every scan ready, with its meal, day and time. Two randomized
-tests, 1,000 seeded histories each (Core and the app's plate draft), hold every offline scan
-to ending pending with its intent or logged exactly once.
+transaction commits (`TrainingPersistence.afterCommit`, so a log inside a larger
+transaction shows nothing until that commits). Discarding the plate, cancelling the meal, a
+failed commit or quitting the app before logging leave every scan ready, with its meal, day
+and time. A meal's scanner doesn't offer, count or dismiss a scan already on that meal, and a
+plate can't hold one scan on two rows. A scan already logged is refused
+(`LogError.alreadyLogged`); the plate says which food it was and keeps it as a plain food.
+Undo, from the toast or a logged row, deletes the entries and puts back the scans they came
+from with their meal, day and time, in one transaction (`BarcodeLibrary.undo`).
+
+Two randomized tests, 1,000 seeded histories of 40 steps each, hold every offline scan to
+ending exactly one way: pending with its intent, logged once, or dismissed with Not needed.
+Core's drives the library and store; the app's drives real `BarcodeScanSession`s, the
+scanner's and a meal builder's, picking only what each one's Recent scans offer, with
+re-picks from a reopened scanner, cancelled portions, merges, removals, logs alone or as a
+plate, failed commits edited and retried, full and partial Undo, Not needed, history
+removal, discards and relaunches. Reverting the meal-scanner exclusion, Undo's restore or
+the already-logged guard makes each fail.
 
 Open Food Facts's ODbL attribution is one short line, "Open Food Facts · ODbL", with a link
 to the source, under the plate, Recent scans and the history, wherever its foods appear.
