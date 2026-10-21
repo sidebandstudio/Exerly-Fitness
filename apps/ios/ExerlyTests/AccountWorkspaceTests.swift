@@ -58,6 +58,19 @@ final class AccountWorkspaceTests: XCTestCase {
         XCTAssertEqual(attempts, 2, "Try again opens it again")
     }
 
+    /// An account's history is read off the main thread, so a long one
+    /// never holds up the screen while it opens.
+    func testHistoryIsReadOffTheMainThread() async throws {
+        struct Read: Error { let onMain: Bool }
+        do {
+            _ = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil,
+                                                 read: { _ in throw Read(onMain: Thread.isMainThread) })
+            XCTFail("The history was read")
+        } catch let read as Read {
+            XCTAssertFalse(read.onMain, "Read off the main thread")
+        }
+    }
+
     func testSignOutQuiescesSyncAndKeepsTrainingForTheSameAccount() async throws {
         let owner = workspace()
         await owner.configure(auth.accountAPI)

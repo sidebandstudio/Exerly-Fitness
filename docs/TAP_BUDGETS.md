@@ -40,7 +40,7 @@ MacroFactor's are counted from its public material only. Checked 2026-10-20.
 | Weigh-in               | 3                                 | **2**: Weigh in, type the weight, Save; or Weigh in, Same as last                                                                                                                                                            | `testAWeighInTakesTwoTaps`; Same as last in `TodayLoggingUITests.testANewWeighInSavesOnlyAWeightSomeoneChose` | 2                         | Toolbar Weight shortcut, type the weight, checkmark; 3 by default (+, Weight, checkmark). [Log your weight][mf-weight], [Toolbar][mf-toolbar]                       |
 | Start today's workout  | 2                                 | **1**: Start on Today's workout card (2 from the Train tab)                                                                                                                                                                  | `testTodaysWorkoutStartsInOneTapAndAPrefilledSetTakesOne`                                                     | 2                         | From the Workout tab, its first screen: the workout, Start Workout; 3 if its program block is collapsed. [Start a workout][mf-start]                                |
 | Prefilled set          | 1                                 | **1**: the set's check                                                                                                                                                                                                       | `testTodaysWorkoutStartsInOneTapAndAPrefilledSetTakesOne`                                                     | 1                         | The set's checkmark, with values prefilled by Smart Progression or Previous; no prefill without history. [Smart progressions][mf-prog], [Log a workout][mf-workout] |
-| Cold launch to logging | under 1 s on a phone (PARITY B03) | **1 tap** from launch to a logged food (Log again's chip); process start to the first frame with Today and Log again: 2.41 to 2.46 s p50, 2.59 to 2.73 s p95 (21 cold launches per run, Debug, simulator); not yet under 1 s | `LaunchToLoggingUITests.testColdLaunchToLoggingStaysUnderItsCeiling` (local, not CI)                          | 3 taps; no published time | Dashboard, toolbar search bar, Multi-Add +, Log Foods. Its release notes mention shortening a splash logo animation ([1.2.0][mf-120]); no launch time is published. |
+| Cold launch to logging | under 1 s on a phone (PARITY B03) | **1 tap** from launch to a logged food (Log again's chip); process start to the presented frame that lays out Today and Log again: 2.52 s p50, 2.83 s p95 (21 cold launches, Debug, simulator, a busy machine, 2026-10-21; 2.41 to 2.46 s p50 to the earlier end on 2026-10-20); 5.26 s p50 with three years of history; not yet under 1 s | `LaunchToLoggingUITests.testColdLaunchToLoggingStaysUnderItsCeiling` (local, not CI)                          | 3 taps; no published time | Dashboard, toolbar search bar, Multi-Add +, Log Foods. Its release notes mention shortening a splash logo animation ([1.2.0][mf-120]); no launch time is published. |
 
 Exerly is fewer or equal on every row.
 
@@ -62,8 +62,11 @@ Exerly is fewer or equal on every row.
   follows the workout card. Its other findings are in DECISIONS.md, 2026-10-20.
 - **Launch time.** `LaunchToLoggingUITests` gates on the time from the process
   starting (the kernel's start time, so loading the app's code counts) to the
-  first frame drawn with Today and Log again, which the Debug build reports to
-  the test fixture; Log again must also be hittable as each launch returns. It
+  commit of the frame whose layout placed Today's Log again (the render server
+  shows it at the next refresh), which the Debug build reports to the test
+  fixture with where it put Log again; that place must
+  hold Log again's chip in the accessibility tree, and the chip must be
+  hittable, as each launch returns. It
   also reports the app's own signposted interval and XCTest's launch metrics.
   Over 21 cold launches on an iPhone 17 Pro Max simulator (iOS 26.2, M1 Max,
   Debug, with the machine loaded by other builds), back to back on 2026-10-20:
@@ -73,7 +76,17 @@ Exerly is fewer or equal on every row.
   most of the rest is SwiftUI and the Swift runtime preparing Today's views;
   Exerly's own work in that frame is under 0.2 s. An earlier figure here, 1.19 s,
   ended at `onAppear`, before anything was drawn, and left the process's start
-  out. PARITY B03's target, under 1 s on a phone, is not yet measured or met.
+  out. On 2026-10-21 the end moved from two display-link ticks after
+  `onAppear` to that commit: with nothing on screen changing, the ticks
+  could wait half a minute after Today was drawn. Measured that day on a much
+  busier machine (load 60 to 700): the old end gave 3.49 s p50 and 3.88 s p95,
+  and with three years of history on the device (11,456 food entries) 39.9 s
+  p50, though Today was on screen within about 3 s. The new end gives 2.52 s
+  p50 and 2.83 s p95, and 5.26 s p50 and 5.77 s p95 with three years, which is
+  over that test's 3.5 s ceiling. With the logging cards moved last, Log
+  again is laid out below the fold in the first frame. Launch reports it
+  there, and the time is to that frame (2.78 s p50 over 5 launches). PARITY B03's target,
+  under 1 s on a phone, is not yet measured or met.
   MacroFactor publishes no launch time to compare; the counted comparison is the
   taps from launch to a logged food.
 - **Not measured.** MacroFactor's figures are counted from its documentation,

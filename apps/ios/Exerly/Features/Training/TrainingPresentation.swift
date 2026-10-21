@@ -52,10 +52,11 @@ final class TrainingWorkspace: ObservableObject {
 
     /// Opens an account with its sessions and food history read and decoded
     /// off the main actor; only the stores' small documents and publishing
-    /// them happen on it (PARITY B03).
-    static func open(accountID: String, root: URL? = nil, api: AccountAPI?) async throws -> TrainingWorkspace {
+    /// them happen on it (PARITY B03). `read` is replaced only by tests.
+    static func open(accountID: String, root: URL? = nil, api: AccountAPI?,
+                     read: @escaping @Sendable (URL) throws -> StoredAccount? = StoredAccount.read) async throws -> TrainingWorkspace {
         let url = try storageURL(accountID: accountID, root: root)
-        let stored = try await Task.detached(priority: .userInitiated) { try StoredAccount.read(url: url) }.value
+        let stored = try await Task.detached(priority: .userInitiated) { try read(url) }.value
         return try TrainingWorkspace(accountID: accountID, root: root, api: api, stored: stored)
     }
 

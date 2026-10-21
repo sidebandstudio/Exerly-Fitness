@@ -205,6 +205,7 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         app.buttons["exerly.keypad.1"].tap()
         Thread.sleep(forTimeInterval: 0.6)
         XCTAssertEqual(five.frame, before, "After the first digit")
+        capture(app, "taps-weigh-in-typing")
         app.buttons["exerly.keypad.delete"].tap()
         Thread.sleep(forTimeInterval: 0.6)
         XCTAssertEqual(five.frame, before, "After Delete empties it")
@@ -239,18 +240,28 @@ final class TodayLoggingUITests: ExerlyUITestCase {
     }
 
     /// Log, then start today's workout straight away: the confirmation never
-    /// covers Start.
+    /// covers Start. At the largest text sizes the meal's repeat fills Log
+    /// again's first screen and the chips follow it off the edge, so the
+    /// repeat logs there, and Start is a scroll below.
     func testLoggingThenStartingTheWorkoutStraightAway() async throws {
         let (app, _) = try await budgetHome(prefix: "log-then-start")
-        let chip = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
+        let largest = ProcessInfo.processInfo.environment["EXERLY_TEST_LARGEST_TYPE"] == "1"
+        let chip = largest ? app.buttons["today.repeatMeal"]
+            : app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         chip.tap()
         let start = app.buttons["today.startWorkout"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))
+        let confirmations = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@",
+                                                                 "Logged ", "Repeated "))
+        XCTAssertTrue(confirmations.firstMatch.exists, "The confirmation shows")
+        capture(app, "taps-logged-confirmation")
+        if largest { reveal(start, in: app) }
         XCTAssertTrue(start.isHittable, "Start isn't under the confirmation")
-        let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged ")).firstMatch
-        XCTAssertTrue(confirmation.exists, "The confirmation shows")
-        XCTAssertFalse(confirmation.frame.intersects(start.frame), "and doesn't overlap Start")
+        // Wherever it shows, no part of it overlaps Start.
+        for confirmation in confirmations.allElementsBoundByIndex where confirmation.exists {
+            XCTAssertFalse(confirmation.frame.intersects(start.frame), "\(confirmation.label) doesn't overlap Start")
+        }
         start.tap()
         XCTAssertTrue(app.buttons["training.finish"].waitForExistence(timeout: 10), "The tap started the workout")
     }

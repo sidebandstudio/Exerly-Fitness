@@ -1,13 +1,14 @@
 import Darwin
 import Foundation
-import QuartzCore
 import os
 
 /// Cold launch to logging (PARITY B03). Two figures, both ending once the
-/// frame that draws Today's logging controls (Log again, or the shortcuts when
-/// there's no Log again) has been presented: their `onAppear` runs while that
-/// frame is built, the next display refresh commits it, and the one after
-/// follows its presentation, which is when this ends:
+/// frame that lays out Today's logging controls (Log again, or the shortcuts
+/// when there's no Log again) has been committed: layout gives them their
+/// place on screen, and this ends once the run loop has handed that frame to
+/// the render server, which shows it at the next refresh (`NextFrame`). The
+/// places are reported too, so the UI tests can check them against the
+/// accessibility tree as the launch returns:
 /// - from the process starting, read from the kernel, so it includes loading
 ///   the app's code: the end-to-end number LaunchToLoggingUITests gates on;
 /// - a signpost interval from the app's own start, for Instruments and
@@ -24,9 +25,12 @@ enum LaunchTiming {
     private static let log = Logger(subsystem: subsystem, category: category)
     private static var interval: OSSignpostIntervalState?
     private static var started: Date?
-    private static var frame: NextFrame?
+    private static var committing = false
     /// Food entries on the device when launch ended, reported with its time.
     private static var entries = 0
+    /// Where each logging control was laid out, in window points, as of the
+    /// committed frame: `logAgain` and `shortcuts`.
+    private static var frames: [String: CGRect] = [:]
 
     static func begin() {
         guard interval == nil, started == nil else { return }
@@ -35,19 +39,23 @@ enum LaunchTiming {
         mark("app init")
     }
 
-    /// Today's logging controls have appeared: ends once the frame that
-    /// draws them has been presented, two display refreshes on.
-    static func loggingReady(entries: Int) {
-        guard interval != nil, frame == nil else { return }
+    /// A logging control has been laid out at `frame`: ends once the frame
+    /// that places it has been committed. A later layout before then moves
+    /// the place reported.
+    static func loggingLaidOut(_ control: String, at frame: CGRect, entries: Int) {
+        guard interval != nil, !frame.isEmpty else { return }
+        frames[control] = frame
         Self.entries = entries
-        frame = NextFrame { frame = NextFrame { finish() } }
+        guard !committing else { return }
+        committing = true
+        mark("\(control) laid out")
+        NextFrame { finish() }
     }
 
     private static func finish() {
         guard let interval, let started else { return }
         signposter.endInterval(name, interval)
         Self.interval = nil
-        frame = nil
         let now = Date()
         let process = now.timeIntervalSince(processStart) * 1000, app = now.timeIntervalSince(started) * 1000
         log.info("launch: logging on screen \(Int(process)) ms after the process started, \(Int(app)) ms after the app's, \(entries) entries")
@@ -69,8 +77,9 @@ enum LaunchTiming {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let places = frames.mapValues { [$0.minX, $0.minY, $0.width, $0.height] }
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["processToReadyMs": processMs, "initToReadyMs": appMs,
-                                                                        "entries": entries])
+                                                                        "entries": entries, "frames": places])
         URLSession.shared.dataTask(with: request).resume()
         #endif
     }
@@ -85,24 +94,22 @@ enum LaunchTiming {
     }()
 }
 
-/// Calls back once, on the next display refresh: after the frame being built
-/// now has been drawn. Its display link holds it until then, so it needn't be kept.
+/// Calls back once, after the frame being built now has been committed to the
+/// render server, which shows it at the next refresh: when the main run loop
+/// next goes to sleep, after Core Animation's own commit there. The loop is
+/// woken for that, since an idle one doesn't come round again on its own: a
+/// display link, and this without the wake, went unfired for over 30 s while
+/// three years of history opened (2026-10-21). The run loop holds it until
+/// then, so it needn't be kept.
 @MainActor
-final class NextFrame: NSObject {
-    private let done: () -> Void
-    private var link: CADisplayLink?
-
-    init(_ done: @escaping () -> Void) {
-        self.done = done
-        super.init()
-        let link = CADisplayLink(target: self, selector: #selector(tick))
-        link.add(to: .main, forMode: .common)
-        self.link = link
-    }
-
-    @objc private func tick() {
-        link?.invalidate()
-        link = nil
-        done()
+final class NextFrame {
+    @discardableResult
+    init(_ done: @escaping @MainActor () -> Void) {
+        // Core Animation commits at 2,000,000; the latest order runs after it.
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, .max) { _, _ in
+            MainActor.assumeIsolated { done() }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 }

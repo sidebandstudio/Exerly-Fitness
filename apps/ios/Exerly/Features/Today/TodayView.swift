@@ -313,7 +313,7 @@ struct TodayView: View {
             // Today's workout in the first frame, with Start, not "No workout
             // planned" until the task below has run.
             if plan == nil, isToday { plan = workspace.nextWorkout(bodyweight: bodyweight, unit: unit) }
-            if !drawsBelowFold { _ = NextFrame { drawsBelowFold = true } }
+            if !drawsBelowFold { NextFrame { drawsBelowFold = true } }
         }
         .task {
             await workspace.synchronize()
@@ -482,8 +482,10 @@ struct TodayView: View {
                 HStack(spacing: ExSpacing.small) { search; scan; quick; weigh }
             }
         }
-        // Launch's end: the logging controls themselves on screen (LaunchTiming).
-        .onAppear { LaunchTiming.loggingReady(entries: store.entries.count) }
+        // Launch's end: the logging controls themselves laid out on screen (LaunchTiming).
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            LaunchTiming.loggingLaidOut("shortcuts", at: $0, entries: store.entries.count)
+        }
     }
 
     /// The meal new food goes into: by habit and time today, Snacks on other days.
@@ -551,7 +553,9 @@ struct TodayView: View {
                 .scrollIndicators(.hidden)
                 .padding(.horizontal, -ExSpacing.page)
             }
-            .onAppear { LaunchTiming.loggingReady(entries: store.entries.count) }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                LaunchTiming.loggingLaidOut("logAgain", at: $0, entries: store.entries.count)
+            }
         } else if let day {
             TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, logged: dayLogged, row: true) { repeatDay(day) }
         }

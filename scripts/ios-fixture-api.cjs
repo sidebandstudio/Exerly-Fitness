@@ -223,6 +223,8 @@ providers.lookupBarcode = async (identity) => ({
       processToReadyMs: processMs,
       initToReadyMs: initMs,
       entries: Number.isFinite(entries) ? entries : null,
+      // Where each logging control was laid out, [x, y, width, height] in points.
+      frames: req.body?.frames && typeof req.body.frames === 'object' ? req.body.frames : {},
     });
     res.sendStatus(204);
   });

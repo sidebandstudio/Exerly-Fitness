@@ -4,9 +4,10 @@ import XCTest
 /// person with a week of food relaunches the app 20 times from terminated.
 /// The gate is end to end: from the process starting (the kernel's clock,
 /// so loading the app's code counts) to the first frame drawn with Today and
-/// Log again, which the app reports to the fixture (LaunchTiming); and Log
-/// again's chip, one tap from a logged food, must be hittable by the time the
-/// launch returns. Reported beside it: XCTApplicationLaunchMetric's launch to
+/// Log again, which the app reports to the fixture with where it laid Log
+/// again out (LaunchTiming); that place must hold Log again's chip in the
+/// accessibility tree, and the chip, one tap from a logged food, must be
+/// hittable by the time the launch returns. Reported beside it: XCTApplicationLaunchMetric's launch to
 /// a responsive first frame (in the log), the app's own interval from its
 /// start (XCTOSSignpostMetric), and the wall clock from asking for the launch
 /// to the chip being hittable, which includes XCTest's own setup. Simulator
@@ -61,7 +62,14 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         attachment.name = "launch-to-logging"
         attachment.lifetime = .keepAlways
         add(attachment)
+        // Each report placed Log again where the accessibility tree has it.
+        let seen = chip.frame
+        let placed = timings.filter { timing in
+            guard let place = (timing["frames"] as? [String: [Double]])?["logAgain"], place.count == 4 else { return false }
+            return seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
+        }.count
         XCTAssertGreaterThanOrEqual(timings.count, 20, "One report per launch")
+        XCTAssertEqual(placed, timings.count, "Each launch reported Log again where it was on screen: \(report)")
         XCTAssertEqual(hittableAtLaunch, wallClock.count, "Log again is ready when the launch returns: \(report)")
         XCTAssertLessThan(endToEnd.p50, Self.ceiling, report)
     }
@@ -76,26 +84,31 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         let app = launch(resetSession: true)
         signIn(app, email: person.email)
         settleAfterSignIn(app)
-        let chip = logAgain(app)
-        XCTAssertTrue(chip.waitForExistence(timeout: 60))
+        // Log again offers usual foods only at the hours this history eats
+        // them; the shortcuts, which also end launch, are there at any hour.
+        let usual = logAgain(app)
+        let (chip, control) = usual.waitForExistence(timeout: 60) ? (usual, "logAgain") : (app.buttons["today.weighIn"], "shortcuts")
+        XCTAssertTrue(chip.waitForExistence(timeout: 20))
         app.launchArguments.removeAll { $0 == "--ui-testing" }
         // The first sync brings the years down in pages; relaunch until all of it is on the device.
         var onDevice = 0
         for _ in 0..<20 where onDevice < entries {
             try await Task.sleep(for: .seconds(20))
-            onDevice = try await coldLaunches(app, chip: chip, count: 1).timings.last?["entries"] as? Int ?? 0
+            onDevice = try await coldLaunches(app, chip: chip, control: control, count: 1).timings.last?["entries"] as? Int ?? 0
         }
         XCTAssertGreaterThanOrEqual(onDevice, entries, "All \(entries) entries on the device")
-        let (timings, hittable) = try await coldLaunches(app, chip: chip, count: 10)
+        let (timings, hittable, placed) = try await coldLaunches(app, chip: chip, control: control, count: 10)
         let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
-        let report = "Three years, \(onDevice) food entries: process start to Today's first frame with Log again over "
-            + "\(timings.count) cold launches: \(endToEnd.text); Log again hittable as the launch returned: \(hittable) of \(timings.count)."
+        let report = "Three years, \(onDevice) food entries: process start to Today's first frame with \(control) over "
+            + "\(timings.count) cold launches: \(endToEnd.text); hittable as the launch returned: \(hittable) of \(timings.count), "
+            + "where the launch reported it: \(placed)."
         print(report)
         let attachment = XCTAttachment(string: report)
         attachment.name = "launch-three-years"
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertEqual(hittable, timings.count, report)
+        XCTAssertEqual(placed, timings.count, report)
         XCTAssertLessThan(endToEnd.p50, Self.yearsCeiling, report)
     }
 
@@ -103,7 +116,9 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
     static let yearsCeiling = 3.5
 
     /// Today customized with the logging cards last: launch still draws them,
-    /// and Log again, in its first frame, never a frame later.
+    /// and Log again, in its first frame, never a frame later. Below the fold
+    /// there, Log again isn't hittable without a scroll, so each launch must
+    /// report the place the accessibility tree has it in as the launch returns.
     func testColdLaunchDrawsTheLoggingCardsInACustomizedOrder() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "launch-custom", units: "imperial")
@@ -116,29 +131,44 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         let chip = logAgain(app)
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         app.launchArguments.removeAll { $0 == "--ui-testing" }
-        let (timings, hittable) = try await coldLaunches(app, chip: chip, count: 5)
+        let (timings, hittable, placed) = try await coldLaunches(app, chip: chip, count: 5)
+        let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
+        print("Logging cards last: \(endToEnd.text) over \(timings.count) cold launches; Log again hittable as the launch returned: "
+              + "\(hittable), where the launch reported it: \(placed).")
         XCTAssertEqual(timings.count, 5, "Each launch reported the frame with Log again")
-        XCTAssertEqual(hittable, 5, "Log again was reachable as each launch returned")
+        XCTAssertEqual(placed, 5, "Each launch reported Log again where it was drawn, not a frame early")
     }
 
     private func logAgain(_ app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
     }
 
-    /// Launches from terminated `count` times: the app's reports, and how many
-    /// launches returned with the chip already reachable.
-    private func coldLaunches(_ app: XCUIApplication, chip: XCUIElement, count: Int) async throws -> (timings: [[String: Any]], hittable: Int) {
+    /// Launches from terminated `count` times: the app's reports, how many
+    /// launches returned with the chip already hittable, and how many reported
+    /// its `control` (Log again or the shortcuts) where the accessibility tree
+    /// has the chip as the launch returned, so the time reported is the frame
+    /// that placed it there.
+    private func coldLaunches(_ app: XCUIApplication, chip: XCUIElement, control: String = "logAgain",
+                              count: Int) async throws -> (timings: [[String: Any]], hittable: Int, placed: Int) {
         _ = try await request("DELETE", "/__test/launch-timings")
-        var hittable = 0
-        for _ in 0..<count {
+        var hittable = 0, placed = 0
+        var timings: [[String: Any]] = []
+        for launch in 0..<count {
             app.terminate()
             app.launch()
-            if chip.exists && chip.isHittable { hittable += 1 }
+            let seen = chip.exists ? chip.frame : nil
+            if seen != nil && chip.isHittable { hittable += 1 }
             XCTAssertTrue(chip.waitForExistence(timeout: 20))
+            // A report is posted as its frame shows; give it a moment.
+            for _ in 0..<20 where timings.count <= launch {
+                timings = try await request("GET", "/__test/launch-timings")["timings"] as? [[String: Any]] ?? []
+                if timings.count <= launch { try await Task.sleep(for: .milliseconds(250)) }
+            }
+            let frames = timings.count > launch ? timings[launch]["frames"] as? [String: [Double]] : nil
+            if let seen, let reported = frames?[control], reported.count == 4,
+               seen.minY >= reported[1] - 1, seen.maxY <= reported[1] + reported[3] + 1 { placed += 1 }
         }
-        // A report is posted as its frame shows; give the last one a moment.
-        try await Task.sleep(for: .seconds(2))
-        return (try await request("GET", "/__test/launch-timings")["timings"] as? [[String: Any]] ?? [], hittable)
+        return (timings, hittable, placed)
     }
 
     private static func accountID(in token: String) -> String? {

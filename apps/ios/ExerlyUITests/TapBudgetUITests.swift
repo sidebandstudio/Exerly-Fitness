@@ -34,7 +34,9 @@ final class TapBudgetUITests: ExerlyUITestCase {
         let (app, person) = try await budgetHome(prefix: "budget-suggestion")
         let chip = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
-        let name = String(chip.label.dropFirst("Log ".count).prefix { $0 != "," })
+        // "Log <name>, <portion>": a name can have commas of its own ("Greek yogurt, plain").
+        let label = chip.label.dropFirst("Log ".count)
+        let name = String(label[..<(label.range(of: ", ", options: .backwards)?.lowerBound ?? label.endIndex)])
         startCounting()
         tap(chip, in: app)
         XCTAssertEqual(tapCount, 1)

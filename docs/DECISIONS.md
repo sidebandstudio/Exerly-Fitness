@@ -2187,3 +2187,20 @@ From the second independent review of the tap-budget work:
   been presented: two display refreshes after those controls appear, not the
   first callback, which only prepares the next frame. The logging cards are
   drawn in the first frame in any customized order.
+
+## 2026-10-21: Launch ends on the commit of the frame that lays out the logging controls
+
+Third pass at B03's end point, from review round 2. Display-link ticks don't
+show when a frame is presented. With three years of history, Today was drawn
+within 3 s, yet the two ticks the gate waited for arrived after 31 to 50 s,
+with the main thread idle: an idle run loop isn't woken for them. Launch now
+ends when the frame from the layout that places Log again (or the shortcuts)
+has been committed. A run-loop observer ordered after Core Animation's commit
+marks it, and the loop is woken so the observer runs even when nothing else
+happens. The render server shows that frame at the next refresh. Today's
+cards below the fold used the same display-link wait and now follow this as
+well, so with a long history they no longer arrive half a minute late. The
+launch reports where Log again was laid out, and LaunchToLoggingUITests checks
+that place against the accessibility tree as each launch returns. With the
+logging cards moved last, Log again is laid out below the fold, and the figure
+for that order is the time to the frame that draws it there.
