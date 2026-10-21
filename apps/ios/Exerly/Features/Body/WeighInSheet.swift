@@ -220,11 +220,14 @@ struct WeighInSheet: View {
                 : "Weight, \(shown) \(BodyFormat.unitName(unit))")
             .accessibilityHint(fromHealth ? "" : placeholder ? "Type today's weight on the keypad" : "Double-tap to type a weight")
             .accessibilityIdentifier("weighIn.value")
-            if let context {
+            let offersLast = editing == nil && placeholder && lastReading != nil
+            // At the largest sizes Same as last names the last reading, and the
+            // line above it would push the keypad's bottom row under Save.
+            if let context, !(offersLast && typeSize.isAccessibilitySize) {
                 Text(context).font(.exCaption).foregroundStyle(Color.exTextSecondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("weighIn.context")
             }
-            if editing == nil, placeholder, let lastReading {
+            if offersLast, let lastReading {
                 // Weighing the same is a choice of its own, not what an untouched Save does.
                 Button {
                     value = lastReading
@@ -496,7 +499,7 @@ private struct WeighInDetent: CustomPresentationDetent {
 
 /// Tall enough for the number, the keypad and Save, without a gap under the keypad.
 private struct WeighInTypingDetent: CustomPresentationDetent {
-    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 560) }
+    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 620) }
 }
 
 extension PresentationDetent {
