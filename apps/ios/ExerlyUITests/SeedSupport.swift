@@ -36,13 +36,18 @@ extension ExerlyUITestCase {
         try await seedEntry(chicken, grams: 150, daysAgo: 3, meal: "Dinner", minutes: 480, token: token)
     }
 
-    /// Logs an entry `daysAgo` days back, `minutes` before now's time of day.
+    /// Logs an entry `daysAgo` days back, `minutes` before now's time of day,
+    /// on that New York day even just after midnight, when the time would fall
+    /// on the day before: then a minute past its midnight.
     func seedEntry(_ food: SeedFood, grams: Double, daysAgo: Int, meal: String, minutes: Int = 15, token: String) async throws {
         let id = UUID().uuidString
-        let at = Date().addingTimeInterval(Double(-daysAgo * 86_400 - minutes * 60))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let start = calendar.date(byAdding: .day, value: -daysAgo, to: calendar.startOfDay(for: Date()))!
+        let at = max(Date().addingTimeInterval(Double(-daysAgo * 86_400 - minutes * 60)), start.addingTimeInterval(60))
         let day = DateFormatter()
-        day.calendar = Calendar(identifier: .gregorian)
-        day.timeZone = TimeZone(identifier: "America/New_York")!
+        day.calendar = calendar
+        day.timeZone = calendar.timeZone
         day.dateFormat = "yyyy-MM-dd"
         let instant = ISO8601DateFormatter()
         instant.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
