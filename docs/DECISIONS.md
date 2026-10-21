@@ -2033,3 +2033,27 @@ quick add, measurements, nutrient goals, manual targets, recipe yield,
 activity and program targets). Next goes to the next one on screen, skipping
 any not shown, such as a closed group of nutrients; a field outside an order
 has no Next. Place on screen isn't used at all, so text size can't change it.
+
+## 2026-10-20: One-tap preferences have their own queue, apart from Your details
+
+Review round 1 found that Customize Today's eaten or left and the water
+sheet's goal borrowed Your details' draft. Offline, with no draft, the change
+did nothing and a relaunch showed the old one; a pending save blocked newer
+ones; and the whole draft was sent, so an unfinished name or allergy went with
+the water goal and could replace another device's change without review.
+
+- `QuickPreferences` keeps these fields per account on the device the moment
+  they change, shows them over the account's values (Today, the water row and
+  the controls read it first), and says "Saved on this iPhone. It syncs when
+  you're back online." while it waits.
+- It sends only the fields it holds, against the revision it has just read,
+  one send at a time; a change made while one is sending waits behind it, and
+  only its newest value goes. A lost response is replayed as sent, so the
+  server answers it again; a 409 reads the revision again and sends the same
+  fields as a new write.
+- Offline it retries after 3, 6, 12 and then every 20 seconds, and when the
+  app comes back to the front or the connection returns.
+- For these fields the last change wins, as a switch does, rather than asking:
+  they hold one choice each and the person just made it. Your details' draft,
+  its base revision and its conflict review are never touched, so an
+  unfinished edit there still asks before replacing another device's save.

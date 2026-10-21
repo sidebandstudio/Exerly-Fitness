@@ -161,16 +161,16 @@ struct TodayCustomizeView: View {
 }
 
 /// Whether Today's calories and macros lead with what's left or what's
-/// eaten: the account's preference, which Your details also shows, saved the
-/// moment it's chosen like the rest of Customize.
+/// eaten: the account's preference, which Your details also shows, kept on
+/// this iPhone the moment it's chosen and sent on its own.
 private struct TodayDisplayChoice: View {
-    @StateObject private var store: PreferencesStore
+    @ObservedObject private var quick: QuickPreferences
     @State private var eaten: Bool
-    @State private var saving: Task<Void, Never>?
 
     init(accountID: String, auth: AuthViewModel) {
-        _store = StateObject(wrappedValue: .signedIn(accountID: accountID, auth: auth))
-        _eaten = State(initialValue: auth.currentUser?.leadsWithEaten ?? false)
+        let quick = QuickPreferences.signedIn(accountID: accountID, auth: auth)
+        self.quick = quick
+        _eaten = State(initialValue: quick.leadsWithEaten(auth.currentUser))
     }
 
     var body: some View {
@@ -179,9 +179,12 @@ private struct TodayDisplayChoice: View {
                 $0 ? "What you've eaten" : "What's left"
             }
             .accessibilityIdentifier("today.customize.display")
-            if let error = store.error {
+            if let error = quick.error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
                     .accessibilityIdentifier("today.customize.displayError")
+            } else if quick.isWaitingForConnection && quick.isUnsent("nutritionDisplay") {
+                Text(QuickPreferences.waitingNote).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    .accessibilityIdentifier("today.customize.displayNote")
             }
         } header: {
             Text("Calories and macros show")
@@ -191,9 +194,6 @@ private struct TodayDisplayChoice: View {
     private func choose(_ value: Bool) {
         guard value != eaten else { return }
         eaten = value
-        // The latest choice wins: an earlier one still sending is cancelled and re-sent before it.
-        saving?.cancel()
-        let store = store
-        saving = Task { await store.saveNow(["nutritionDisplay": value ? "consumed" : "remaining"]) }
+        quick.set("nutritionDisplay", .string(value ? "consumed" : "remaining"))
     }
 }

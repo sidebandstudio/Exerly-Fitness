@@ -264,15 +264,14 @@ struct TodayWaterSheet: View {
 private struct TodayWaterGoal: View {
     let imperial: Bool
     @Binding var changed: Bool
-    @StateObject private var store: PreferencesStore
+    @ObservedObject private var quick: QuickPreferences
     @State private var text: String
     @State private var invalid = false
-    @State private var saving: Task<Void, Never>?
 
     init(goal: Int?, imperial: Bool, changed: Binding<Bool>, accountID: String, auth: AuthViewModel) {
         self.imperial = imperial
         _changed = changed
-        _store = StateObject(wrappedValue: .signedIn(accountID: accountID, auth: auth))
+        quick = .signedIn(accountID: accountID, auth: auth)
         _text = State(initialValue: goal.map { Self.text($0, imperial: imperial) } ?? "")
     }
 
@@ -287,8 +286,10 @@ private struct TodayWaterGoal: View {
             Group {
                 if invalid {
                     Text(imperial ? "Enter a goal from 9 to 338 fl oz." : "Enter a goal from 250 to 10,000 ml.").foregroundStyle(Color.exError)
-                } else if let error = store.error {
+                } else if let error = quick.error {
                     Text(error).foregroundStyle(Color.exError)
+                } else if quick.isWaitingForConnection && quick.isUnsent("waterGoalMl") {
+                    Text(QuickPreferences.waitingNote).foregroundStyle(Color.exTextSecondary)
                 } else if text.isEmpty {
                     Text("No daily goal. Type one, or tap + to start from \(start) \(unit).").foregroundStyle(Color.exTextSecondary)
                 } else {
@@ -306,19 +307,15 @@ private struct TodayWaterGoal: View {
         .onChange(of: text) { _, text in schedule(text) }
     }
 
-    /// Saves a moment after the last change, so typing "100" sends 100, not 1 and 10.
+    /// Kept on this iPhone at each valid change; while one is sending, only
+    /// the newest waits behind it.
     private func schedule(_ text: String) {
-        saving?.cancel()
         let typed = text.trimmingCharacters(in: .whitespaces)
         let milliliters = typed.isEmpty ? nil : Self.milliliters(typed, imperial: imperial)
         invalid = !typed.isEmpty && milliliters == nil
         guard !invalid else { return }
         changed = true
-        let store = store
-        saving = Task {
-            do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
-            await store.saveNow(["waterGoalMl": milliliters.map(String.init) ?? ""])
-        }
+        quick.set("waterGoalMl", milliliters.map { .number(Double($0)) } ?? .null)
     }
 
     static func text(_ milliliters: Int, imperial: Bool) -> String {

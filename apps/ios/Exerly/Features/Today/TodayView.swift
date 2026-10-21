@@ -18,10 +18,13 @@ struct TodayHostView: View {
         Group {
             if let workspace = account.training, workspace.accountID == accountID,
                let api = auth.accountAPI, api.accountID == accountID {
-                TodayView(workspace: workspace, api: api, unit: unit, timeZone: timeZone, link: $link, reselected: reselected,
-                          entered: entered, leadsWithEaten: auth.currentUser?.leadsWithEaten ?? false,
-                          waterGoal: auth.currentUser?.waterGoalMl, showTraining: showTraining)
-                    .id(workspace.identity)
+                QuickPreferencesReader(quick: .signedIn(accountID: accountID, auth: auth)) { quick in
+                    // This iPhone's choices first: one made offline shows at once, and after a relaunch.
+                    TodayView(workspace: workspace, api: api, unit: unit, timeZone: timeZone, link: $link, reselected: reselected,
+                              entered: entered, leadsWithEaten: quick.leadsWithEaten(auth.currentUser),
+                              waterGoal: quick.waterGoal(auth.currentUser), showTraining: showTraining)
+                }
+                .id(workspace.identity)
             } else if account.openingError != nil {
                 ContentUnavailableView {
                     Label("Today could not open", systemImage: "externaldrive.badge.exclamationmark")

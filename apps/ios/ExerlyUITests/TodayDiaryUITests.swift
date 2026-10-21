@@ -113,6 +113,90 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         await fulfillment(of: [expectation(for: NSPredicate(format: "value CONTAINS %@", "to go of 90 fl oz"), evaluatedWith: row)], timeout: 15)
     }
 
+    /// Review round 1: offline, the choice of eaten or left and the water
+    /// goal did nothing, so a relaunch showed the old ones. Each is kept on
+    /// the device at once, shown, said to sync, and sent once back online.
+    func testTodayChoicesMadeOfflineSurviveARelaunchAndSyncOnceOnline() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "today-offline-prefs", units: "imperial")
+        try await seedWeek(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 20))
+        try await control(["offline": true])
+        tap(app.buttons["today.dayMenu"], in: app)
+        tap(app.buttons["today.dayMenu.customize"], in: app)
+        tap(app.buttons["What you've eaten"], in: app)
+        XCTAssertTrue(app.buttons["What you've eaten"].isSelected)
+        let displayNote = app.staticTexts["today.customize.displayNote"]
+        XCTAssertTrue(displayNote.waitForExistence(timeout: 5) && displayNote.label.contains("online"), displayNote.label)
+        tap(app.buttons["today.customize.done"], in: app)
+        XCTAssertTrue(app.staticTexts["kcal eaten"].waitForExistence(timeout: 10), "Shown at once, offline")
+        let row = app.buttons["today.water"]
+        reveal(row, in: app)
+        tap(app.buttons["today.water.other"], in: app)
+        let goal = app.textFields["water.goal"]
+        reveal(goal, in: app)
+        replace(goal, with: "90", in: app)
+        let note = app.descendants(matching: .any)["water.goal.note"]
+        await fulfillment(of: [expectation(for: NSPredicate(format: "label CONTAINS %@", "online"), evaluatedWith: note)], timeout: 10)
+        capture(app, "water-goal-offline")
+        tap(app.buttons["water.close"], in: app)
+
+        app.terminate(); app.launchArguments = []; app.launch()
+        XCTAssertTrue(app.staticTexts["kcal eaten"].waitForExistence(timeout: 20), "Still eaten after a relaunch offline")
+        reveal(row, in: app)
+        await fulfillment(of: [expectation(for: NSPredicate(format: "value CONTAINS %@", "of 90 fl oz"), evaluatedWith: row)], timeout: 15)
+
+        try await control([:])
+        try await waitForPreference("nutritionDisplay", "consumed", token: person.token, attempts: 120)
+        try await waitForPreference("waterGoalMl", 2662, token: person.token, attempts: 120)
+    }
+
+    /// Review round 1: setting the water goal sent the whole Your details
+    /// draft, an unfinished name with it, and replaced another device's name
+    /// without asking. Now it sends only the goal, and the draft and its
+    /// review are left as they were.
+    func testTheWaterGoalSendsOnlyItselfAndLeavesAnUnfinishedDetailsDraft() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "today-goal-only", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        XCTAssertTrue(app.buttons["today.water"].waitForExistence(timeout: 20))
+        tap(app.buttons["Profile"], in: app)
+        tap(app.buttons["profile.details"], in: app)
+        XCTAssertTrue(app.navigationBars["Your details"].waitForExistence(timeout: 10))
+        let name = app.textFields["preferences.name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 15))
+        replace(name, with: "Unfinished Morgan", in: app)
+        dismissKeyboard(app)
+        // Left unsaved: the draft stays on this iPhone.
+        app.terminate(); app.launchArguments = []; app.launch()
+        let remote = try await request("GET", "/api/preferences", token: person.token)
+        _ = try await request("PATCH", "/api/preferences", body: ["base_revision": remote["revision"]!, "changes": ["name": "Other Device Morgan"]],
+                              token: person.token)
+
+        let row = app.buttons["today.water"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        reveal(row, in: app)
+        tap(app.buttons["today.water.other"], in: app)
+        let goal = app.textFields["water.goal"]
+        reveal(goal, in: app)
+        replace(goal, with: "90", in: app)
+        try await waitForPreference("waterGoalMl", 2662, token: person.token)
+        tap(app.buttons["water.close"], in: app)
+        let saved = try await request("GET", "/api/preferences", token: person.token)
+        XCTAssertEqual((saved["values"] as? [String: Any])?["name"] as? String, "Other Device Morgan",
+                       "The other device's name stays: the goal sent only itself")
+
+        tap(app.buttons["Profile"], in: app)
+        tap(app.buttons["profile.details"], in: app)
+        XCTAssertTrue(app.navigationBars["Your details"].waitForExistence(timeout: 10))
+        XCTAssertTrue(name.waitForExistence(timeout: 15))
+        XCTAssertEqual(name.value as? String, "Unfinished Morgan", "The unfinished draft is kept")
+        XCTAssertTrue(app.buttons["Save my edits"].waitForExistence(timeout: 15), "And its conflict is left for review")
+    }
+
     /// Two taps mark today a fast; the calendar shows it, with the days before it.
     func testMarkingADayFastedShowsInTheCalendar() async throws {
         let app = try await signedInWithWeek(prefix: "today-fasted")
@@ -285,9 +369,9 @@ final class TodayDiaryUITests: ExerlyUITestCase {
     }
 
     /// Waits for the account's preference `key` to be `value` on the server.
-    private func waitForPreference<Value: Equatable>(_ key: String, _ value: Value, token: String) async throws {
+    private func waitForPreference<Value: Equatable>(_ key: String, _ value: Value, token: String, attempts: Int = 40) async throws {
         var found: Any?
-        for _ in 0..<40 {
+        for _ in 0..<attempts {
             found = (try await request("GET", "/api/preferences", token: token)["values"] as? [String: Any])?[key]
             if found as? Value == value { return }
             try await Task.sleep(for: .milliseconds(500))

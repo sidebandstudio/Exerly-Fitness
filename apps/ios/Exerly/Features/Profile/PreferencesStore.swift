@@ -179,20 +179,6 @@ final class PreferencesStore: ObservableObject {
     func activate() { isActive = true }
     func stop() { isActive = false }
 
-    /// The signed-in account's store, whose accepted preferences reach
-    /// `auth` and its reminders, as Your details makes it.
-    static func signedIn(accountID: String, auth: AuthViewModel) -> PreferencesStore {
-        let sessionID = auth.sessionID
-        return PreferencesStore(
-            accountID: accountID,
-            ownerIsActive: { [weak auth] in auth?.currentUser?.id == accountID && auth?.sessionID == sessionID },
-            onAccepted: { [weak auth] snapshot in
-                auth?.acceptPreferences(snapshot.user, accountID: accountID, sessionID: sessionID)
-                NotificationService.shared.accept(snapshot)
-            }
-        )
-    }
-
     var isLocked: Bool { isSaving || draft?.pending != nil || !isReadable }
     var hasEdits: Bool { draft.map { $0.fields != PreferenceFields.fields($0.base) } ?? false }
 
@@ -352,21 +338,6 @@ final class PreferencesStore: ObservableObject {
             }
         } catch { fail(error) }
     }
-    /// Saves `changes` at once, as a switch does, from a screen other than
-    /// Your details: after a refresh or save still running, and after
-    /// opening the account's preferences when nothing is open yet. Another
-    /// device's save doesn't undo these fields.
-    func saveNow(_ changes: [String: String]) async {
-        while isLoading || isSaving {
-            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-        }
-        if draft == nil || draft?.pending != nil { await load() }
-        for (key, value) in changes { edit(key, value: value) }
-        guard changes.allSatisfy({ draft?.fields[$0.key] == $0.value }) else { return }
-        await save()
-        if conflict != nil { await resolve(useServer: false) }
-    }
-
     func resolve(useServer: Bool) async {
         guard let remote = conflict, var current = draft, !isSaving, !isLoading, isOwned else { return }
         do {
