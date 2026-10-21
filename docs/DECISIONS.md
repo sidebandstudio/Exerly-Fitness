@@ -2610,3 +2610,29 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - The reminder that comes back has an ID under `exerly.again.`, outside
   `exerly.reminder.`, so rescheduling leaves it alone. It keeps its button,
   and it comes back only for the signed-in account.
+
+## 2026-10-21: History from Health is previewed before it's imported
+
+- Turning on Read weigh-ins, from Health settings or the Body screen's
+  offer, first shows what it would add: how many, from when to when, how
+  many are already in Exerly, and each source. Nothing is read into Exerly
+  until Import. Import then turns the switch on, and `HealthSync` imports
+  the same readings as before. `HealthSync` is unchanged.
+- New switches: Read food from other apps and Read workouts from other
+  apps, with the same preview. They live in `HealthHistoryReads.swift`
+  with their own HealthKit client, away from the write-access code the
+  nutrition branch changes.
+- Food comes from Health's food entries (correlations), one entry per
+  food, logged into the meal the clock gives at its time, as unweighed
+  nutrients. Loose nutrient samples outside a food entry aren't read.
+  Each entry keeps its Health ID, so importing again adds nothing, and a
+  food deleted in Health is removed. Imported food is never written back
+  to Health (`HealthFoodRecord` skips `health:` food IDs).
+- Source priority uses the same order as recovery. Each day's food comes
+  from its best source only, so two apps saving the same meals don't
+  double it. Of workouts that overlap in time, only the best source's
+  count. Weigh-ins are all imported, as before, and shown by source.
+- Workouts become activity entries (type, minutes, active energy) through
+  the activity log's own save, once each. A workout deleted in Health
+  stays in the activity log; delete it there.
+- Exerly's own samples, from the phone or the watch, are never read back.

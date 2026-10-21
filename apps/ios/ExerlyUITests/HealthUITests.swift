@@ -53,6 +53,12 @@ final class HealthUITests: ExerlyUITestCase {
             }
             allow.tap()
         }
+        // History is previewed before it's imported.
+        let importButton = app.buttons["health.preview.import"]
+        if importButton.waitForExistence(timeout: 10) {
+            if designCapture { capture(app, "health-preview-\(identifier)") }
+            importButton.tap()
+        }
         await wait(for: toggle, "value == %@", "1", timeout: 15)
     }
 

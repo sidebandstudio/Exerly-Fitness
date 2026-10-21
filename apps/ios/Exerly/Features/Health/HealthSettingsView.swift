@@ -114,12 +114,14 @@ final class HealthReadModel: ObservableObject {
 struct HealthKitSettingsView: View {
     @StateObject private var activity: HealthReadModel
     @StateObject private var recovery: HealthRecoveryModel
+    @StateObject private var history: HealthHistoryModel
     @ObservedObject private var sync = HealthSync.shared
     @Environment(\.dynamicTypeSize) private var typeSize
 
     init(accountID: String) {
         _activity = StateObject(wrappedValue: HealthReadModel(accountID: accountID))
         _recovery = StateObject(wrappedValue: HealthRecoveryModel(accountID: accountID))
+        _history = StateObject(wrappedValue: HealthHistoryModel(accountID: accountID))
     }
 
     var body: some View {
@@ -142,6 +144,10 @@ struct HealthKitSettingsView: View {
             }
             section("Read from Health") {
                 switchRow(.readWeights)
+                divider
+                historyRow(.foods)
+                divider
+                historyRow(.workouts)
                 divider
                 activityRow
             }
@@ -166,6 +172,10 @@ struct HealthKitSettingsView: View {
         .task {
             await activity.refresh()
             await recovery.refresh()
+            await history.refresh()
+        }
+        .sheet(item: $history.pending) { pending in
+            HealthImportPreviewSheet(pending: pending, onImport: { Task { await history.confirm() } }, onCancel: history.cancel)
         }
         .onDisappear {
             activity.close()
@@ -192,14 +202,23 @@ struct HealthKitSettingsView: View {
 
     private func switchRow(_ category: HealthCategory) -> some View {
         VStack(alignment: .leading, spacing: ExSpacing.small) {
-            Toggle(isOn: Binding(get: { sync.preferences.isOn(category) },
-                                 set: { enabled in Task { await sync.setEnabled(category, enabled) } })) {
+            Toggle(isOn: Binding(get: { sync.preferences.isOn(category) }, set: { enabled in
+                Task {
+                    // History is previewed before the switch reads it all.
+                    if category == .readWeights, enabled { await history.begin(.weights) } else { await sync.setEnabled(category, enabled) }
+                }
+            })) {
                 toggleLabel(category)
             }
             .tint(.exActionFill)
-            .disabled(!sync.isAvailable || sync.requesting != nil)
+            .disabled(!sync.isAvailable || sync.requesting != nil || history.requesting != nil)
             .accessibilityIdentifier("health.\(category.rawValue)")
-            if sync.requesting == category { ProgressView("Opening Health access…").font(.exCaption) }
+            if sync.requesting == category || (category == .readWeights && history.requesting == .weights) {
+                ProgressView("Opening Health access…").font(.exCaption)
+            }
+            if category == .readWeights {
+                historyNotes(.weights)
+            }
             if let notice = sync.notices[category] {
                 Label(notice, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -243,6 +262,33 @@ struct HealthKitSettingsView: View {
                 .padding(ExSpacing.item)
                 .background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control, style: .continuous))
             }
+        }
+    }
+
+    private func historyRow(_ kind: HealthHistoryKind) -> some View {
+        VStack(alignment: .leading, spacing: ExSpacing.small) {
+            Toggle(isOn: Binding(get: { history.enabled.contains(kind) }, set: { on in
+                if on { Task { await history.begin(kind) } } else { history.turnOff(kind) }
+            })) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(kind.title).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary)
+                    Text(kind.purpose).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                }.fixedSize(horizontal: false, vertical: true)
+            }
+            .tint(.exActionFill)
+            .disabled(!history.isAvailable || history.requesting != nil)
+            .accessibilityIdentifier("health.history.\(kind.rawValue)")
+            if history.requesting == kind { ProgressView("Reading Health…").font(.exCaption) }
+            historyNotes(kind)
+        }
+    }
+
+    @ViewBuilder private func historyNotes(_ kind: HealthHistoryKind) -> some View {
+        if let message = history.messages[kind] {
+            Label(message, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
+        }
+        if let added = history.lastImport[kind] {
+            Text(added).font(.exCaption).foregroundStyle(Color.exTextSecondary).accessibilityIdentifier("health.history.\(kind.rawValue).added")
         }
     }
 

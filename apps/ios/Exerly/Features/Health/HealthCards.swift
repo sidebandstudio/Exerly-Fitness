@@ -7,6 +7,8 @@ import SwiftUI
 /// and never on a device without Health.
 struct HealthWeighInPrompt: View {
     @ObservedObject private var sync = HealthSync.shared
+    /// Weigh-ins only, which keep no state of their own.
+    @StateObject private var history = HealthHistoryModel(accountID: "")
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -35,15 +37,12 @@ struct HealthWeighInPrompt: View {
                     : AnyLayout(HStackLayout(spacing: ExSpacing.small))
                 layout {
                     Button {
-                        Task {
-                            await sync.setEnabled(.readWeights, true)
-                            if sync.preferences.isOn(.readWeights) { sync.dismissPrompt() }
-                        }
+                        Task { await history.begin(.weights) }
                     } label: {
-                        if sync.requesting == .readWeights { ProgressView().tint(.white) } else { Text("Turn on") }
+                        if sync.requesting == .readWeights || history.requesting != nil { ProgressView().tint(.white) } else { Text("Turn on") }
                     }
                     .buttonStyle(ExActionStyle())
-                    .disabled(sync.requesting != nil)
+                    .disabled(sync.requesting != nil || history.requesting != nil)
                     .accessibilityIdentifier("health.prompt.turnOn")
                     Button("Not now") { sync.dismissPrompt() }
                         .buttonStyle(ExActionStyle(secondary: true))
@@ -52,6 +51,14 @@ struct HealthWeighInPrompt: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("health.prompt")
+            .sheet(item: $history.pending) { pending in
+                HealthImportPreviewSheet(pending: pending, onImport: {
+                    Task {
+                        await history.confirm()
+                        if sync.preferences.isOn(.readWeights) { sync.dismissPrompt() }
+                    }
+                }, onCancel: history.cancel)
+            }
         }
     }
 }
