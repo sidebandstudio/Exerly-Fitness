@@ -2157,3 +2157,33 @@ From an independent review of the tap-budget work:
   screen there, and the four shortcuts sit two by two instead of four
   full-width rows. A layout someone chose in Customize keeps its order.
 - CI runs four of Today's undo and navigation tests next to the tap budgets.
+
+## 2026-10-21: Today's confirmation moves to the navigation bar; accounts open off the main actor
+
+From the second independent review of the tap-budget work:
+
+- A logging confirmation took the bottom of Today for six seconds, over
+  Start and Log again's chips. It now takes the date's place under Today's
+  title, with Undo at the bar's leading edge, and stays fifteen seconds (25
+  with VoiceOver) since it covers nothing. Only a failure, which has nothing
+  to undo, still shows at the bottom.
+- Every Undo on Today (the confirmation's, a chip's second tap, the day's
+  button) removes only entries still exactly as its tap logged them
+  (`TodayUndo.removable`): one changed since, here or by another device's
+  sync, stays. The confirmation keeps the entries as logged, not their IDs,
+  and hides once another control has taken any of them back.
+- Log again's checks and Undo survive refreshes on the day they were made:
+  the launch's first sync, pull to refresh and coming back to the app. The
+  shelf is rebuilt when the meal it was built for changes; the day's repeat
+  keeps its Undo all day; a new day starts afresh.
+- The weigh-in keypad keeps Same as last's row while typing, hidden once a
+  digit is typed, so the keys never move under a finger.
+- An account's sessions and food history are read and decoded on a
+  background thread with a read-only connection of their own
+  (`StoredAccount`); the stores start from that on the main actor. A file not
+  yet migrated opens as before. A failed open is kept with its message until
+  Try again, not repeated by every task that asks for the account.
+- Launch ends once the frame that draws Log again (or the shortcuts) has
+  been presented: two display refreshes after those controls appear, not the
+  first callback, which only prepares the next frame. The logging cards are
+  drawn in the first frame in any customized order.

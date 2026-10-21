@@ -219,6 +219,35 @@ extension ExerlyUITestCase {
         return app
     }
 
+    /// Years of it, for launch with a long history: meals most days, about
+    /// three workouts a week and weigh-ins most mornings, `days` back. Written
+    /// through the import a restored export uses, in a few large requests,
+    /// since one request per document would take the API's rate limit half
+    /// an hour. Returns the food entries written.
+    @discardableResult
+    func seedYearsOfHistory(token: String, days: Int) async throws -> Int {
+        var documents: [(kind: String, id: String, payload: [String: Any])] = []
+        let foods = RealisticFood.all
+        for food in foods.values {
+            documents.append(("saved_food", food.id, ["id": food.id, "name": food.name, "source": "custom", "per100g": food.per100g,
+                                                       "servings": [], "favorite": food.favorite, "createdAt": Self.iso(Self.local(-days - 2, 9, 0))]))
+        }
+        documents += realisticMeals(foods: foods, days: days)
+        documents += realisticWeighIns(days: days)
+        documents.append(realisticPlan(days: days))
+        let program = realisticProgram(days: days)
+        documents.append(("program", program.id, program.payload))
+        documents += realisticWorkouts(program: program, days: days, schedule: Array(stride(from: days - 1, to: 1, by: -2)).filter { $0 % 7 != 3 })
+        for chunk in stride(from: 0, to: documents.count, by: 4000) {
+            let rows = documents[chunk..<min(chunk + 4000, documents.count)].map { document -> [String: Any] in
+                ["kind": document.kind, "document_id": document.id, "revision": 1, "payload": document.payload]
+            }
+            let result = try await request("POST", "/v1/import", body: ["version": 1, "documents": rows], token: token)
+            XCTAssertEqual((result["skipped"] as? [Any])?.count ?? 0, 0, "\(result["skipped"] ?? "")")
+        }
+        return documents.filter { $0.kind == "food_entry" }.count
+    }
+
     /// Writes the history and returns how many documents it wrote.
     @discardableResult
     func seedRealisticHistory(token: String, days: Int = 28) async throws -> Int {
@@ -471,8 +500,9 @@ extension ExerlyUITestCase {
     /// in kilograms at full precision (135 lb is 61.235 kg), so imperial shows
     /// round numbers and an equal load is never a record. Reps climb through
     /// each range and the load steps up between cycles.
-    private func realisticWorkouts(program: RealisticProgram, days: Int) -> [(kind: String, id: String, payload: [String: Any])] {
-        let schedule = [26, 24, 22, 20, 19, 17, 15, 13, 12, 10, 8, 5, 2].filter { $0 < days }
+    private func realisticWorkouts(program: RealisticProgram, days: Int,
+                                   schedule: [Int] = [26, 24, 22, 20, 19, 17, 15, 13, 12, 10, 8, 5, 2]) -> [(kind: String, id: String, payload: [String: Any])] {
+        let schedule = schedule.filter { $0 < days }
         return schedule.enumerated().map { index, back in
             let day = program.days[index % program.days.count]
             let cycle = index / program.days.count
