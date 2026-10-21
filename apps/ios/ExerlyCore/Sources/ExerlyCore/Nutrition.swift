@@ -219,6 +219,9 @@ public struct FoodEntry: Sendable, Codable, Hashable, Identifiable {
     /// remembered amount comes from entries as logged, so correcting one
     /// entry doesn't change what the next tap logs.
     public var amountChanged: Bool?
+    /// True when the time of day isn't known, as for a day's total or a row
+    /// imported without a time: `loggedAt` is a stand-in, not when it was eaten.
+    public var timeUnknown: Bool?
 
     public init(id: UUID = UUID(), date: LocalDate, meal: String, loggedAt: Date, food: FoodSnapshot, grams: Double,
                 serving: Serving? = nil, quantity: Double? = nil) {

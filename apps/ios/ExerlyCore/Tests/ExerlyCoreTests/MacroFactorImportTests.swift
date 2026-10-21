@@ -176,16 +176,15 @@ import Testing
     }
 
     /// PARITY N31: a day total, or a row without a time, has no time of day.
-    /// It is stamped at noon, so timing counts it as eaten at 12:00.
+    /// It's stamped at noon for the trend, but timing doesn't count it at 12:00.
     @Test func importedDayTotalsAreLeftOutOfTimingByHour() throws {
         let (_, nutrition, training) = try stores()
         let export = try read()
         #expect(MacroFactorImport(export, nutrition: nutrition, training: training).save(nutrition: nutrition, training: training)
             .failures.isEmpty)
         let timing = nutrition.timing(from: LocalDate("2026-09-29")!, through: LocalDate("2026-09-30")!, timeZone: newYork)
-        withKnownIssue("MacroFactorExport.swift:1048-1049 stamps day totals at noon, which timing reads as eaten at 12:00") {
-            #expect(timing.hours[12].entries == 0 && timing.untimedEntries == export.dayTotals.count)
-        }
+        #expect(timing.hours[12].entries == 0 && timing.untimedEntries == export.dayTotals.count)
+        #expect(export.dayTotals.allSatisfy { $0.timeUnknown == true })
     }
 
     @Test func dayFlagsGiveFastingPartialAndCompleteDaysWithNotes() throws {

@@ -703,6 +703,7 @@ struct MFReader {
             let foodID = MacroFactorExport.foodID(name, brand: brand)
             var snapshot = FoodSnapshot(foodID: foodID, name: name, brand: brand, source: .imported, per100g: amounts)
             var entry = FoodEntry(id: id, date: date, meal: meal, loggedAt: instant(date, seconds), food: snapshot, grams: 100)
+            if seconds == nil { entry.timeUnknown = true }
             if let weight = grams(row, columns, table) {
                 entry.grams = weight
                 entry.food.per100g = amounts.scaled(by: 100 / weight)
@@ -1130,8 +1131,10 @@ struct MFReader {
             var snapshot = FoodSnapshot(foodID: "quick:" + id.uuidString, name: MacroFactorExport.dayTotalName,
                                         source: .imported, per100g: amounts)
             snapshot.unweighed = true
-            export.dayTotals.append(FoodEntry(id: id, date: date, meal: MacroFactorExport.mealWithoutTime,
-                                              loggedAt: WeightTrend.noon(on: date, in: timeZone), food: snapshot, grams: 100))
+            var total = FoodEntry(id: id, date: date, meal: MacroFactorExport.mealWithoutTime,
+                                  loggedAt: WeightTrend.noon(on: date, in: timeZone), food: snapshot, grams: 100)
+            total.timeUnknown = true
+            export.dayTotals.append(total)
         }
         let withFood = logged.union(export.dayTotals.map(\.date))
         for date in withFood.union(flags.keys).sorted() {
