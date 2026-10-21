@@ -1,11 +1,11 @@
 // /v1/export/<name>.csv: one kind of data as a CSV file. /v1/import: restore an
-// Exerly JSON export. See lib/portability.js.
+// Exerly JSON export, and /v1/import/undo its older tables. See lib/portability.js.
 
 const express = require('express');
 const { asyncHandler, badRequest, forbidden, notFound } = require('../lib/errors');
 const { authenticate } = require('../lib/auth');
 const { rateLimit } = require('../lib/ratelimit');
-const { FILES, exportCSV, importExport } = require('../lib/portability');
+const { FILES, exportCSV, importExport, undoRestore } = require('../lib/portability');
 
 const router = express.Router();
 
@@ -39,6 +39,21 @@ router.post(
   express.json({ limit: '25mb' }),
   asyncHandler(async (req, res) => {
     const result = await importExport(req.account, req.body);
+    if (result.error) throw badRequest(result.error);
+    res.json(result);
+  })
+);
+
+// Undoes a restore of the server's older tables, with the rows the import
+// returned. Rows changed since are kept.
+router.post(
+  '/import/undo',
+  rateLimit({ name: 'import', max: 10, windowMs: 60 * 1000 }),
+  authenticate,
+  (req, _res, next) => next(req.pat ? forbidden('Only the Exerly app can undo an import.') : null),
+  express.json({ limit: '5mb' }),
+  asyncHandler(async (req, res) => {
+    const result = await undoRestore(req.account, req.body?.rows);
     if (result.error) throw badRequest(result.error);
     res.json(result);
   })

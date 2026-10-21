@@ -554,8 +554,13 @@ paths:
       description: |
         The body is `/api/export`'s JSON, up to 25 MB. Documents are checked as
         writes, then added with their exported revisions; one the account
-        already has is kept, so a second import changes nothing. Legacy tables
-        are listed, not imported. The app only: tokens get 403.
+        already has is kept, so a second import changes nothing. The older
+        tables (food, measurements, weights, water, diary days and the rest)
+        are restored with this account as owner and new row IDs, matched on
+        their natural keys so a second import adds nothing; `restored` lists
+        the new rows for `/v1/import/undo`. Sign-in identities, webhooks and
+        setup drafts are never restored (`not_restored` says why). The app
+        only: tokens get 403.
       requestBody:
         required: true
         content:
@@ -579,6 +584,59 @@ paths:
                         id: { type: string }
                         reason: { type: string }
                   ignored_tables: { type: array, items: { type: string } }
+                  tables:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        restored: { type: integer }
+                        kept: { type: integer }
+                  restored:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        table: { type: string }
+                        id: { type: string }
+                        revision: { type: integer, nullable: true }
+                  not_restored: { type: object, additionalProperties: { type: string } }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+
+  /v1/import/undo:
+    post:
+      tags: [Sync]
+      operationId: undoImportRestore
+      summary: Undo a restore of the older tables
+      description: |
+        Removes the rows an import's `restored` listed, in one transaction. A
+        row whose revision changed since is kept. Rows a phone syncs are
+        marked deleted, with a change in its feed. The app only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      table: { type: string }
+                      id: { type: string }
+                      revision: { type: integer }
+      responses:
+        '200':
+          description: What was removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed: { type: integer }
+                  kept: { type: integer }
         '400': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
 

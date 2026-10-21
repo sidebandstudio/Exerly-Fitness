@@ -232,7 +232,7 @@ test('an export imports into another account whole, and twice changes nothing', 
   assert.equal(first.status, 200, JSON.stringify(first.body));
   assert.equal(first.body.imported, 8);
   assert.deepEqual(first.body.skipped, []);
-  assert.ok(first.body.ignored_tables.includes('food'), 'legacy tables are not imported');
+  assert.equal(first.body.tables.food?.restored, 1, 'the older food log is restored too');
 
   const documents = async (user) =>
     (await api.get('/v1/changes?after=0', { token: user.token })).body.changes
@@ -252,6 +252,75 @@ test('an export imports into another account whole, and twice changes nothing', 
   );
   assert.equal((await api.post('/v1/import', exported, { token: minted.body.token })).status, 403);
   assert.equal((await api.get('/v1/export/sets.csv', { token: minted.body.token })).status, 200);
+});
+
+test("an export restores the server's older tables too, compares field for field, and undoes", async () => {
+  const from = await signUp(api);
+  const auth = { token: from.token };
+  await api.post(
+    '/api/food',
+    { name: 'Legacy oats', calories: 300, client_id: randomUUID() },
+    auth
+  );
+  await api.post(
+    '/api/measurements',
+    { client_id: randomUUID(), type: 'waist', value: 81.5, unit: 'cm' },
+    { ...auth, headers: key() }
+  );
+  await api.post('/api/weight', { weight: 80.4 }, auth);
+  await api.post('/api/water', { ml: 750 }, { ...auth, headers: key() });
+  await api.put(
+    '/api/diary/day',
+    { status: 'complete', note: 'Synthetic day', base_revision: 0 },
+    { ...auth, headers: key() }
+  );
+  await api.post('/api/goals', { dailyCalories: 2200, proteinG: 150 }, auth);
+  const exported = (await api.get('/api/export', auth)).body;
+  const tables = ['food', 'measurements', 'weights', 'water', 'diary_days'];
+  for (const table of tables) assert.ok(exported[table]?.length, `${table} has a row to restore`);
+
+  const to = await signUp(api);
+  const first = await api.post('/v1/import', exported, { token: to.token });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  for (const table of tables)
+    assert.equal(first.body.tables[table]?.restored, exported[table].length, table);
+  assert.equal(first.body.tables.goals?.restored, 1);
+  assert.deepEqual(first.body.ignored_tables, []);
+
+  // Field for field the same, apart from what belongs to the account restored
+  // into (id, _id, account_id, email) and when the row was last written (updated_at).
+  const differ = ['id', '_id', 'account_id', 'email', 'userId', 'updated_at'];
+  const comparable = (rows) =>
+    (Array.isArray(rows) ? rows : rows ? [rows] : [])
+      .filter((row) => !row.deleted_at)
+      .map((row) =>
+        Object.fromEntries(Object.entries(row).filter(([field]) => !differ.includes(field)))
+      )
+      .map((row) => JSON.stringify(row, Object.keys(row).sort()))
+      .sort();
+  const restored = (await api.get('/api/export', { token: to.token })).body;
+  for (const table of [...tables, 'goals']) {
+    assert.deepEqual(comparable(restored[table]), comparable(exported[table]), table);
+  }
+
+  const again = await api.post('/v1/import', exported, { token: to.token });
+  assert.deepEqual(again.body.restored, [], 'restoring twice adds nothing');
+  assert.equal(again.body.tables.measurements.kept, 1);
+
+  const undone = await api.post(
+    '/v1/import/undo',
+    { rows: first.body.restored },
+    { token: to.token }
+  );
+  assert.equal(undone.status, 200, JSON.stringify(undone.body));
+  assert.equal(undone.body.removed, first.body.restored.length);
+  const after = (await api.get('/api/export', { token: to.token })).body;
+  for (const table of tables) assert.deepEqual(comparable(after[table]), [], `${table} undone`);
+  const feed = (await api.get('/api/sync?after=0', { token: to.token })).body;
+  assert.ok(
+    (feed.changes ?? []).some((c) => c.kind === 'measurement' && c.deleted),
+    'the phone hears that the restored measurement is gone'
+  );
 });
 
 test("an import's body is read only for the signed-in app", async () => {

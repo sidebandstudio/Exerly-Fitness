@@ -4,7 +4,10 @@
 
 const store = require('../data');
 const docs = require('./documents');
+const sync = require('./sync');
+const { OWNERSHIP, ownerFilters } = require('./ownership');
 const { NUTRIENTS, NUTRIENT_UNITS } = require('./nutrition/validate');
+const { badRequest } = require('./errors');
 
 const round = (value) => (value == null ? null : Math.round(value * 10000) / 10000);
 
@@ -271,19 +274,104 @@ async function exportCSV(account, name) {
  * already has is kept as it is; the rest are checked as an API write would be
  * and added with their exported revisions. Legacy tables aren't imported.
  */
+// The server's older tables an export restores, each with the fields that
+// tell whether the account already has a row, so restoring twice adds nothing.
+// Rows get the importing account as owner and new IDs. Tables a phone syncs
+// get a change in its feed, so the phone sees them.
+const RESTORABLE = {
+  diary_days: { match: ['entry_date'], feed: 'diary_day' },
+  target_versions: { match: ['effective_date'] },
+  measurements: { match: ['client_id'], feed: 'measurement' },
+  activities: { match: ['client_id'], feed: 'activity' },
+  food: { match: ['client_id'], feed: 'food' },
+  sleep: { match: ['client_id'], feed: 'sleep' },
+  weights: { match: ['entry_date', 'weight_kg'], feed: 'weight' },
+  water: { match: ['entry_date'], feed: 'water' },
+  goals: { collection: 'goals', match: [] },
+  program: { collection: 'programs', match: [] },
+  checkins: { match: ['entry_date'] },
+  library_foods: { match: ['name', 'brand', 'barcode'] },
+  recipes: { match: ['name', 'created_at'] },
+  workouts: { match: ['name', 'created_at'] },
+  ai_plans: { match: ['type', 'createdAt'] },
+};
+// Exported but never restored into another account, and why.
+const NOT_RESTORED = {
+  account_identities: 'Sign-in methods belong to the account they were set up for.',
+  webhooks:
+    'Webhooks would send this account’s data to addresses set up elsewhere, and their secrets aren’t exported.',
+  onboarding_drafts: 'A setup draft belongs to the account being set up.',
+};
+const METADATA = ['documents', 'account', 'exported_at', 'version', 'source', 'note', 'context'];
+
+/** A value as a match key: dates and numbers as text, so a JSON row and a stored row compare equal. */
+const matchValue = (value) =>
+  value instanceof Date ? value.toISOString() : value == null ? '' : String(value);
+
+/** Restores the server's older tables in the export into the account. Call inside a transaction. */
+async function restoreTables(account, body, result, now) {
+  for (const [key, rule] of Object.entries(RESTORABLE)) {
+    const collection = rule.collection ?? key;
+    const rows = Array.isArray(body[key])
+      ? body[key]
+      : body[key] && typeof body[key] === 'object'
+        ? [body[key]]
+        : [];
+    if (!rows.length) continue;
+    const owners = ownerFilters(collection, account);
+    const existing = [];
+    for (const filter of owners) existing.push(...(await store.find(collection, filter)));
+    const keyOf = (row) => rule.match.map((field) => matchValue(row[field])).join('|');
+    const have = new Set(existing.map(keyOf));
+    const counts = (result.tables[key] = { restored: 0, kept: 0 });
+    for (const original of rows) {
+      if (!original || typeof original !== 'object' || original.deleted_at) continue;
+      // A single row (goals, program) is kept when the account has its own.
+      if (rule.match.length === 0 ? existing.length > 0 : have.has(keyOf(original))) {
+        counts.kept += 1;
+        continue;
+      }
+      const row = { ...original };
+      for (const field of ['id', '_id', 'pending_sync', ...OWNERSHIP[collection].keys])
+        delete row[field];
+      const values = { account_id: account.id, userId: account.id, email: account.email };
+      for (const field of OWNERSHIP[collection].keys) row[field] = values[field];
+      if ('updated_at' in original) row.updated_at = now;
+      const inserted = await store.insert(collection, row);
+      if (rule.feed) await sync.change(account, rule.feed, inserted);
+      have.add(keyOf(original));
+      result.restored.push({ table: key, id: inserted.id, revision: inserted.revision ?? null });
+      counts.restored += 1;
+    }
+  }
+}
+
 async function importExport(account, body, { now = new Date() } = {}) {
-  if (!body || typeof body !== 'object' || !Array.isArray(body.documents)) {
+  if (!body || typeof body !== 'object' || (!Array.isArray(body.documents) && !body.exported_at)) {
     return { error: 'This is not an Exerly export: it has no documents.' };
   }
-  const result = { imported: 0, kept: 0, skipped: [], ignored_tables: [] };
-  result.ignored_tables = Object.keys(body).filter(
+  const result = {
+    imported: 0,
+    kept: 0,
+    skipped: [],
+    tables: {},
+    restored: [],
+    not_restored: {},
+    ignored_tables: [],
+  };
+  const tables = Object.keys(body).filter(
     (key) =>
-      !['documents', 'account', 'exported_at', 'version'].includes(key) &&
-      Array.isArray(body[key]) &&
-      body[key].length
+      !METADATA.includes(key) &&
+      ((Array.isArray(body[key]) && body[key].length) ||
+        (body[key] && typeof body[key] === 'object' && !Array.isArray(body[key])))
   );
+  for (const key of tables) {
+    if (NOT_RESTORED[key]) result.not_restored[key] = NOT_RESTORED[key];
+    else if (!RESTORABLE[key]) result.ignored_tables.push(key);
+  }
   await store.transaction(async () => {
-    for (const row of body.documents) {
+    await restoreTables(account, body, result, now);
+    for (const row of body.documents ?? []) {
       if (!row || row.deleted_at) continue;
       const kind = String(row.kind ?? '');
       const id = docs.canonicalID(String(row.document_id ?? ''));
@@ -311,16 +399,58 @@ async function importExport(account, body, { now = new Date() } = {}) {
         if (result.skipped.length < 50) result.skipped.push({ kind, id, reason: error.message });
       }
     }
-    if (result.imported) {
+    if (result.imported || result.restored.length) {
       await docs.appendAudit(account, {
         action: 'directWrite',
         actor: { kind: 'builtIn', name: 'Exerly import' },
         targets: [],
-        note: `Imported ${result.imported} documents from an export made ${body.exported_at ?? 'at an unknown time'}.`,
+        note:
+          `Imported ${result.imported} documents and restored ${result.restored.length} older rows ` +
+          `from an export made ${body.exported_at ?? 'at an unknown time'}.`,
       });
     }
   });
   return result;
 }
 
-module.exports = { FILES, cell, exportCSV, importExport };
+/**
+ * Undoes a restore of older tables: removes the rows it returned in `restored`,
+ * unless they changed since. All or nothing. Rows a phone syncs are marked
+ * deleted, with a change in the feed, as a delete from the app would be.
+ */
+async function undoRestore(account, rows) {
+  if (!Array.isArray(rows)) return { error: 'Send the rows the import restored.' };
+  const result = { removed: 0, kept: 0 };
+  await store.transaction(async () => {
+    for (const ref of rows) {
+      const rule = RESTORABLE[ref?.table];
+      if (!rule) throw badRequest(`Not a restored table: ${ref?.table}`);
+      const collection = rule.collection ?? ref.table;
+      let current = null;
+      for (const filter of ownerFilters(collection, account)) {
+        current = current ?? (await store.findOne(collection, { ...filter, id: String(ref.id) }));
+      }
+      if (!current || current.deleted_at) continue;
+      if (ref.revision != null && current.revision !== ref.revision) {
+        result.kept += 1;
+        continue;
+      }
+      if ('deleted_at' in current) {
+        const deleted = await store.update(
+          collection,
+          { id: current.id },
+          { deleted_at: new Date(), updated_at: new Date(), revision: (current.revision ?? 1) + 1 }
+        );
+        if (rule.feed) await sync.change(account, rule.feed, deleted);
+      } else {
+        await store.remove(collection, { id: current.id });
+        if (rule.feed)
+          await sync.change(account, rule.feed, { ...current, deleted_at: new Date() });
+      }
+      result.removed += 1;
+    }
+  });
+  return result;
+}
+
+module.exports = { FILES, cell, exportCSV, importExport, undoRestore, RESTORABLE, NOT_RESTORED };
