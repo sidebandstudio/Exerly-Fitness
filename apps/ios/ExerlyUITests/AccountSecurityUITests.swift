@@ -109,6 +109,8 @@ final class AccountSecurityUITests: ExerlyUITestCase {
         openDeleteAccount(app)
 
         let field = app.secureTextFields["account.deletePassword"]
+        // At the largest text size the field starts below the fold.
+        reveal(app.buttons["account.confirmDelete"], in: app)
         replace(field, with: password, in: app)
         app.typeText("\n")
         XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
