@@ -15,7 +15,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         case invalidAccountID(String)
     }
 
-    public static let currentSchemaVersion = 4
+    public nonisolated static let currentSchemaVersion = 4
 
     /// Rows that could not be decoded, as `table/id`. They stay in the file
     /// untouched so a later version can read them.

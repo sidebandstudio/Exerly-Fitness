@@ -42,9 +42,26 @@ public final class TrainingStore {
     private static let restPolicyKey = "training.restPolicy"
     static let restTimerKey = "training.restTimer"
 
-    public init(
+    public convenience init(
         persistence: TrainingPersistence, library: ExerciseLibrary = .bundled,
         restPolicy: RestPolicy = RestPolicy(), now: @escaping () -> Date = Date.init
+    ) throws {
+        try self.init(persistence: persistence, sessions: persistence.loadSessions(), customExercises: persistence.loadCustomExercises(),
+                      library: library, restPolicy: restPolicy, now: now)
+    }
+
+    /// Starts from sessions already read and decoded off the main actor (StoredAccount).
+    public convenience init(
+        persistence: TrainingPersistence, loaded: StoredAccount.Training, library: ExerciseLibrary = .bundled,
+        restPolicy: RestPolicy = RestPolicy(), now: @escaping () -> Date = Date.init
+    ) throws {
+        try self.init(persistence: persistence, sessions: loaded.sessions, customExercises: loaded.customExercises,
+                      library: library, restPolicy: restPolicy, now: now)
+    }
+
+    private init(
+        persistence: TrainingPersistence, sessions: [WorkoutSession], customExercises: [Exercise], library: ExerciseLibrary,
+        restPolicy: RestPolicy, now: @escaping () -> Date
     ) throws {
         self.persistence = persistence
         // Whole milliseconds, so dates survive a round trip through the server exactly.
@@ -52,11 +69,10 @@ public final class TrainingStore {
         self.restPolicy = try persistence.loadValue(forKey: Self.restPolicyKey)
             .map { try JSONDecoder().decode(RestPolicy.self, from: $0) } ?? restPolicy
         var library = library
-        for exercise in try persistence.loadCustomExercises() where library.exercise(exercise.id) == nil {
+        for exercise in customExercises where library.exercise(exercise.id) == nil {
             library = try library.adding(exercise)
         }
         self.library = library
-        let sessions = try persistence.loadSessions()
         history = TrainingHistory(sessions: sessions.filter(\.isFinished), library: library)
         activeSession = sessions.filter { !$0.isFinished }.max { $0.startedAt < $1.startedAt }
         if activeSession != nil {

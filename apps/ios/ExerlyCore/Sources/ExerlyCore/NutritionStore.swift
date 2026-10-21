@@ -25,12 +25,12 @@ public final class NutritionStore {
     /// Foods the person asked not to be suggested, the latest first.
     public private(set) var hiddenSuggestions: [HiddenSuggestion] = []
 
-    static let foodKind = "saved_food"
-    static let entryKind = "food_entry"
-    static let dayKind = "nutrition_day"
-    static let weightKind = "weight_entry"
+    nonisolated static let foodKind = "saved_food"
+    nonisolated static let entryKind = "food_entry"
+    nonisolated static let dayKind = "nutrition_day"
+    nonisolated static let weightKind = "weight_entry"
     nonisolated static let planKind = "nutrition_plan"
-    static let hiddenKind = "hidden_suggestion"
+    nonisolated static let hiddenKind = "hidden_suggestion"
 
     @ObservationIgnored let persistence: TrainingPersistence & DocumentPersistence
     @ObservationIgnored let now: () -> Date
@@ -53,13 +53,27 @@ public final class NutritionStore {
             .map { try decoder.decode(HiddenSuggestion.self, from: $0) }.sorted(by: Self.hiddenOrder)
     }
 
-    static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
+    /// Starts from documents already read and decoded off the main actor
+    /// (StoredAccount), so a long history opens without blocking it.
+    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: StoredAccount.Nutrition,
+                now: @escaping () -> Date = Date.init) {
+        self.persistence = persistence
+        self.now = { now().roundedToMilliseconds }
+        foods = loaded.foods
+        entries = loaded.entries
+        days = loaded.days
+        weights = loaded.weights
+        plans = loaded.plans
+        hiddenSuggestions = loaded.hidden
+    }
 
-    static func planOrder(_ a: NutritionPlan, _ b: NutritionPlan) -> Bool {
+    nonisolated static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
+
+    nonisolated static func planOrder(_ a: NutritionPlan, _ b: NutritionPlan) -> Bool {
         (a.startDate, a.createdAt, a.id.uuidString) < (b.startDate, b.createdAt, b.id.uuidString)
     }
 
-    static func entryOrder(_ a: FoodEntry, _ b: FoodEntry) -> Bool {
+    nonisolated static func entryOrder(_ a: FoodEntry, _ b: FoodEntry) -> Bool {
         (a.date, a.loggedAt, a.id.uuidString) < (b.date, b.loggedAt, b.id.uuidString)
     }
 
