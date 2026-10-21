@@ -321,6 +321,13 @@ class ExerlyUITestCase: XCTestCase {
         // A sheet at a small detent grows when the keypad opens. Selecting
         // the text mid-animation can land on whatever slid under the old frame.
         waitUntilStill(field)
+        // At the largest text the sign-in form scrolls as the keyboard opens,
+        // and the tap can land beside the field: reveal it and tap again.
+        if (field.value(forKey: "hasKeyboardFocus") as? Bool) == false {
+            reveal(field, in: app)
+            field.tap()
+            waitUntilStill(field)
+        }
         let existing = field.value as? String ?? ""
         // Tapping a populated field can put the caret at its start, including
         // UIKit numeric fields. Select the paragraph before deleting so a

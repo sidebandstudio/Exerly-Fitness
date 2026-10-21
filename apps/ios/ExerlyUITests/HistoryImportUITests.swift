@@ -198,6 +198,7 @@ final class HistoryImportUITests: ExerlyUITestCase {
         XCTAssertTrue(fallback.waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(fallback.label.hasPrefix("This phone's copy only: your account couldn't be reached"), fallback.label)
         XCTAssertFalse(app.buttons["Close"].exists, "Nothing is shared before the person chooses to")
+        reveal(app.buttons["export.shareDevice"], in: app)
         capture(app, "export-03-fallback")
         tap(app.buttons["export.shareDevice"], in: app)
         XCTAssertTrue(app.buttons["Close"].firstMatch.waitForExistence(timeout: 20), "The share sheet opens with the phone's copy")

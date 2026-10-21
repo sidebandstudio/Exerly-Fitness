@@ -41,7 +41,21 @@ struct DataExportView: View {
                 Text(deviceOnly
                      ? "You're offline, so the export holds everything saved on this iPhone, including changes waiting to sync."
                      : "Every food, weigh-in, workout and target, with its ID, history and units. Ready in seconds.")
-                    .font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    .font(typeSize.isAccessibilitySize ? .exCaption : .exBody).foregroundStyle(Color.exTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Above the buttons, so it's seen at any text size before anything is shared.
+                if let fallback {
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        Label("This phone's copy only: \(fallback.why)", systemImage: "iphone")
+                            .font(.exCaption).foregroundStyle(Color.exWarning).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("export.fallback")
+                        Button("Share this phone's copy") {
+                            exportFile = fallback.file
+                            self.fallback = nil
+                        }
+                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("export.shareDevice")
+                    }
+                }
                 Button { prepare(.everything) } label: {
                     Label(busy == .everything ? "Preparing…" : "Export everything", systemImage: "archivebox")
                 }
@@ -56,18 +70,6 @@ struct DataExportView: View {
                             .foregroundStyle(Color.exTextSecondary)
                     }
                     .accessibilityElement(children: .combine).accessibilityIdentifier("export.busy")
-                }
-                if let fallback {
-                    VStack(alignment: .leading, spacing: ExSpacing.small) {
-                        Label("This phone's copy only: \(fallback.why)", systemImage: "iphone")
-                            .font(.exCaption).foregroundStyle(Color.exWarning).fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("export.fallback")
-                        Button("Share this phone's copy") {
-                            exportFile = fallback.file
-                            self.fallback = nil
-                        }
-                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("export.shareDevice")
-                    }
                 }
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
