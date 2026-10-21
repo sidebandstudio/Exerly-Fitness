@@ -154,13 +154,14 @@ final class HistoryImportUITests: ExerlyUITestCase {
     func testEachSourcesPreviewCapture() async throws {
         guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else { throw XCTSkip("Opt-in visual review") }
         try await control([:])
-        let files: [(source: String, name: String, data: Data)] = [
-            ("hevy", "workout_data.csv", OtherExports.hevy()),
-            ("macroFactorWorkouts", "Workout Log.csv", OtherExports.macroFactorWorkouts()),
-            ("exerly", "exerly-export.json", OtherExports.exerly()),
+        let files: [(source: String, label: String, name: String, data: Data)] = [
+            ("hevy", "hevy", "workout_data.csv", OtherExports.hevy()),
+            ("hevy", "hevy-measurements", "measurement_data.csv", OtherExports.hevyMeasurements()),
+            ("macroFactorWorkouts", "macroFactorWorkouts", "Workout Log.csv", OtherExports.macroFactorWorkouts()),
+            ("exerly", "exerly", "exerly-export.json", OtherExports.exerly()),
         ]
         for file in files {
-            let person = try await createAccount(prefix: "preview-\(file.source.lowercased())", units: "imperial")
+            let person = try await createAccount(prefix: "preview-\(file.label.lowercased())", units: "imperial")
             let app = launch(file: file.data, name: file.name)
             signIn(app, email: person.email)
             tap(app.tabBars.buttons["Profile"], in: app)
@@ -168,13 +169,13 @@ final class HistoryImportUITests: ExerlyUITestCase {
             tap(app.buttons["profile.importExport"], in: app)
             tap(app.buttons["import.source.\(file.source)"], in: app)
             XCTAssertTrue(app.buttons["import.choose"].waitForExistence(timeout: 10))
-            capture(app, "\(file.source)-01-start")
+            capture(app, "\(file.label)-01-start")
             tap(app.buttons["import.testFile"], in: app)
             XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
-            capture(app, "\(file.source)-02-preview")
+            capture(app, "\(file.label)-02-preview")
             let losses = app.descendants(matching: .any)["import.losses"]
             reveal(losses, in: app)
-            capture(app, "\(file.source)-03-losses")
+            capture(app, "\(file.label)-03-losses")
             app.terminate()
         }
     }
@@ -333,6 +334,20 @@ private enum OtherExports {
         return Data(([head] + rows).joined(separator: "\n").utf8)
     }
 
+    /// Hevy's measurement_data.csv, one row a day with `_in` sites for an
+    /// account in pounds. Format: https://github.com/200ok-ch/hevy_measurements_visualizer
+    static func hevyMeasurements() -> Data {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/New_York")
+        formatter.dateFormat = "d MMM yyyy, HH:mm"
+        let rows = [(-14, "181.2", "19.1", "33.4"), (-7, "180.4", "18.8", "33.1"), (-1, "179.6", "18.5", "32.9")].map { offset, weight, fat, waist in
+            "\"\(formatter.string(from: ExerlyUITestCase.day(offset).at))\",\(weight),\(fat),15.1,\(waist),39.0,13.8,13.7,34.2"
+        }
+        let head = #""date","weight_lbs","fat_percent","neck_in","waist_in","chest_in","left_bicep_in","right_bicep_in","abdomen_in""#
+        return Data(([head] + rows).joined(separator: "\n").utf8)
+    }
+
     static func macroFactorWorkouts() -> Data {
         let date = ExerlyUITestCase.day(-1).date
         let rows = [
@@ -353,7 +368,9 @@ private enum OtherExports {
                     "payload": ["date": date, "status": offset == 3 ? "fasting" : "complete", "notes": offset == 1 ? "Synthetic note" : ""]]
         }
         let export: [String: Any] = ["exported_at": "2026-10-20T12:00:00.000Z", "version": 3, "account": ["name": "Synthetic"],
-                                     "documents": days, "measurements": [["type": "waist", "value": 80]]]
+                                     "documents": days, "webhooks": [["url": "https://example.test/hook"]],
+                                     "measurements": [["client_id": "synthetic-waist", "type": "waist", "value": 80, "unit": "cm",
+                                                       "entry_date": ExerlyUITestCase.day(-2).date]]]
         return (try? JSONSerialization.data(withJSONObject: export)) ?? Data()
     }
 }

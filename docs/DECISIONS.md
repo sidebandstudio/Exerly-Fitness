@@ -1745,3 +1745,50 @@ PARITY I02, I12, I13, I14.
   fresh account and exported again, documents and CSV files are identical;
   only `exported_at`, revisions (a fresh account hasn't synced) and `imports`
   differ.
+
+## 2026-10-20: Imports after review: stale previews, workout identity, provenance, older tables
+
+Supersedes parts of the entry above, after an independent review.
+
+- A preview that a sync made stale is no longer saved in part: if any
+  document it expects changed, nothing is saved, and the file is read again
+  and shown with a note. A day's imported foods and the MacroFactor daily
+  total they replace form one group: Undo keeps the whole day as imported
+  when any food on it changed since, rather than putting the total back
+  beside the foods, and says so.
+- Hevy, Strong and MacroFactor exports have no workout ID (Hevy's CSV gives
+  title, start and end; Strong's `Workout #` is a running count). A workout
+  is known by its source and its start to the minute, with an ordinal for
+  two starting in the same minute. A workout corrected in the app and
+  exported again updates the imported one if Exerly still holds what the
+  last import saved, judged from that import's record; one changed in
+  Exerly is kept and the preview says so.
+- Where imported records came from is an `import_provenance` document: the
+  source, files, time and the documents (and measurements) it saved, in
+  parts of 3,000 so each stays under the server's 256 kB. It syncs, is in
+  every export and comes along when an export is restored. The `imports`
+  key in the JSON export is gone; Undo records stay on the importing device.
+- `POST /v1/import` restores the server's older tables too (food, measurements,
+  weights, water, diary days, target versions, activities, sleep, goals, the
+  older program, check-ins, library foods, recipes, workout templates, coach
+  plans) with the importing account as owner and new row IDs, matched on
+  natural keys so a second restore adds nothing. Sign-in identities, webhooks
+  and setup drafts are never restored. `POST /v1/import/undo` removes what a
+  restore added, keeping rows changed since. On the phone, a restore with
+  older tables needs a connection: documents are saved, then the tables are
+  restored through the account; if that fails, the documents are taken out
+  again.
+- Body measurements from MacroFactor's Body Metrics, Hevy's
+  measurement_data.csv and Strong's measurement files go to the app's
+  measurement log, saved before the document transaction and removed again
+  if it fails; Undo removes them first and keeps any changed since. The
+  server accepts `imported` as a measurement source, with the app in the
+  note. Columns for sites Exerly doesn't keep (Hevy's abdomen) are listed as
+  not coming across.
+- The CSV files and workbook cover everything: every document kind without
+  its own columns as id, revision, updated_at and payload JSON; the account
+  and each of the server's older tables as they are; workout rows gain
+  session and exercise notes.
+- When the account can't make the export, the phone's copy is offered with
+  the reason before anything is shared, instead of a note behind the share
+  sheet.

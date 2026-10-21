@@ -26,8 +26,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - Found by the full suite: a preference changed while its screen was still
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
-  - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong and Exerly exports,
-    loss preview, remapping, Undo; offline export zip. Tested on synthetic files only.
+  - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
+    measurements; loss preview, remapping, Undo; full offline export. Synthetic files only.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 

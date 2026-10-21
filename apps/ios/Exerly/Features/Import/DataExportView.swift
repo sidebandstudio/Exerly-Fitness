@@ -80,7 +80,8 @@ struct DataExportView: View {
                 VStack(spacing: 0) {
                     item("curlybraces", "exerly-export.json", "Everything, as Exerly keeps it. Import it into any Exerly account.")
                     TargetsDivider()
-                    item("tablecells", "A CSV for each kind of data", "Foods logged, saved foods, weigh-ins, days, sets and targets")
+                    item("tablecells", "A CSV for each kind of data", "Every kind of record: foods, weigh-ins, workouts, programs, "
+                         + "measurements and the rest, one file each")
                     TargetsDivider()
                     item("doc.richtext", "A spreadsheet", "The same tables as sheets, for Numbers or Excel")
                 }

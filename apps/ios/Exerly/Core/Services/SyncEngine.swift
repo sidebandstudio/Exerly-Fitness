@@ -112,9 +112,6 @@ final class SyncEngine: ObservableObject {
     }
     private func serverAccountID(_ owner: String) -> String { String(owner.dropFirst(api.storageNamespace.count + 1)) }
 
-    /// Whether this engine holds `accountID`'s records.
-    func isConfigured(for accountID: String) -> Bool { self.accountID == "\(api.storageNamespace):\(accountID)" }
-
     func configure(container: ModelContainer, accountID: String?, timeZone: String? = nil) {
         let calendar = AccountCalendar(timeZoneIdentifier: timeZone)
         if self.calendar != calendar { self.calendar = calendar }
