@@ -67,10 +67,14 @@ struct AccountManagementView: View {
                         Text("Connect Apple to sign in to this same account. Enter your password first.")
                             .font(.subheadline).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        SecureField("Password", text: $linkPassword)
-                            .textContentType(.password)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .accessibilityIdentifier("account.linkPassword")
+                        VStack(alignment: .leading, spacing: ExSpacing.small) {
+                            Text("Password").font(.exBodyMedium).accessibilityHidden(true)
+                            SecureField("Password", text: $linkPassword,
+                                        prompt: Text("Your sign-in password").foregroundStyle(Color.exTextSecondary))
+                                .textContentType(.password)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityIdentifier("account.linkPassword")
+                        }
                         AppleAuthorizationButton { payload in
                             guard busy == nil else { return }
                             busy = "Connecting Apple…"
@@ -318,13 +322,19 @@ private struct DeleteAccountView: View {
                     }
                     .disabled(busy)
                 } else {
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .focused($passwordFocused)
-                        .submitLabel(.done)
-                        .onSubmit { if !password.isEmpty && !needsAppleToo { ask(.password(password)) } }
-                        .accessibilityIdentifier("account.deletePassword")
+                    // A visible label: once typed, the placeholder is gone, and
+                    // screenshots show a filled password field as blank.
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        Text("Password").font(.exBodyMedium).accessibilityHidden(true)
+                        SecureField("Password", text: $password,
+                                    prompt: Text("Your sign-in password").foregroundStyle(Color.exTextSecondary))
+                            .textContentType(.password)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .focused($passwordFocused)
+                            .submitLabel(.done)
+                            .onSubmit { if !password.isEmpty && !needsAppleToo { ask(.password(password)) } }
+                            .accessibilityIdentifier("account.deletePassword")
+                    }
                     if needsAppleToo {
                         AppleAuthorizationButton { payload in
                             guard !busy else { return }
