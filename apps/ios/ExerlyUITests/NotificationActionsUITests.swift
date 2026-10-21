@@ -253,6 +253,31 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         XCTAssertEqual((synced?["weight"] as? [String: Any])?["unit"] as? String, "lb")
     }
 
+    /// The bedtime reminder's button puts it off without opening Exerly, and
+    /// it comes back. (Tests bring it back after the reminder delay instead of
+    /// 15 minutes.) Not checked here: the Lock Screen, whose notification
+    /// buttons XCTest can't open in the simulator (the button needs no unlock;
+    /// see ReminderActionsTests), and a terminated Exerly, which the system
+    /// relaunches without the test's isolated account.
+    func testTheBedtimeReminderComesBackWithoutOpeningExerly() async throws {
+        let (app, _) = try await signedIn(reminders: ["sleep": true], times: ["sleep": now], prefix: "notify-sleep")
+        waitForHistory(app)
+        deliverReminders(app)
+        let reminder = notification("Time to start your bedtime routine.", timeout: 60)
+        capture(springboard, "notify-sleep-banner")
+        reminder.press(forDuration: 1.2)
+        let later = springboard.buttons["Remind me in 15 minutes"]
+        XCTAssertTrue(later.waitForExistence(timeout: 8), springboard.debugDescription)
+        capture(springboard, "notify-sleep-actions")
+        later.tap()
+        XCTAssertTrue(later.waitForNonExistence(timeout: 10))
+        XCTAssertNotEqual(app.state, .runningForeground, "Nothing opened")
+        let again = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Time to start your bedtime routine."))
+        let back = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count > 0"), object: again)
+        XCTAssertEqual(XCTWaiter().wait(for: [back], timeout: 60), .completed, "It comes back")
+        capture(springboard, "notify-sleep-again")
+    }
+
     /// A food logged before is offered as the Log a food shortcut, so choosing
     /// it logs the remembered portion; a saved food never logged opens its
     /// portion sheet.
@@ -270,35 +295,18 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         waitForHistory(app)
         // Indexing follows the account's foods as they sync.
         Thread.sleep(forTimeInterval: 3)
-        XCUIDevice.shared.press(.home)
-        // Spotlight runs in its own process: pull down on the Home Screen, or tap its Search.
         let spotlight = XCUIApplication(bundleIdentifier: "com.apple.Spotlight")
-        let field = spotlight.textFields["SpotlightSearchField"]
-        springboard.swipeDown()
-        if !field.waitForExistence(timeout: 5) { springboard.otherElements["spotlight-pill"].firstMatch.tap() }
-        XCTAssertTrue(field.waitForExistence(timeout: 8), spotlight.debugDescription)
-
-        field.typeText("greek yogurt")
+        search(spotlight, for: "greek yogurt")
         let usual = spotlight.cells.matching(NSPredicate(format: "label CONTAINS %@", "Greek yogurt, plain")).firstMatch
         XCTAssertTrue(usual.waitForExistence(timeout: 45), spotlight.debugDescription)
         capture(spotlight, "notify-spotlight-usual")
         usual.tap()
-        // Spotlight says what was logged in a panel tests can't query (Today shows
-        // the entry below); its Done sits near the top of the screen.
-        Thread.sleep(forTimeInterval: 3)
-        capture(spotlight, "notify-spotlight-usual-logged")
-        springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        // That tap can close Spotlight itself rather than its panel; open it again if so.
-        let clear = spotlight.buttons["Clear text"]
-        if clear.waitForExistence(timeout: 3) {
-            clear.tap()
-        } else {
-            springboard.swipeDown()
-            if !field.waitForExistence(timeout: 5) { springboard.otherElements["spotlight-pill"].firstMatch.tap() }
-            XCTAssertTrue(field.waitForExistence(timeout: 8), spotlight.debugDescription)
-            if clear.exists { clear.tap() }
-        }
-        field.typeText("cottage cheese")
+        // Logged with its usual portion, and Today opens on it.
+        let yogurtEntry = todayEntries(app).matching(NSPredicate(format: "label BEGINSWITH %@", "Greek yogurt, plain")).firstMatch
+        XCTAssertTrue(yogurtEntry.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertFalse(app.navigationBars["Log food"].exists, "No portion sheet for a usual food")
+        capture(app, "notify-spotlight-usual-logged")
+        search(spotlight, for: "cottage cheese")
         let saved = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 45), spotlight.debugDescription)
         capture(spotlight, "notify-spotlight-saved")
@@ -312,5 +320,61 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         XCTAssertTrue(cottageEntry.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(entries.matching(NSPredicate(format: "label BEGINSWITH %@", "Greek yogurt, plain")).firstMatch.exists)
         capture(app, "notify-spotlight-after")
+        // When Spotlight ran the Log a food shortcut itself, its answer stays up until closed.
+        XCUIDevice.shared.press(.home)
+        let done = springboard.buttons["Done"].firstMatch
+        if done.waitForExistence(timeout: 2) { done.tap() }
+    }
+
+    /// Signing out takes the account's foods out of Spotlight, so the next
+    /// person on the phone doesn't see them.
+    func testSigningOutTakesTheirFoodsOutOfSpotlight() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "notify-spotlight-out", units: "imperial")
+        try await seedWeek(token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        waitForHistory(app)
+        Thread.sleep(forTimeInterval: 3)
+        let spotlight = XCUIApplication(bundleIdentifier: "com.apple.Spotlight")
+        let yogurt = spotlight.cells.matching(NSPredicate(format: "label CONTAINS %@", "Greek yogurt, plain")).firstMatch
+        search(spotlight, for: "greek yogurt")
+        XCTAssertTrue(yogurt.waitForExistence(timeout: 45), "Their food is in Spotlight while they're signed in")
+
+        app.activate()
+        tap(app.buttons["Profile"], in: app)
+        tap(app.buttons["profile.logout"], in: app)
+        XCTAssertTrue(app.buttons["profile.logout"].waitForNonExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 3)
+        search(spotlight, for: "greek yogurt")
+        // Spotlight showed it within seconds above; it stays gone for longer than that.
+        XCTAssertFalse(yogurt.waitForExistence(timeout: 20), spotlight.debugDescription)
+        capture(spotlight, "notify-spotlight-signed-out")
+    }
+
+    /// Opens Spotlight from the Home Screen and searches. Spotlight runs in
+    /// its own process and opens slowly on a small phone, so typing waits for
+    /// its field and is checked, and an earlier search is cleared first.
+    private func search(_ spotlight: XCUIApplication, for text: String) {
+        let field = spotlight.textFields["SpotlightSearchField"]
+        let inFront = XCTNSPredicateExpectation(predicate: NSPredicate(format: "state == %d", XCUIApplication.State.runningForeground.rawValue),
+                                                object: spotlight)
+        for _ in 0..<3 {
+            XCUIDevice.shared.press(.home)
+            Thread.sleep(forTimeInterval: 1.5)
+            springboard.swipeDown()
+            // Its elements can only be asked for once it's in front.
+            if XCTWaiter().wait(for: [inFront], timeout: 15) == .completed, field.waitForExistence(timeout: 5) { break }
+        }
+        XCTAssertTrue(spotlight.state == .runningForeground && field.exists, "Spotlight didn't open")
+        for _ in 0..<3 {
+            let clear = spotlight.buttons["Clear text"]
+            if clear.exists { clear.tap() }
+            field.tap()
+            field.typeText(text)
+            let typed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", text), object: field)
+            if XCTWaiter().wait(for: [typed], timeout: 3) == .completed { return }
+        }
+        XCTFail("Spotlight didn't take the search \(text): \(field.value ?? "")")
     }
 }

@@ -129,6 +129,8 @@ struct SystemReminderScheduler: ReminderScheduling {
         // UI tests act on reminders in SpringBoard, so theirs arrive seconds after scheduling.
         if let delay = ProcessInfo.processInfo.environment["EXERLY_TEST_REMINDER_DELAY"].flatMap(TimeInterval.init) {
             trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+            // Its Remind me again too, which runs in a launch without the test's environment.
+            content.userInfo[ReminderActions.testDelayKey] = String(delay)
         }
         #endif
         try await center.add(UNNotificationRequest(identifier: reminder.id, content: content, trigger: trigger))

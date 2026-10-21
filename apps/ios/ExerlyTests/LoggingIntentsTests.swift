@@ -219,6 +219,27 @@ final class LoggingIntentsTests: XCTestCase {
         XCTAssertEqual(store.entries.count, count, "Nothing else was logged")
     }
 
+    /// PARITY I17: a usual food chosen in Spotlight logs in one tap; a saved
+    /// food never logged opens its portion sheet.
+    func testAFoodChosenInSpotlightLogsIfUsualElseOpensItsPortion() throws {
+        let account = try account()
+        let store = account.store
+        let oats = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        let soup = ExerlyCore.Food(name: "Synthetic soup", per100g: NutrientAmounts([.energy: 60]), servings: [Serving("bowl", grams: 300)])
+        try store.saveFood(oats)
+        try store.saveFood(soup)
+        try store.log(oats, grams: 80, on: today.adding(days: -1), meal: "Breakfast")
+
+        let before = Set(store.entries.map(\.id))
+        XCTAssertEqual(try LoggingActions.open(oats.id, in: account, now: time(8)), ExerlyLinks.today)
+        let entry = try XCTUnwrap(store.entries.first { !before.contains($0.id) })
+        XCTAssertEqual(entry.grams, 80)
+        XCTAssertEqual(entry.date, today)
+        let count = store.entries.count
+        XCTAssertEqual(try LoggingActions.open(soup.id, in: account, now: time(8)), ExerlyLinks.food(soup.id))
+        XCTAssertEqual(store.entries.count, count, "Its portion is checked first")
+    }
+
     func testRepeatDayCopiesTheLastDayWithFoodOnlyIntoAnEmptyDay() throws {
         let account = try account()
         let store = account.store

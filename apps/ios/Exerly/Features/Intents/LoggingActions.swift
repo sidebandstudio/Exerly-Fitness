@@ -169,6 +169,14 @@ enum LoggingActions {
         return (store.recentPortions(limit: 100) + saved).filter { seen.insert($0.id).inserted }
     }
 
+    /// A food chosen in Spotlight: a usual or recent one is logged with its
+    /// remembered portion and Today opens; another opens its portion sheet.
+    static func open(_ foodID: String, in account: IntentAccess.Account, now: Date = .now) throws -> URL {
+        guard usualFoods(in: account, now: now).contains(where: { $0.id == foodID }) else { return ExerlyLinks.food(foodID) }
+        _ = try logFood(foodID, servings: nil, in: account, now: now)
+        return ExerlyLinks.today
+    }
+
     /// Today's first Log again chip for a time of day, logged into `meal`:
     /// a meal reminder's Log usual button.
     static func logUsual(_ meal: String, at time: Date, in account: IntentAccess.Account) throws -> String {

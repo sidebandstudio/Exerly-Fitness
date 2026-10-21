@@ -69,19 +69,20 @@ struct FoodEntityQuery: EntityStringQuery {
     }
 }
 
-/// A food chosen in Spotlight that the Log a food shortcut doesn't offer,
-/// such as a saved food or recipe never logged: its portion sheet on Today,
-/// so the portion is checked before one tap logs it. (Spotlight shows usual
-/// and recent foods as that shortcut, which logs the remembered portion.)
+/// A food chosen in Spotlight. A usual or recent food is logged with the
+/// portion one tap logs on Today, which then opens; another, such as a saved
+/// food or recipe never logged, opens its portion sheet on Today, so the
+/// portion is checked before one tap logs it.
 struct OpenFoodIntent: OpenIntent {
     static let title: LocalizedStringResource = "Open a food"
-    static let description = IntentDescription("Opens one of your foods, ready to log with the portion you last had.")
+    static let description = IntentDescription("Logs one of your usual foods with the portion you last had, or opens another ready to log.")
 
     @Parameter(title: "Food") var target: FoodEntity
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        ExerlyLinkHandler.open?(ExerlyLinks.food(target.id))
+        let link = (try? await IntentAccess().perform { try LoggingActions.open(target.id, in: $0) }) ?? ExerlyLinks.food(target.id)
+        ExerlyLinkHandler.open?(link)
         return .result()
     }
 }

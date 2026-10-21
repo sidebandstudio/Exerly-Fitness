@@ -30,6 +30,10 @@ enum ReminderActions {
     /// A reminder shown again later. Outside "exerly.reminder.", so
     /// rescheduling the reminders leaves it.
     static let againPrefix = "exerly.again."
+    #if DEBUG
+    /// A UI test's reminder delay, in seconds, carried by the reminder.
+    static let testDelayKey = "testDelay"
+    #endif
     static func mealCategory(_ meal: String) -> String { "exerly.meal.\(meal)" }
 
     /// The buttons of each kind of reminder. Logging asks for an unlocked
@@ -95,7 +99,11 @@ enum ReminderActions {
         if case .remindAgain(let minutes) = action {
             // Only the signed-in account's reminders come back.
             guard theirs, let copy = content?.mutableCopy() as? UNMutableNotificationContent else { return nil }
-            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(minutes * 60), repeats: false)
+            var seconds = TimeInterval(minutes * 60)
+            #if DEBUG
+            if let delay = (copy.userInfo[testDelayKey] as? String).flatMap(TimeInterval.init) { seconds = delay }
+            #endif
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)
             try? await add(UNNotificationRequest(identifier: againPrefix + original, content: copy, trigger: trigger))
             return nil
         }

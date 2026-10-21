@@ -22,6 +22,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
     measurements; preview, Undo, full export. Reviews 2–5 fixed: restores (validated, exact
     tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
+- claude/apple (not landed, I04–I06, I08, I17–I19): Shortcuts for every logging action and Log by
+  JSON; Spotlight logs a usual food in one tap; Health reads recovery, other apps' food and workouts.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 - claude/polish6 (in claude/next 48f64e6d, not on TestFlight): run 7, reviews. Gain or Maintain past

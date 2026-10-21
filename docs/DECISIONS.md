@@ -2636,3 +2636,21 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   the activity log's own save, once each. A workout deleted in Health
   stays in the activity log; delete it there.
 - Exerly's own samples, from the phone or the watch, are never read back.
+
+## 2026-10-21: Spotlight logs a usual food in one tap
+
+- Spotlight shows a person's food as its indexed result, not as the Log a
+  food shortcut, and tapping it runs `OpenFoodIntent`. So a usual or recent
+  food opened its portion sheet, two taps rather than one. `OpenFoodIntent`
+  now logs a usual or recent food with the portion one tap logs on Today,
+  and opens Today on it. A saved food never logged still opens its portion
+  sheet first.
+- The Spotlight UI test failed because Spotlight opens slowly on a small
+  phone and typing before its field was ready was lost. Its search now
+  waits for Spotlight to be in front, then checks the typed text.
+- A UI test now shows that signing out takes the account's foods out of
+  Spotlight.
+- In the simulator, XCTest can't open notification buttons on the Lock
+  Screen. Also, the system relaunches a terminated Exerly without the UI
+  test's isolated account. Both stay device checks. The reminder buttons'
+  options (no unlock for Remind me, unlock for logging) are unit-tested.
