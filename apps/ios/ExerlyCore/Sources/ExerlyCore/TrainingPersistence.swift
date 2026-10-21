@@ -50,17 +50,19 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     public func saveValue(_ value: Data?, forKey key: String) throws { values[key] = value }
 
     private var depth = 0
-    private var committed: [(depth: Int, action: () -> Void)] = []
+    private var committed: [() -> Void] = []
 
     public func performAtomically(_ body: () throws -> Void) throws {
         let snapshot = (sessions, customExercises, values, bases, documents)
         depth += 1
-        let level = depth
+        // A rollback drops only what this transaction added; a sibling
+        // saved before it keeps its actions.
+        let added = committed.count
         do {
             try body()
         } catch {
             (sessions, customExercises, values, bases, documents) = snapshot
-            committed.removeAll { $0.depth >= level }
+            committed.removeSubrange(added...)
             depth -= 1
             throw error
         }
@@ -68,12 +70,12 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
         if depth == 0 {
             let actions = committed
             committed = []
-            actions.forEach { $0.action() }
+            actions.forEach { $0() }
         }
     }
 
     public func afterCommit(_ action: @escaping () -> Void) {
-        if depth == 0 { action() } else { committed.append((depth, action)) }
+        if depth == 0 { action() } else { committed.append(action) }
     }
 }
 
