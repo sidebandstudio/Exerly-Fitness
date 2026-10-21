@@ -10,16 +10,21 @@ final class AppAccountWorkspace: ObservableObject {
     @Published private(set) var openingError: String?
     @Published private(set) var isChangingAccount = false
     @Published private(set) var cleanupError: String?
-    private let open: @MainActor (AccountAPI) throws -> TrainingWorkspace
+    private let open: @MainActor (AccountAPI) async throws -> TrainingWorkspace
     private let deleteTraining: @MainActor (String) throws -> Void
     private let purgeLegacy: @MainActor (String) throws -> Void
     private let pendingLegacy: @MainActor (String) throws -> [AccountExport.PendingRow]
     private var generation = UUID()
     private var closing: (id: UUID, task: Task<Void, Never>)?
     private var isCleaning = false
+    /// The account whose data failed to open: asked for again, it isn't
+    /// opened again until someone chooses Try again (`retrying`).
+    private var failedAccountID: String?
+    /// The account being opened, so a second request waits for that one.
+    private var openingAccountID: String?
 
-    init(open: @escaping @MainActor (AccountAPI) throws -> TrainingWorkspace = {
-             try TrainingWorkspace(accountID: $0.accountID, api: $0)
+    init(open: @escaping @MainActor (AccountAPI) async throws -> TrainingWorkspace = {
+             try await TrainingWorkspace.open(accountID: $0.accountID, api: $0)
          },
          deleteTraining: @escaping @MainActor (String) throws -> Void = {
              try TrainingWorkspace.deleteStorage(accountID: $0)
@@ -37,25 +42,40 @@ final class AppAccountWorkspace: ObservableObject {
         self.pendingLegacy = pendingLegacy
     }
 
-    func configure(_ account: AccountAPI?) async {
+    /// Opens the account's data, reading its history off the main actor. A
+    /// failure stands, with its message, until `retrying` (Try again): asked
+    /// again by the app's tasks, the same work isn't repeated.
+    func configure(_ account: AccountAPI?, retrying: Bool = false) async {
         guard !isChangingAccount else { return }
-        if let account, training?.accountID == account.accountID { return }
+        if let account {
+            if training?.accountID == account.accountID || openingAccountID == account.accountID { return }
+            if failedAccountID == account.accountID, !retrying { return }
+        }
         let request = UUID()
         generation = request
         openingError = nil
         await closeTraining()
         guard generation == request, !Task.isCancelled else { return }
-        guard let account else { return }
-        do { training = try open(account) }
-        catch { openingError = "Your saved training could not open. Keep Exerly installed and try again." }
-    }
-
-    /// Opens the account's saved data at once, at launch, when nothing is open
-    /// or closing; `configure` then finds it open. A failure is left for
-    /// `configure` to report.
-    func openNow(_ account: AccountAPI) {
-        guard training == nil, closing == nil, !isChangingAccount else { return }
-        training = try? open(account)
+        guard let account else {
+            failedAccountID = nil
+            return
+        }
+        openingAccountID = account.accountID
+        defer { if openingAccountID == account.accountID { openingAccountID = nil } }
+        do {
+            let opened = try await open(account)
+            // Signed out or switched while it opened: it isn't this request's to show.
+            guard generation == request else {
+                await opened.close()
+                return
+            }
+            training = opened
+            failedAccountID = nil
+        } catch {
+            guard generation == request else { return }
+            failedAccountID = account.accountID
+            openingError = "Your saved training could not open. Keep Exerly installed and try again."
+        }
     }
 
     func signOut(auth: AuthViewModel) async {

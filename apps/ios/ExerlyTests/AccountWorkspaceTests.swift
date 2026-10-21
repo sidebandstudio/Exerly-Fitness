@@ -37,9 +37,25 @@ final class AccountWorkspaceTests: XCTestCase {
     private func workspace(pending: @escaping @MainActor (String) throws -> [AccountExport.PendingRow] = { _ in [] },
                            purge: @escaping @MainActor (String) throws -> Void = { _ in }) -> AppAccountWorkspace {
         let directory = root!
-        return AppAccountWorkspace(open: { try TrainingWorkspace(accountID: $0.accountID, root: directory, api: $0) },
+        return AppAccountWorkspace(open: { try await TrainingWorkspace.open(accountID: $0.accountID, root: directory, api: $0) },
             deleteTraining: { try TrainingWorkspace.deleteStorage(accountID: $0, root: directory) },
             purgeLegacy: purge, pendingLegacy: pending)
+    }
+
+    /// An account's data that can't be opened isn't opened again by every
+    /// later request for it, only when someone asks to try again.
+    func testAFailedOpenIsKeptUntilRetried() async throws {
+        struct Unreadable: Error {}
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { _ in attempts += 1; throw Unreadable() },
+            deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await owner.configure(auth.accountAPI)
+        await owner.configure(auth.accountAPI)
+        XCTAssertEqual(attempts, 1, "The failure stands; the work isn't repeated")
+        XCTAssertNotNil(owner.openingError)
+        XCTAssertNil(owner.training)
+        await owner.configure(auth.accountAPI, retrying: true)
+        XCTAssertEqual(attempts, 2, "Try again opens it again")
     }
 
     func testSignOutQuiescesSyncAndKeepsTrainingForTheSameAccount() async throws {

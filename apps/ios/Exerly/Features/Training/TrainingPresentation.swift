@@ -27,29 +27,43 @@ final class TrainingWorkspace: ObservableObject {
 
     enum AccessError: Error { case missingAccount }
 
-    init(accountID: String, root: URL? = nil, api: AccountAPI? = nil) throws {
+    /// `stored`, read off the main actor (`open`), saves reading and decoding
+    /// the history here; without it the stores read it themselves.
+    init(accountID: String, root: URL? = nil, api: AccountAPI? = nil, stored: StoredAccount? = nil) throws {
         self.accountID = accountID
-        guard !accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AccessError.missingAccount
-        }
-        let canonical = try SQLiteTrainingPersistence.defaultURL(accountID: accountID)
-        if let testRoot = try root ?? Self.testStorageRoot() {
-            url = testRoot.appendingPathComponent(accountID, isDirectory: true)
-                .appendingPathComponent(canonical.lastPathComponent)
-        } else {
-            url = canonical
-        }
+        url = try Self.storageURL(accountID: accountID, root: root)
         persistence = try SQLiteTrainingPersistence(url: url)
-        store = try TrainingStore(persistence: persistence)
+        if let stored {
+            store = try TrainingStore(persistence: persistence, loaded: stored.training)
+            nutrition = NutritionStore(persistence: persistence, loaded: stored.nutrition)
+        } else {
+            store = try TrainingStore(persistence: persistence)
+            nutrition = try NutritionStore(persistence: persistence)
+        }
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
         provenance = try ProvenanceStore(persistence: persistence)
-        nutrition = try NutritionStore(persistence: persistence)
         barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
         entryChecks = TrainingEntryChecks(training: store, agent: agent, accountID: accountID)
-        unreadableCount = persistence.unreadableRows.count
+        unreadableCount = (stored?.unreadableRows ?? []).count + persistence.unreadableRows.count
         if let api { resumeSync(api: api) }
+    }
+
+    /// Opens an account with its sessions and food history read and decoded
+    /// off the main actor; only the stores' small documents and publishing
+    /// them happen on it (PARITY B03).
+    static func open(accountID: String, root: URL? = nil, api: AccountAPI?) async throws -> TrainingWorkspace {
+        let url = try storageURL(accountID: accountID, root: root)
+        let stored = try await Task.detached(priority: .userInitiated) { try StoredAccount.read(url: url) }.value
+        return try TrainingWorkspace(accountID: accountID, root: root, api: api, stored: stored)
+    }
+
+    private static func storageURL(accountID: String, root: URL?) throws -> URL {
+        guard !accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AccessError.missingAccount }
+        let canonical = try SQLiteTrainingPersistence.defaultURL(accountID: accountID)
+        guard let testRoot = try root ?? testStorageRoot() else { return canonical }
+        return testRoot.appendingPathComponent(accountID, isDirectory: true).appendingPathComponent(canonical.lastPathComponent)
     }
 
     func resumeSync(api: AccountAPI) {

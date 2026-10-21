@@ -28,16 +28,17 @@ struct RootView: View {
         .onAppear(perform: openFromCache)
     }
 
-    /// A saved session draws Today from what's on this device in the first
-    /// frame (PARITY B03): the cached account, its saved entries and its
-    /// workspace open here, before anything is drawn, instead of in the tasks
-    /// below, each a frame later. The tasks then find them open, and the
+    /// A saved session starts opening what's on this device as the root view
+    /// appears (PARITY B03): the cached account and its saved entries here,
+    /// its history read off the main actor, instead of in the tasks below, a
+    /// frame or more later. The tasks then find them open or opening, and the
     /// server is asked after.
     private func openFromCache() {
         authVM.restoreCachedSession()
         guard authVM.authState == .authenticated, let user = authVM.currentUser, let api = authVM.accountAPI else { return }
         sync.configure(container: modelContext.container, accountID: user.id, timeZone: user.timezone)
-        account.openNow(api)
+        // Opening the account itself reads its history off the main actor.
+        Task { await account.configure(api) }
     }
 
     private var accountContent: some View {

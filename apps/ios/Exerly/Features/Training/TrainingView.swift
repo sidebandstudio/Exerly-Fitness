@@ -22,7 +22,7 @@ struct TrainingHostView: View {
                 } description: {
                     Text("Your saved data is still on this device. Keep Exerly installed and try again.")
                 } actions: {
-                    Button("Try again") { Task { await account.configure(auth.accountAPI) } }
+                    Button("Try again") { Task { await account.configure(auth.accountAPI, retrying: true) } }
                         .buttonStyle(.borderedProminent).tint(Color.exActionFill)
                 }
             } else {
