@@ -969,10 +969,10 @@ struct MFReader {
         for key in order {
             guard let rows = groups[key], let (date, seconds) = dates[key] else { continue }
             // Known by its start, so a workout renamed in MacroFactor updates rather than doubles.
-            let minute = Int((instant(date, seconds).timeIntervalSince1970 / 60).rounded(.down))
+            let minute = WorkoutImport.localMinute(instant(date, seconds), in: timeZone)
             let ordinal = workoutStarts[minute, default: 0]
             workoutStarts[minute] = ordinal + 1
-            let sessionID = WorkoutImport.sessionID(source: "macroFactor", start: instant(date, seconds), ordinal: ordinal)
+            let sessionID = WorkoutImport.sessionID(source: "macroFactor", start: instant(date, seconds), in: timeZone, ordinal: ordinal)
             var exercises: [PerformedExercise] = []
             var index: [ExerciseID: Int] = [:]
             for row in rows {

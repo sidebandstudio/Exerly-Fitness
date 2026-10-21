@@ -49,10 +49,17 @@ public enum WorkoutImport {
 
     static let namespace = UUID(uuidString: "5B0E7C1D-2F4A-4C8B-9E36-7A1D0F2B8C45")!
 
-    /// A workout's ID from its source and its start to the minute; `ordinal`
-    /// tells apart workouts starting in the same minute, in the file's order.
-    static func sessionID(source: String, start: Date, ordinal: Int) -> UUID {
-        UUID(named: "\(source)/start/\(Int((start.timeIntervalSince1970 / 60).rounded(.down)))/\(ordinal)", in: namespace)
+    /// A workout's ID from its source and its start to the minute, as the file
+    /// writes it: the files have no time zone, so the same file gives the same
+    /// IDs in whatever zone it's read. `ordinal` tells apart workouts starting
+    /// in the same minute, in the file's order.
+    static func sessionID(source: String, start: Date, in timeZone: TimeZone, ordinal: Int) -> UUID {
+        UUID(named: "\(source)/local/\(localMinute(start, in: timeZone))/\(ordinal)", in: namespace)
+    }
+
+    /// The minute `date` shows on a clock in `timeZone`, counted from 1970.
+    static func localMinute(_ date: Date, in timeZone: TimeZone) -> Int {
+        Int(((date.timeIntervalSince1970 + Double(timeZone.secondsFromGMT(for: date))) / 60).rounded(.down))
     }
 
     /// Reads an export. Its times have no zone, so they are read in `timeZone`;
@@ -109,10 +116,10 @@ public enum WorkoutImport {
             // Neither app's export has a workout ID, so a workout is known by its
             // start, to the minute: correcting its title or end in the app and
             // exporting again updates it rather than adding it twice.
-            let minute = Int((start.timeIntervalSince1970 / 60).rounded(.down))
+            let minute = Self.localMinute(start, in: timeZone)
             let ordinal = starts[minute, default: 0]
             starts[minute] = ordinal + 1
-            let sessionID = Self.sessionID(source: format.source.rawValue, start: start, ordinal: ordinal)
+            let sessionID = Self.sessionID(source: format.source.rawValue, start: start, in: timeZone, ordinal: ordinal)
             var exercises: [PerformedExercise] = []
             var supersets: [String: UUID] = [:]
             var previousName: String?

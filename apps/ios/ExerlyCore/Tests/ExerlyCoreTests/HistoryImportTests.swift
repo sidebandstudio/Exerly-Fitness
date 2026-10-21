@@ -351,6 +351,22 @@ import Testing
         #expect(training.history.sessions.map(\.name) == ["Push day", "Pull day"])
     }
 
+    @Test func aCorrectedFileImportedAfterMovingToLondonUpdatesRatherThanAdds() throws {
+        let (_, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        try importer.commit(try plan(WorkoutImportTests.hevy, options: .init(timeZone: Fixture.newYork, unit: .kilograms), hosts: hosts))
+        let london = HistoryImportReader.Options(timeZone: TimeZone(identifier: "Europe/London")!, unit: .kilograms)
+        let corrected = try plan(Self.hevyCorrected, options: london, hosts: hosts, records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 1, updated: 1),
+                "The file's times are the same as written, whatever zone they're read in")
+        let before = try #require(training.history.sessions.first { $0.name == "Pull day" })
+        try importer.commit(corrected)
+        #expect(training.history.sessions.map(\.name) == ["Push day (heavy)", "Pull day", "Legs"])
+        let pull = try #require(training.history.sessions.first { $0.name == "Pull day" })
+        #expect(pull == before, "A workout already in Exerly stays where it was, in New York")
+        #expect(training.history.sessions.first { $0.name == "Legs" }?.timeZoneID == "Europe/London", "A new one is read in London")
+    }
+
     @Test func aStrongWorkoutRenamedWithANewDurationIsUpdated() throws {
         let (_, nutrition, training, importer) = try stores()
         let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds, leftOut: ["Synthetic Landmine Twist"])

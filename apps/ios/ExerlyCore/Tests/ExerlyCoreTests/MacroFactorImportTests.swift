@@ -258,6 +258,13 @@ import Testing
                 "A squat without a weight isn't a loggable set")
     }
 
+    @Test func aWorkoutKeepsItsIDWhenTheFileIsReadInAnotherZone() throws {
+        let london = MacroFactorExport(try Spreadsheet.xlsx(XLSXBuilder(MacroFactorFixture.sheets).data()),
+                                       timeZone: TimeZone(identifier: "Europe/London")!, unit: .kilograms,
+                                       locale: Locale(identifier: "en_US"), now: Fixture.instant())
+        #expect(london.sessions.map(\.id) == (try read()).sessions.map(\.id), "Known by the start the file writes, not an instant")
+    }
+
     @Test func skippedRowsUnknownColumnsAndLeftOutSheetsAreReported() throws {
         let report = try read().report
         let foodLog = report.skipped.filter { $0.sheet == "Food Log" }

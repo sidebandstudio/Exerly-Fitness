@@ -364,16 +364,16 @@ public enum HistoryImportReader {
         var result: (writes: [PlannedWrite], new: Int, existing: Int, updated: Int, keptEdited: Int) = ([], 0, 0, 0, 0)
         for session in sessions {
             let id = session.id.uuidString
-            let after = try ExerlyJSON.canonical(session)
             guard training.activeSession?.id != session.id else {
                 result.existing += 1
                 continue
             }
             guard let current = try training.payload(kind: TrainingStore.sessionKind, id: id) else {
-                result.writes.append(PlannedWrite(kind: TrainingStore.sessionKind, id: id, before: nil, after: after))
+                result.writes.append(PlannedWrite(kind: TrainingStore.sessionKind, id: id, before: nil, after: try ExerlyJSON.canonical(session)))
                 result.new += 1
                 continue
             }
+            let after = try ExerlyJSON.canonical(anchored(session, like: current))
             if current == after {
                 result.existing += 1
             } else if saved[id] == HistoryImporter.fingerprint(current) {
@@ -385,6 +385,25 @@ public enum HistoryImportReader {
             }
         }
         return result
+    }
+
+    /// A workout the account already has, read in the zone it was saved in. The
+    /// files' times have no zone, so after a move the same wall-clock times
+    /// would otherwise land hours away; only new workouts take the new zone.
+    private static func anchored(_ session: WorkoutSession, like current: Data) throws -> WorkoutSession {
+        let saved = try ExerlyJSON.decoder.decode(WorkoutSession.self, from: current)
+        guard saved.timeZoneID != session.timeZoneID, let zone = TimeZone(identifier: saved.timeZoneID) else { return session }
+        let shift = TimeInterval(session.timeZone.secondsFromGMT(for: session.startedAt) - zone.secondsFromGMT(for: session.startedAt))
+        var moved = session
+        moved.timeZoneID = saved.timeZoneID
+        moved.startedAt += shift
+        moved.endedAt = moved.endedAt.map { $0 + shift }
+        for e in moved.exercises.indices {
+            for s in moved.exercises[e].sets.indices {
+                moved.exercises[e].sets[s].completedAt = moved.exercises[e].sets[s].completedAt.map { $0 + shift }
+            }
+        }
+        return moved
     }
 
     private static func appendKept(_ count: Int, to lost: inout [String]) {
