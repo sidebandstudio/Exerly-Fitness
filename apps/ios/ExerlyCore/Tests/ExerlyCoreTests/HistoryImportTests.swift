@@ -695,7 +695,7 @@ import Testing
 
         let undone = try await second.importer.undo(record.id, api: api)
         #expect(server.requests.last?.path == "/v1/import/undo")
-        #expect(undone.undone == 2 + 3, "Two rows on the server; two workouts and their provenance here")
+        #expect(undone.undone == 2 + 2, "Two rows on the server and two workouts here; their provenance goes too, uncounted")
         #expect(second.training.history.sessions.isEmpty && second.provenance.provenance.isEmpty)
     }
 

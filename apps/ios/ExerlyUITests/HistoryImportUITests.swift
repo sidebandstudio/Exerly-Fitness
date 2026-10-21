@@ -230,8 +230,9 @@ final class HistoryImportUITests: ExerlyUITestCase {
         XCTAssertTrue(item.waitForExistence(timeout: 20), app.debugDescription)
         capture(app, "strong-files-picker")
         item.tap()
+        // A picker that allows several files selects it, then opens on Open.
         let open = app.buttons["Open"].firstMatch
-        if open.waitForExistence(timeout: 5) { open.tap() }
+        if open.waitForExistence(timeout: 20) { open.tap() }
         XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertEqual(app.descendants(matching: .any)["import.count.workouts"].value as? String, "2 to add")
         capture(app, "strong-files-preview")

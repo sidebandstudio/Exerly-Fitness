@@ -369,7 +369,8 @@ public struct HistoryImporter {
                         continue
                     }
                     writes.append(DocumentWrite(kind: kind, id: change.id, payload: change.before))
-                    result.undone += 1
+                    // Provenance goes with what it describes; it isn't counted as one of the person's records.
+                    if kind != ProvenanceStore.kind { result.undone += 1 }
                 }
                 if !writes.isEmpty { batches.append((host, kind, writes)) }
             }

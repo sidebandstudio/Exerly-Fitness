@@ -44,7 +44,8 @@ final class ImportExportPresentationTests: XCTestCase {
         XCTAssertEqual(sets.rows.count, 3, "A header and two sets")
 
         let undone = try reopened.importer.undo(record.id)
-        XCTAssertEqual(undone, .init(undone: 3, kept: 0), "Two workouts and where they came from")
+        XCTAssertEqual(undone, .init(undone: 2, kept: 0), "Two workouts; where they came from goes too, uncounted")
+        XCTAssertTrue(reopened.provenance.provenance.isEmpty)
         XCTAssertTrue(reopened.store.history.sessions.isEmpty)
         XCTAssertTrue(try TrainingWorkspace(accountID: "import-mine", root: root).store.history.sessions.isEmpty, "Undone on disk too")
     }
