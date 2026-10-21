@@ -406,7 +406,7 @@ struct BodyWeightSection<Measurements: View>: View {
                 Button("Delete", systemImage: "trash", role: .destructive) { onDelete(entry) }
             }
         }
-        .accessibilityLabel("Weigh-in, \(day), \(BodyFormat.spokenReading(entry.weight, unit))")
+        .accessibilityLabel(BodyFormat.spokenWeighIn(entry, day: day, unit: unit, timeZone: timeZone))
         .accessibilityHint("Double-tap to edit")
         .accessibilityAction(named: "Delete") { if entry.source != .appleHealth { onDelete(entry) } }
         .accessibilityIdentifier("body.weighIn.\(entry.date)")

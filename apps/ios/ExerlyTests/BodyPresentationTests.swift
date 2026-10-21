@@ -23,6 +23,22 @@ final class BodyPresentationTests: XCTestCase {
         XCTAssertEqual(BodyFormat.kcal(2_487), "2,490")
     }
 
+    /// Review round 1: two readings on one day were read alike. VoiceOver
+    /// hears each one's time, body fat and source.
+    func testAWeighInIsReadWithItsTimeBodyFatAndSource() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let day = try XCTUnwrap(LocalDate("2026-10-19"))
+        let morning = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-19T11:11:00Z"))
+        let time = BodyFormat.time(morning, in: zone)
+        let scale = WeightEntry(at: morning, date: day, weight: .lb(177), bodyFat: 21.5, source: .appleHealth)
+        XCTAssertEqual(BodyFormat.spokenWeighIn(scale, day: "Yesterday", unit: .pounds, timeZone: zone),
+                       "Weigh-in, Yesterday at \(time), 177.0 pounds, 21.5 percent body fat, from Apple Health")
+        let typed = WeightEntry(at: morning.addingTimeInterval(3600), date: day, weight: .lb(177))
+        XCTAssertEqual(BodyFormat.spokenWeighIn(typed, day: "Yesterday", unit: .pounds, timeZone: zone),
+                       "Weigh-in, Yesterday at \(BodyFormat.time(typed.at, in: zone)), 177.0 pounds")
+        XCTAssertNotEqual(time, BodyFormat.time(typed.at, in: zone))
+    }
+
     func testDaysAreRelativeNearTodayAndCarryTheYearOtherwise() throws {
         let today = try XCTUnwrap(LocalDate("2026-10-09"))
         XCTAssertEqual(BodyFormat.day(today, today: today), "Today")

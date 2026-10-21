@@ -73,6 +73,15 @@ enum BodyFormat {
         return BodyDates.anchor(date).formatted(style)
     }
 
+    /// A weigh-in as VoiceOver reads its row: the day and time, the weight,
+    /// any body fat and where it came from, so two on one day differ.
+    static func spokenWeighIn(_ entry: WeightEntry, day: String, unit: MassUnit, timeZone: TimeZone) -> String {
+        var parts = ["Weigh-in, \(day) at \(time(entry.at, in: timeZone))", spokenReading(entry.weight, unit)]
+        if let fat = entry.bodyFat { parts.append("\(number(fat)) percent body fat") }
+        if entry.source == .appleHealth { parts.append("from Apple Health") }
+        return parts.joined(separator: ", ")
+    }
+
     static func time(_ instant: Date, in timeZone: TimeZone) -> String {
         var style = Date.FormatStyle(date: .omitted, time: .shortened)
         style.timeZone = timeZone

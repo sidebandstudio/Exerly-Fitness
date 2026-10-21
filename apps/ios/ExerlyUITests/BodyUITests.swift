@@ -59,7 +59,7 @@ final class BodyUITests: ExerlyUITestCase {
         settle(app)
         tap(app.buttons["Progress"], in: app)
         // Setup's 72.25 kg becomes an ExerlyCore weigh-in.
-        XCTAssertTrue(app.buttons["Weigh-in, Today, 72.25 kilograms"].waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(todayWeighIn("72.25 kilograms", in: app).waitForExistence(timeout: 30), app.debugDescription)
         let setup = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 72.25 }
         XCTAssertEqual(setup?["date"] as? String, today)
 
@@ -70,7 +70,7 @@ final class BodyUITests: ExerlyUITestCase {
         tap(app.buttons["weighIn.increase"], in: app)
         XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.5 kilograms")
         tap(app.buttons["weighIn.save"], in: app)
-        let offlineRow = app.buttons["Weigh-in, Today, 72.5 kilograms"]
+        let offlineRow = todayWeighIn("72.5 kilograms", in: app)
         XCTAssertTrue(offlineRow.waitForExistence(timeout: 10))
         app.terminate()
         app.launchArguments = []
@@ -97,7 +97,7 @@ final class BodyUITests: ExerlyUITestCase {
         let edited = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 71.8 }
         XCTAssertEqual(edited?["id"] as? String, id, "An edit keeps the weigh-in's identity")
 
-        tap(app.buttons["Weigh-in, Today, 71.8 kilograms"], in: app)
+        tap(todayWeighIn("71.8 kilograms", in: app), in: app)
         tap(app.buttons["weighIn.delete"], in: app)
         XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 5))
         var gone = false
@@ -108,7 +108,7 @@ final class BodyUITests: ExerlyUITestCase {
         XCTAssertTrue(gone, "The deletion reaches the server")
         capture(app, "body-deleted-undo")
         tap(app.buttons["Undo"], in: app)
-        XCTAssertTrue(app.buttons["Weigh-in, Today, 71.8 kilograms"].waitForExistence(timeout: 10))
+        XCTAssertTrue(todayWeighIn("71.8 kilograms", in: app).waitForExistence(timeout: 10))
         let restored = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 71.8 }
         XCTAssertNotNil(restored)
     }
@@ -234,5 +234,10 @@ final class BodyUITests: ExerlyUITestCase {
             if dismissPasswordPrompt(in: app) { break }
             Thread.sleep(forTimeInterval: 0.25)
         }
+    }
+
+    /// Today's weigh-in row for `weight`, read as "Weigh-in, Today at 7:11 AM, 72.5 kilograms".
+    private func todayWeighIn(_ weight: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Weigh-in, Today at ", ", \(weight)")).firstMatch
     }
 }

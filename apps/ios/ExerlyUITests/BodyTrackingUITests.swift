@@ -199,6 +199,9 @@ final class BodyTrackingUITests: ExerlyUITestCase {
         let history = app.buttons["body.weighIn.\(yesterday)"]
         reveal(history, in: app)
         XCTAssertTrue(history.label.contains("179.8 pounds"), history.label)
+        // Read with its time and body fat, so two readings on one day can be told apart (review round 1).
+        XCTAssertTrue(history.label.contains(":45"), history.label)
+        XCTAssertTrue(history.label.contains("21.0 percent body fat"), history.label)
         tap(history, in: app)
         tap(app.buttons["weighIn.delete"], in: app)
         let undo = app.buttons["body.undoDelete"]

@@ -110,7 +110,9 @@ final class HealthUITests: ExerlyUITestCase {
         XCTAssertFalse(app.descendants(matching: .any)["health.prompt"].exists, "The offer is gone once weigh-ins flow")
         let row = app.buttons["body.weighIn.\(today)"]
         reveal(row, in: app)
-        XCTAssertEqual(row.label, "Weigh-in, Today, 71.8 kilograms")
+        // Read with its time, body fat and source, so two readings on one day differ.
+        XCTAssertTrue(row.label.hasPrefix("Weigh-in, Today at "), row.label)
+        XCTAssertTrue(row.label.hasSuffix(", 71.8 kilograms, 21.4 percent body fat, from Apple Health"), row.label)
         if designCapture { capture(app, "health-body") }
     }
 
