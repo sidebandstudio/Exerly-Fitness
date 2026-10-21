@@ -466,6 +466,7 @@ import Testing
     final class FakeMeasurements: ImportedMeasurementStore {
         var saved: [String: ImportedMeasurement] = [:]
         var failing = false
+        var failingUpdate = false
 
         func values(_ clientIDs: [String]) -> [String: Double] {
             Dictionary(uniqueKeysWithValues: clientIDs.compactMap { id in saved[id].map { (id, $0.value) } })
@@ -477,7 +478,7 @@ import Testing
         }
 
         func update(_ changes: [ImportedMeasurementChange]) throws -> (updated: Int, kept: Int) {
-            if failing { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
+            if failing || failingUpdate { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
             var updated = 0, kept = 0
             for change in changes {
                 if saved[change.measurement.clientID]?.value == change.from {
@@ -612,6 +613,54 @@ import Testing
         #expect(store.saved[neck.clientID]?.value == 38, "Undo puts the earlier import's value back")
     }
 
+    /// Hevy's measurements again, with Oct 1's neck corrected from 38 to 39 and a waist on Oct 15.
+    static let hevyMeasurementsCorrected = hevyMeasurements.replacingOccurrences(of: ",38,118,", with: ",39,118,")
+        + #""15 Oct 2026, 07:00",,,,,,,,,82.9"# + "\n"
+
+    @MainActor
+    func measurementImporter() throws -> (HistoryImporter, FakeMeasurements, (String) throws -> HistoryImportPlan) {
+        let (persistence, nutrition, training, _) = try stores()
+        let store = FakeMeasurements()
+        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: { Fixture.instant() })
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds)
+        let preview = { (text: String) in
+            let parsed = try HistoryImportReader.read([("measurement_data.csv", Data(text.utf8))], options: options, library: self.library)
+            return try HistoryImportReader.plan(parsed, files: ["measurement_data.csv"], options: options, hosts: [training, nutrition],
+                                                records: try importer.records(), measurements: store)
+        }
+        return (importer, store, preview)
+    }
+
+    @Test func aCorrectionYouMadeYourselfBeforeSavingIsNotUndoneLater() throws {
+        let (importer, store, preview) = try measurementImporter()
+        try importer.commit(try preview(Self.hevyMeasurements))
+        let plan = try preview(Self.hevyMeasurementsCorrected)
+        #expect(plan.measurementChanges.count == 1, "Neck 38 to 39")
+        var neck = try #require(store.saved.values.first { $0.site == .neck })
+        neck.value = 39
+        store.saved[neck.clientID] = neck
+        let record = try importer.commit(plan)
+        #expect(record.measurementChanges == nil, "Already 39, so the import changed nothing to undo")
+        try importer.undo(record.id)
+        #expect(store.saved[neck.clientID]?.value == 39, "Undo leaves your 39 alone")
+    }
+
+    @Test func aMeasurementUndoThatFailsPartWayChangesNothing() throws {
+        let (importer, store, preview) = try measurementImporter()
+        try importer.commit(try preview(Self.hevyMeasurements))
+        let record = try importer.commit(try preview(Self.hevyMeasurementsCorrected))
+        #expect(record.measurements?.count == 1 && record.measurementChanges?.count == 1)
+        let added = try #require(record.measurements?.first)
+        let neck = try #require(record.measurementChanges?.first?.measurement)
+        store.failingUpdate = true
+        #expect(throws: (any Error).self) { try importer.undo(record.id) }
+        #expect(store.saved[added.clientID] != nil, "The Oct 15 waist isn't removed by an Undo that failed")
+        #expect(store.saved[neck.clientID]?.value == 39)
+        store.failingUpdate = false
+        let undone = try importer.undo(record.id)
+        #expect(store.saved[added.clientID] == nil && store.saved[neck.clientID]?.value == 38 && undone.undone == 2)
+    }
+
     @Test func strongMeasurementFilesReadTheirOwnUnits() throws {
         let (_, nutrition, training, _) = try stores()
         let store = FakeMeasurements()
@@ -710,6 +759,9 @@ import Testing
         private let lock = NSLock()
         private var sent: [(path: String, body: Data?)] = []
         var reachable = true
+        /// Undoes on the server, then loses the answer on the way back.
+        var loseUndoAnswer = false
+        private var undone = false
 
         var requests: [(path: String, body: Data?)] { lock.withLock { sent } }
 
@@ -726,7 +778,16 @@ import Testing
                                                         ["table": "water", "id": "row-3", "revision": 1]],
                                            "not_restored": [String: String]()]
                 return (200, try JSONSerialization.data(withJSONObject: json))
-            case "/v1/import/undo": return (200, Data(#"{"removed":2,"kept":0}"#.utf8))
+            case "/v1/import/undo":
+                let replay = lock.withLock { () -> Bool in
+                    defer { undone = true }
+                    return undone
+                }
+                if lock.withLock({ loseUndoAnswer }) {
+                    lock.withLock { loseUndoAnswer = false }
+                    throw URLError(.networkConnectionLost)
+                }
+                return (200, Data((replay ? #"{"removed":2,"kept":0,"already_undone":true}"# : #"{"removed":2,"kept":0}"#).utf8))
             default: return (404, Data())
             }
         }
@@ -760,6 +821,12 @@ import Testing
         let sent = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(Set(sent.keys) == ["exported_at", "version", "goals", "measurements", "water"], "Only the older tables go to the server")
 
+        // The server undoes it but the answer is lost: nothing here changes, and
+        // trying again finishes the Undo with the server's saved answer.
+        server.loseUndoAnswer = true
+        await #expect(throws: HistoryImporter.ImportError.self) { try await second.importer.undo(record.id, api: api) }
+        let stillImported = try second.importer.records().first?.undoneAt == nil
+        #expect(second.training.history.sessions.count == 2 && stillImported)
         let undone = try await second.importer.undo(record.id, api: api)
         #expect(server.requests.last?.path == "/v1/import/undo")
         let undoBody = try #require(server.requests.last?.body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })

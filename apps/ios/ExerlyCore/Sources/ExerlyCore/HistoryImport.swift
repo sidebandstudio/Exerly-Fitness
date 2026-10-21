@@ -267,7 +267,12 @@ public struct HistoryImporter {
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
         let have = measurementStore?.values(plan.measurements.map(\.clientID)) ?? [:]
         let measurements = plan.measurements.filter { have[$0.clientID] == nil }
-        let corrections = plan.measurementChanges
+        // Only corrections still at the value the preview saw: one changed since,
+        // even to the file's value, isn't the import's to change or to undo.
+        let current = measurementStore?.values(plan.measurementChanges.map(\.measurement.clientID)) ?? [:]
+        let corrections = plan.measurementChanges.filter { change in
+            current[change.measurement.clientID].map { abs($0 - change.from) < 0.000_001 } == true
+        }
         if !measurements.isEmpty || !corrections.isEmpty, measurementStore == nil { throw ImportError.noStore("measurement") }
         // Nothing new, as when a file is imported again: nothing to save or undo.
         guard !changes.isEmpty || !measurements.isEmpty || !corrections.isEmpty else { return record }
@@ -400,28 +405,30 @@ public struct HistoryImporter {
         }
         try validate(batches)
         record.undoneAt = now()
-        var removed: [ImportedMeasurement] = []
-        if let measurements = record.measurements, !measurements.isEmpty {
-            guard let measurementStore else { throw ImportError.noStore("measurement") }
-            let outcome = try measurementStore.remove(measurements)
-            result.undone += outcome.removed
-            result.kept += outcome.kept
-            removed = measurements
-        }
-        // A corrected value goes back to the earlier import's, unless changed since.
-        var reverted: [ImportedMeasurementChange] = []
-        if let corrections = record.measurementChanges, !corrections.isEmpty {
-            guard let measurementStore else { throw ImportError.noStore("measurement") }
-            reverted = corrections.map(\.reversed)
-            let outcome = try measurementStore.update(reverted)
-            result.undone += outcome.updated
-            result.kept += outcome.kept
+        let added = record.measurements ?? [], corrections = record.measurementChanges ?? []
+        if (!added.isEmpty || !corrections.isEmpty) && measurementStore == nil { throw ImportError.noStore("measurement") }
+        // Corrected values go back to the earlier import's first, then what the
+        // import added is removed, each only while as the import left it. A
+        // failure at any step puts back what the steps before it did, so
+        // nothing is half undone.
+        let before = measurementStore?.values(added.map(\.clientID) + corrections.map(\.measurement.clientID)) ?? [:]
+        let same = { (a: Double?, b: Double) in a.map { abs($0 - b) < 0.000_001 } == true }
+        let reverted = corrections.map(\.reversed).filter { same(before[$0.measurement.clientID], $0.from) }
+        let removed = added.filter { same(before[$0.clientID], $0.value) }
+        // Still in the log but changed since: kept as it is.
+        result.kept += corrections.filter { before[$0.measurement.clientID] != nil }.count - reverted.count
+            + added.filter { before[$0.clientID] != nil }.count - removed.count
+        if !reverted.isEmpty { result.undone += try measurementStore?.update(reverted).updated ?? 0 }
+        do {
+            if !removed.isEmpty { result.undone += try measurementStore?.remove(removed).removed ?? 0 }
+        } catch {
+            if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
+            throw error
         }
         do {
             try apply(batches, saving: record)
         } catch {
-            // Put the measurements back, so nothing is half undone.
-            if !removed.isEmpty { try? measurementStore?.add(removed.filter { measurementStore?.values([$0.clientID]).isEmpty == true }) }
+            if !removed.isEmpty { try? measurementStore?.add(removed) }
             if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
             throw error
         }

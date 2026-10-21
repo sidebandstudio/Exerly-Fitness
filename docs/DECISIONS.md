@@ -1836,3 +1836,30 @@ Supersedes parts of the entry above, after an independent review.
   import saved, while it still has that import's value. If it was changed in
   Exerly since, it's kept and the preview says so. Undo puts the earlier
   value back.
+
+## 2026-10-21: Restores after review round 3
+
+- Undo now writes into its receipt only the deletions it made, each with the
+  revision it left, plus its counts (migration 0010 adds `outcome`). A later
+  restore brings a row back only if it's still exactly that tombstone. A row
+  Undo kept, or one the person deleted, stays deleted.
+- Undo answers a replay with its first counts and `already_undone: true`
+  instead of 409. The phone already treats that as success and goes on to
+  its own part, so an Undo whose answer was lost, or whose local part
+  failed, finishes when tried again.
+- Receipts: restores read only undone receipts. A tombstone that's brought
+  back is spent, and an undone receipt with none left is removed after 30
+  days, which is also how long a replayed Undo can be answered. Receipts not
+  yet undone stay, since Undo is offered later from Profile.
+- A restored recipe's ingredients are stored as totals for their servings,
+  so they're divided back to one serving before the route's check, and
+  their servings are checked too.
+- Check-ins restore before target versions. A version's `checkin_id` points
+  at the check-in restored or kept for it, or is null.
+- Undo compares what a row says, leaving out `updated_at`, `revision` and
+  `revision_locked`, so a write that changes nothing doesn't keep it.
+- On the phone, a measurement correction is applied and recorded only while
+  the log still has the value the preview saw. Measurement Undo first puts
+  corrected values back, then removes what the import added, each only
+  while it's as the import left it. A failure at any step puts back what the
+  earlier steps did.

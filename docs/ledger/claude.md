@@ -25,8 +25,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
-    measurements; preview, Undo, full export. Review 2 fixed: restores (validated, per-account
-    Undo record, 3 years in 5 s), workouts after a move, corrected measurements. Synthetic only.
+    measurements; preview, Undo, full export. Reviews 2–3 fixed: restores (validated, exact
+    tombstones, replayable Undo, 3 years in 5 s), workouts after a move, measurements. Synthetic.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 
