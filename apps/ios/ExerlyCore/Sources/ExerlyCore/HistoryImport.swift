@@ -113,6 +113,8 @@ public struct HistoryImportPlan: Sendable {
     public var serverTables: Data?
     /// Body measurements the account doesn't have yet, for its measurement log.
     public var measurements: [ImportedMeasurement] = []
+    /// Those of them an earlier import's Undo deleted, which the import brings back.
+    public var revivedMeasurements: Set<String> = []
     /// Measurements an earlier import saved whose value the file corrects.
     public var measurementChanges: [ImportedMeasurementChange] = []
 
@@ -211,6 +213,9 @@ public struct HistoryImporter {
         case noStore(String)
         case invalid(String)
         case alreadyUndone
+        /// Undo took back measurements, then couldn't finish or put them back.
+        /// The import is still there to undo again.
+        case undoIncomplete
     }
 
     static let recordKind = "import_record"
@@ -267,9 +272,17 @@ public struct HistoryImporter {
         }
         var record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
-        // New ones, or ones the preview found an earlier Undo deleted.
+        // Each new one still absent, and each one to bring back still the
+        // deletion the preview saw; anything else arrived since, so the
+        // preview is read again.
         let have = measurementStore?.states(plan.measurements.map(\.clientID)) ?? [:]
-        let measurements = plan.measurements.filter { have[$0.clientID]?.deleted != false }
+        for measurement in plan.measurements {
+            let state = have[measurement.clientID]
+            guard plan.revivedMeasurements.contains(measurement.clientID) ? state?.deleted == true : state == nil else {
+                throw ImportError.stale
+            }
+        }
+        let measurements = plan.measurements
         // Only corrections still exactly as the preview saw them: one changed
         // since in any way, even to the file's value, isn't the import's to
         // change or to undo.
@@ -421,23 +434,40 @@ public struct HistoryImporter {
         let present = { (id: String) in before[id].map { !$0.deleted } == true }
         result.kept += corrections.filter { present($0.measurement.clientID) }.count - reverted.count
             + added.filter { present($0.clientID) }.count - removed.count
-        // Which this Undo deleted, so importing again may bring back those and no others.
-        if !removed.isEmpty { record.removedMeasurements = removed.map(\.clientID) }
+        // Which this import's Undos deleted, so importing again may bring back
+        // those and no others. A retry adds to what an interrupted one deleted.
+        let earlier = record.removedMeasurements ?? []
+        let deletedNow = earlier + removed.map(\.clientID).filter { !earlier.contains($0) }
+        if !deletedNow.isEmpty { record.removedMeasurements = deletedNow }
         if !reverted.isEmpty { result.undone += try measurementStore?.update(reverted).updated ?? 0 }
         do {
             if !removed.isEmpty { result.undone += try measurementStore?.remove(removed).removed ?? 0 }
         } catch {
-            if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
+            try putBack(reverted: reverted, removed: [], of: record)
             throw error
         }
         do {
             try apply(batches, saving: record)
         } catch {
-            if !removed.isEmpty { try? measurementStore?.restore(removed) }
-            if !reverted.isEmpty { _ = try? measurementStore?.update(reverted.map(\.reversed)) }
+            try putBack(reverted: reverted, removed: removed, of: record)
             throw error
         }
         return result
+    }
+
+    /// Puts back what an Undo did to the measurement log before it failed. If
+    /// that fails too, the import is saved as still to undo, knowing the
+    /// deletions it made, and `undoIncomplete` says to try again.
+    private func putBack(reverted: [ImportedMeasurementChange], removed: [ImportedMeasurement], of record: ImportRecord) throws {
+        do {
+            if !removed.isEmpty { try measurementStore?.restore(removed) }
+            if !reverted.isEmpty { _ = try measurementStore?.update(reverted.map(\.reversed)) }
+        } catch {
+            var pending = record
+            pending.undoneAt = nil
+            try? persistence.saveDocument(kind: Self.recordKind, id: record.id.uuidString, payload: ExerlyJSON.canonical(pending))
+            throw ImportError.undoIncomplete
+        }
     }
 
     private func validate(_ batches: [(host: DocumentHost, kind: String, writes: [DocumentWrite])]) throws {
@@ -474,11 +504,18 @@ public struct HistoryImporter {
         publish.forEach { $0() }
     }
 
+    /// What to tell the person when an Undo fails.
+    public static func undoFailure(_ error: Error) -> String {
+        if case ImportError.undoIncomplete = error { return describe(error) }
+        return "The import couldn't be undone. Nothing changed. \(describe(error))"
+    }
+
     public static func describe(_ error: Error) -> String {
         switch error {
         case ImportError.invalid(let message): message
         case ImportError.noStore(let kind): "Exerly can't keep \(kind) documents on this device"
         case ImportError.alreadyUndone: "This import was already undone"
+        case ImportError.undoIncomplete: "Undo took back your imported measurements but couldn't finish. Tap Undo again."
         case ImportError.stale: "Your data changed since this preview, so it was read again"
         case ImportError.needsAccount(let why): "Your account couldn't be reached, so nothing was restored. \(why)"
         case let error as DocumentError: error.message

@@ -152,7 +152,7 @@ struct ImportExportView: View {
                 UIAccessibility.post(notification: .announcement, argument: text)
                 Task { await workspace.synchronize() }
             } catch {
-                self.error = "The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))"
+                self.error = HistoryImporter.undoFailure(error)
             }
             reload()
         }

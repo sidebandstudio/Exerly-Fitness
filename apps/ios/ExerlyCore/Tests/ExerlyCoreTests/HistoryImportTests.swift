@@ -469,6 +469,7 @@ import Testing
         var tombstones: [String: ImportedMeasurement] = [:]
         var failing = false
         var failingUpdate = false
+        var failingRestore = false
 
         func states(_ clientIDs: [String]) -> [String: MeasurementState] {
             var states: [String: MeasurementState] = [:]
@@ -519,6 +520,7 @@ import Testing
         }
 
         func restore(_ measurements: [ImportedMeasurement]) throws {
+            if failingRestore { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
             for measurement in measurements {
                 if let deleted = tombstones.removeValue(forKey: measurement.clientID) { saved[measurement.clientID] = deleted }
             }
@@ -638,8 +640,10 @@ import Testing
         + #""15 Oct 2026, 07:00",,,,,,,,,82.9"# + "\n"
 
     @MainActor
-    func measurementImporter() throws -> (HistoryImporter, FakeMeasurements, (String) throws -> HistoryImportPlan) {
-        let (persistence, nutrition, training, _) = try stores()
+    func measurementImporter(persistence: TrainingPersistence & DocumentPersistence = InMemoryTrainingPersistence()) throws
+        -> (HistoryImporter, FakeMeasurements, (String) throws -> HistoryImportPlan) {
+        let nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
+        let training = try TrainingStore(persistence: persistence, now: { Fixture.instant() })
         let store = FakeMeasurements()
         // Each import a minute after the one before, so the latest is known.
         var minutes = 0.0
@@ -721,6 +725,49 @@ import Testing
         store.tombstones[neck.clientID] = store.saved.removeValue(forKey: neck.clientID)
         let third = try preview(Self.hevyMeasurements)
         #expect(third.measurements.isEmpty && third.lost.contains("1 body measurement you deleted in Exerly stays deleted."))
+    }
+
+    @Test func aDeletionThatArrivesAfterThePreviewMakesItReadAgain() throws {
+        let (importer, store, preview) = try measurementImporter()
+        let plan = try preview(Self.hevyMeasurements)
+        // From another device: one of the file's measurements, imported and deleted there.
+        let neck = try #require(plan.measurements.first { $0.site == .neck })
+        store.tombstones[neck.clientID] = neck
+        #expect(throws: HistoryImporter.ImportError.stale) { try importer.commit(plan) }
+        #expect(store.saved.isEmpty && store.tombstones.count == 1, "Nothing saved, and the deletion stands")
+
+        // A plan that brings back what an Undo deleted is stale once one is back already.
+        store.tombstones.removeAll()
+        try importer.commit(try preview(Self.hevyMeasurements))
+        let first = try #require(try importer.records().first)
+        try importer.undo(first.id)
+        let revive = try preview(Self.hevyMeasurements)
+        #expect(revive.measurements.count == 8)
+        let waist = try #require(revive.measurements.first { $0.site == .waist })
+        store.saved[waist.clientID] = store.tombstones.removeValue(forKey: waist.clientID)
+        #expect(throws: HistoryImporter.ImportError.stale) { try importer.commit(revive) }
+        #expect(store.saved.count == 1)
+    }
+
+    @Test func anUndoThatCantPutBackWhatItRemovedSaysSoAndFinishesWhenTriedAgain() throws {
+        let persistence = CommitFailingPersistence()
+        let (importer, store, preview) = try measurementImporter(persistence: persistence)
+        let record = try importer.commit(try preview(Self.hevyMeasurements))
+        persistence.failNextCommit = true
+        store.failingRestore = true
+        #expect(throws: HistoryImporter.ImportError.undoIncomplete) { try importer.undo(record.id) }
+        #expect(HistoryImporter.undoFailure(HistoryImporter.ImportError.undoIncomplete)
+                == "Undo took back your imported measurements but couldn't finish. Tap Undo again.")
+        #expect(store.saved.isEmpty, "Removed, and couldn't be put back")
+        let saved = try #require(try importer.records().first)
+        #expect(saved.undoneAt == nil && Set(saved.removedMeasurements ?? []) == Set(record.measurements?.map(\.clientID) ?? []),
+                "Still to undo, and it knows which deletions are its own")
+
+        store.failingRestore = false
+        try importer.undo(record.id)
+        let undone = try #require(try importer.records().first)
+        #expect(undone.undoneAt != nil && undone.removedMeasurements?.count == 8)
+        #expect(try preview(Self.hevyMeasurements).measurements.count == 8, "Importing again brings them back")
     }
 
     @Test func strongMeasurementFilesReadTheirOwnUnits() throws {

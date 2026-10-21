@@ -318,6 +318,7 @@ public enum HistoryImportReader {
                 // Brought back only if an import's Undo deleted it; a deletion of the person's own stands.
                 if undoneHere[measurement.clientID] == true {
                     plan.measurements.append(measurement)
+                    plan.revivedMeasurements.insert(measurement.clientID)
                 } else {
                     existing += 1
                     deleted += 1

@@ -680,7 +680,7 @@ struct HistoryImportFlow: View {
                 Task { await workspace.synchronize() }
             } catch {
                 withAnimation(.snappy) {
-                    phase = .unreadable("The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))")
+                    phase = .unreadable(HistoryImporter.undoFailure(error))
                 }
             }
         }

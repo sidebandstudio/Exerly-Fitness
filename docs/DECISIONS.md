@@ -1695,6 +1695,7 @@ and N08 track. Changing it here would fork the policy for one kind and pre-empt 
 `BarcodeLoggingModelTests.aScanUndoneHereAndEditedElsewhereIsLoggedOnceAfterSync` drives the
 sequence through two real `SyncEngine`s and the fake document server and expects one entry,
 under `withKnownIssue`, so it starts failing when the conflict-review slice fixes this.
+
 ## 2026-10-20: Imports are one undoable unit; export is made on the phone
 
 PARITY I02, I12, I13, I14.
@@ -1885,3 +1886,21 @@ Supersedes parts of the entry above, after an independent review.
   person's deletion stands, and the preview says so.
 - During cleanup, a restore receipt drops references whose tombstone is gone,
   no longer deleted, or at a different revision from the one Undo left.
+
+## 2026-10-21: Imports on top of barcode's after-commit publishing
+
+- `NutritionStore.writeAll` combines both branches: it prepares the writes,
+  hidden suggestions included, inside the transaction and hands their
+  publishing to `persistence.afterCommit`, so an import's records show once
+  the outermost transaction commits and never after a rollback.
+  `HistoryImporter.apply` still publishes after its own transaction, which
+  is never nested.
+- Saving an import checks each measurement against the preview first. A new
+  one must still be absent, and one to bring back must still be the deletion
+  the preview saw. Otherwise the preview is read again (`stale`). A deletion
+  that arrived after the preview is never revived.
+- If an Undo fails and can't put back the measurements it took back, it
+  saves the import as still to undo, with the deletions it made, and says
+  "Undo took back your imported measurements but couldn't finish. Tap Undo
+  again." A retry adds to that list, so importing again brings back exactly
+  those deletions.
