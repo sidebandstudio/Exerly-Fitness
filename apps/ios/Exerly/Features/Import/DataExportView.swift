@@ -13,7 +13,9 @@ struct DataExportView: View {
     @State private var exportFile: ExportShareFile?
     @State private var busy: Format?
     @State private var error: String?
-    @State private var note: String?
+    /// The phone's copy, made when the account couldn't be reached, and why:
+    /// said before it's shared, so nobody shares less than they meant to.
+    @State private var fallback: (file: ExportShareFile, why: String)?
     @State private var task: Task<Void, Never>?
     @AccessibilityFocusState private var errorFocused: Bool
 
@@ -55,9 +57,17 @@ struct DataExportView: View {
                     }
                     .accessibilityElement(children: .combine).accessibilityIdentifier("export.busy")
                 }
-                if let note {
-                    Label(note, systemImage: "iphone").font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("export.note")
+                if let fallback {
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        Label("This phone's copy only: \(fallback.why)", systemImage: "iphone")
+                            .font(.exCaption).foregroundStyle(Color.exWarning).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("export.fallback")
+                        Button("Share this phone's copy") {
+                            exportFile = fallback.file
+                            self.fallback = nil
+                        }
+                        .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("export.shareDevice")
+                    }
                 }
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exError)
@@ -122,18 +132,25 @@ struct DataExportView: View {
         guard busy == nil else { return }
         busy = format
         error = nil
-        note = nil
+        fallback?.file.remove()
+        fallback = nil
         task = Task { @MainActor in
             defer { busy = nil }
             do {
-                let (data, fromDevice) = try await export()
+                let (data, why) = try await export()
                 try Task.checkCancellation()
                 let today = LocalDate(Date(), in: .current)
                 let file = format == .json
                     ? ExportFiles.File(name: "exerly-export-\(today).json", data: data)
                     : try ExportFiles.bundle(data, date: today)
-                exportFile = try ExportShareFile(file)
-                if fromDevice && !deviceOnly { note = "Your account couldn't be reached, so this export holds what's saved on this iPhone." }
+                let shared = try ExportShareFile(file)
+                if let why, !deviceOnly {
+                    // Said first; sharing it is the person's choice.
+                    fallback = (shared, why)
+                    UIAccessibility.post(notification: .announcement, argument: "This phone's copy only: \(why)")
+                } else {
+                    exportFile = shared
+                }
             } catch is CancellationError { } catch {
                 guard !Task.isCancelled else { return }
                 self.error = AccountScreenError.message(error)
@@ -142,18 +159,21 @@ struct DataExportView: View {
         }
     }
 
-    /// The account's export, or this device's when offline or the server is slow.
-    private func export() async throws -> (Data, fromDevice: Bool) {
-        if deviceOnly, let device = actions.exportDeviceData { return (try device(), true) }
-        guard let device = actions.exportDeviceData else { return (try await actions.exportAccount(), false) }
+    /// The account's export, or this device's when offline or the account
+    /// can't be reached, with why.
+    private func export() async throws -> (Data, fallbackReason: String?) {
+        if deviceOnly, let device = actions.exportDeviceData { return (try device(), "you're offline.") }
+        guard let device = actions.exportDeviceData else { return (try await actions.exportAccount(), nil) }
         let server = Task { @MainActor in try await actions.exportAccount() }
         let timeout = Task { try await Task.sleep(for: Self.serverWait); server.cancel() }
         defer { timeout.cancel() }
         do {
-            return (try await server.value, false)
+            return (try await server.value, nil)
         } catch {
             if Task.isCancelled { throw error }
-            return (try device(), true)
+            let why = error is CancellationError ? "your account didn't answer within six seconds."
+                : "your account couldn't be reached (\(AccountScreenError.message(error)))."
+            return (try device(), why)
         }
     }
 }

@@ -179,6 +179,77 @@ final class HistoryImportUITests: ExerlyUITestCase {
         }
     }
 
+    /// When the account can't make the export, the phone's copy is offered,
+    /// and why, before anything is shared.
+    func testAnExportTheAccountCantMakeSaysSoBeforeSharing() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "export-fallback", units: "metric")
+        let app = launch(file: nil, name: nil)
+        signIn(app, email: person.email)
+        tap(app.tabBars.buttons["Profile"], in: app)
+        reveal(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["profile.importExport"], in: app)
+        reveal(app.buttons["import.export"], in: app)
+        tap(app.buttons["import.export"], in: app)
+        try await control(["failExport": true])
+        tap(app.buttons["account.shareExport"], in: app)
+        let fallback = app.descendants(matching: .any)["export.fallback"]
+        XCTAssertTrue(fallback.waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(fallback.label.hasPrefix("This phone's copy only: your account couldn't be reached"), fallback.label)
+        XCTAssertFalse(app.buttons["Close"].exists, "Nothing is shared before the person chooses to")
+        capture(app, "export-03-fallback")
+        tap(app.buttons["export.shareDevice"], in: app)
+        XCTAssertTrue(app.buttons["Close"].firstMatch.waitForExistence(timeout: 20), "The share sheet opens with the phone's copy")
+        capture(app, "export-04-fallback-share")
+        try await control([:])
+    }
+
+    /// A Strong export chosen in the system Files picker, not handed over by
+    /// the debug hook: the file is put in On My iPhone first.
+    func testAStrongExportChosenInFilesIsPreviewed() async throws {
+        try await control([:])
+        let name = "Synthetic Strong \(UUID().uuidString.prefix(6))"
+        let storage = try XCTUnwrap(Self.onMyIPhone(), "The simulator's On My iPhone folder")
+        let file = storage.appendingPathComponent("\(name).csv")
+        try StrongExport.csv().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let person = try await createAccount(prefix: "strong-files", units: "metric")
+        let app = launch(file: nil, name: nil)
+        signIn(app, email: person.email)
+        tap(app.tabBars.buttons["Profile"], in: app)
+        reveal(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["import.source.strong"], in: app)
+        tap(app.buttons["import.choose"], in: app)
+        // The picker opens on Recents or Browse; go to On My iPhone and choose the file.
+        let browse = app.buttons["Browse"].firstMatch
+        if browse.waitForExistence(timeout: 10) { browse.tap() }
+        let onMyIPhone = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'On My iPhone'")).firstMatch
+        if onMyIPhone.waitForExistence(timeout: 10) { onMyIPhone.tap() }
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 20), app.debugDescription)
+        capture(app, "strong-files-picker")
+        item.tap()
+        let open = app.buttons["Open"].firstMatch
+        if open.waitForExistence(timeout: 5) { open.tap() }
+        XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertEqual(app.descendants(matching: .any)["import.count.workouts"].value as? String, "2 to add")
+        capture(app, "strong-files-preview")
+    }
+
+    /// The Files app's On My iPhone folder in this simulator.
+    static func onMyIPhone() -> URL? {
+        guard let data = ProcessInfo.processInfo.environment["SIMULATOR_SHARED_RESOURCES_DIRECTORY"] else { return nil }
+        let groups = URL(fileURLWithPath: data).appendingPathComponent("Containers/Shared/AppGroup")
+        let folders = (try? FileManager.default.contentsOfDirectory(at: groups, includingPropertiesForKeys: nil)) ?? []
+        return folders.first { folder in
+            let metadata = folder.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+            guard let plist = try? Data(contentsOf: metadata),
+                  let object = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any] else { return false }
+            return object["MCMMetadataIdentifier"] as? String == "group.com.apple.FileProvider.LocalStorage"
+        }?.appendingPathComponent("File Provider Storage")
+    }
+
     /// The session the account's server has with this name, once it syncs.
     private func waitForSession(token: String, named name: String, timeout: Int = 40) async throws -> [String: Any]? {
         for _ in 0..<timeout {
@@ -193,7 +264,7 @@ final class HistoryImportUITests: ExerlyUITestCase {
         return nil
     }
 
-    private func launch(file: Data, name: String) -> XCUIApplication {
+    private func launch(file: Data?, name: String?) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         if let appearance = ProcessInfo.processInfo.environment["EXERLY_TEST_APPEARANCE"], ["light", "dark", "system"].contains(appearance) {
@@ -204,8 +275,10 @@ final class HistoryImportUITests: ExerlyUITestCase {
         }
         app.launchEnvironment["EXERLY_API_BASE_URL"] = fixtureURL
         app.launchEnvironment["EXERLY_TEST_STORE_ID"] = UUID().uuidString
-        app.launchEnvironment["EXERLY_IMPORT_FILE"] = file.base64EncodedString()
-        app.launchEnvironment["EXERLY_IMPORT_FILE_NAME"] = name
+        if let file, let name {
+            app.launchEnvironment["EXERLY_IMPORT_FILE"] = file.base64EncodedString()
+            app.launchEnvironment["EXERLY_IMPORT_FILE_NAME"] = name
+        }
         app.launch()
         return app
     }

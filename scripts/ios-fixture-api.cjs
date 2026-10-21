@@ -67,6 +67,9 @@ const stopCluster = () => {
 };
 process.once('exit', stopCluster);
 let offline = false;
+// The account export alone fails, the rest of the API answering: the app's
+// export then falls back to the phone's copy.
+let failExport = false;
 let disconnect = false;
 let dropSetupAcknowledgement = false;
 let dropPreferencesAcknowledgement = false;
@@ -177,6 +180,7 @@ providers.lookupBarcode = async (identity) => ({
       }
       setAppleRevocation(req.body.appleRevocation === true);
       offline = req.body.offline === true;
+      failExport = req.body.failExport === true;
       disconnect = req.body.disconnect === true;
       dropSetupAcknowledgement = req.body.dropSetupAcknowledgement === true;
       dropPreferencesAcknowledgement = req.body.dropPreferencesAcknowledgement === true;
@@ -427,6 +431,9 @@ providers.lookupBarcode = async (identity) => ({
     }
   });
   app.use((req, res, next) => {
+    if (failExport && req.path === '/api/export') {
+      return res.status(503).json({ message: 'Simulator export interruption' });
+    }
     if (
       offline &&
       (req.path.startsWith('/api/') || req.path.startsWith('/v1/') || req.path.startsWith('/auth/'))

@@ -303,10 +303,16 @@ struct HistoryImportFlow: View {
             Text(range(plan.dateRange) ?? "No dated history").font(.exH2).foregroundStyle(Color.exTextPrimary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
             // At the largest sizes the action comes first, as it does elsewhere in Exerly.
-            if typeSize.isAccessibilitySize { importButton(plan) }
+            if typeSize.isAccessibilitySize {
+                attention(plan)
+                importButton(plan)
+            }
             Text(previewDetail(plan)).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
             lines(plan.lines, showExisting: true)
-            if !typeSize.isAccessibilitySize { importButton(plan) }
+            if !typeSize.isAccessibilitySize {
+                attention(plan)
+                importButton(plan)
+            }
             Button(plan.isEmpty ? "Choose another file" : "Choose a different file") { choosing = true }
                 .buttonStyle(ExActionStyle(secondary: true)).accessibilityIdentifier("import.chooseAgain")
         }
@@ -326,6 +332,50 @@ struct HistoryImportFlow: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("import.skipped")
+        }
+    }
+
+    /// What to settle before importing, beside the Import button so it can't
+    /// be missed: exercises without a match, a unit the file doesn't give,
+    /// and how much won't come across.
+    @ViewBuilder
+    private func attention(_ plan: HistoryImportPlan) -> some View {
+        let unmatched = plan.exercisesInOrder.filter { $0.how == .unmatched }
+        if !plan.isEmpty, !unmatched.isEmpty || plan.assumedWeightUnit != nil || !plan.lost.isEmpty {
+            VStack(alignment: .leading, spacing: ExSpacing.small) {
+                if let first = unmatched.first {
+                    let sets = unmatched.reduce(0) { $0 + $1.sets }
+                    Label("\(unmatched.count) \(unmatched.count == 1 ? "exercise has" : "exercises have") no match in Exerly, "
+                          + "so \(sets) \(sets == 1 ? "set" : "sets") won't be imported yet.", systemImage: "exclamationmark.circle")
+                        .font(.exCaption).foregroundStyle(Color.exWarning).fixedSize(horizontal: false, vertical: true)
+                    Button(unmatched.count == 1 ? "Match \(first.name)" : "Match them, starting with \(first.name)") { remapping = first }
+                        .font(.exLabel).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44)
+                        .accessibilityIdentifier("import.matchFirst")
+                }
+                if let assumed = plan.assumedWeightUnit {
+                    Text("\(plan.source.name) doesn't say which unit its weights are in. Which did you use?")
+                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    ExSegmentedControl(values: [MassUnit.kilograms, .pounds], selection: Binding(get: { assumed }, set: { chosen in
+                        guard chosen != assumed else { return }
+                        weightUnit = chosen
+                        read()
+                    })) { $0 == .kilograms ? "Kilograms" : "Pounds" }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Weights in this file")
+                    .accessibilityIdentifier("import.weightUnit")
+                }
+                if !plan.lost.isEmpty {
+                    Label("\(plan.lost.count) \(plan.lost.count == 1 ? "thing won't" : "things won't") come across. They're listed below.",
+                          systemImage: "minus.circle")
+                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("import.lostSummary")
+                }
+            }
+            .padding(ExSpacing.item)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: ExRadius.control, style: .continuous))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("import.attention")
         }
     }
 
@@ -472,20 +522,6 @@ struct HistoryImportFlow: View {
         ExCard {
             ExSectionHeading("Units and times")
             ForEach(plan.units, id: \.self) { bullet($0, icon: "ruler") }
-            if let assumed = plan.assumedWeightUnit {
-                VStack(alignment: .leading, spacing: ExSpacing.small) {
-                    Text("\(plan.source.name) doesn't say which unit its weights are in. Which did you use?")
-                        .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
-                    ExSegmentedControl(values: [MassUnit.kilograms, .pounds], selection: Binding(get: { assumed }, set: { chosen in
-                        guard chosen != assumed else { return }
-                        weightUnit = chosen
-                        read()
-                    })) { $0 == .kilograms ? "Kilograms" : "Pounds" }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel("Weights in this file")
-                    .accessibilityIdentifier("import.weightUnit")
-                }
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("import.units")
