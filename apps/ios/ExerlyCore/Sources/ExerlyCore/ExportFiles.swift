@@ -89,13 +89,14 @@ public enum ExportFiles {
         }
     }
 
-    /// One table per kind of data, header first. Empty kinds are left out.
+    /// One table per kind of data, header first: every kind of document, the
+    /// server's older tables and the account. Empty kinds are left out.
     public static func tables(_ export: Data) throws -> [(name: String, rows: [[String]])] {
         guard let json = try JSONSerialization.jsonObject(with: export) as? [String: Any] else {
             throw DocumentError(message: "The export isn't a JSON object")
         }
         let documents = ((json["documents"] as? [[String: Any]]) ?? []).filter { $0["deleted_at"] == nil || $0["deleted_at"] is NSNull }
-        var tables: [(String, [[String]])] = []
+        var tables: [(name: String, rows: [[String]])] = []
         for table in Self.layout {
             let rows = documents.filter { $0["kind"] as? String == table.kind }
                 .compactMap { row -> (order: String, id: String, rows: [[Any?]])? in
@@ -107,8 +108,38 @@ public enum ExportFiles {
             guard !rows.isEmpty else { continue }
             tables.append((table.name, [table.header] + rows.map { $0.map(text) }))
         }
+        // Every other kind of document: its ID, revision, last change and the payload as JSON.
+        let laidOut = Set(Self.layout.map(\.kind))
+        let others = Dictionary(grouping: documents.filter { !laidOut.contains($0["kind"] as? String ?? "") }) { $0["kind"] as? String ?? "" }
+        for (kind, rows) in others.sorted(by: { $0.key < $1.key }) where !kind.isEmpty {
+            let body = rows.sorted { text($0["document_id"]) < text($1["document_id"]) }.map { row -> [String] in
+                [text(row["document_id"]), text(row["revision"]), text(row["updated_at"]), text(row["pending_sync"]), text(row["payload"])]
+            }
+            tables.append((plural(kind), [["id", "revision", "updated_at", "pending_sync", "payload_json"]] + body))
+        }
+        // The server's older tables, the account and where imports came from, as they are.
+        let named = Set(tables.map(\.name))
+        for key in json.keys.sorted() where !["documents", "exported_at", "version", "source", "note", "context"].contains(key) {
+            let rows: [[String: Any]]
+            if let list = json[key] as? [Any] {
+                rows = list.compactMap { $0 as? [String: Any] }
+            } else if let object = json[key] as? [String: Any] {
+                rows = [object]
+            } else {
+                continue
+            }
+            guard !rows.isEmpty else { continue }
+            var columns = Set(rows.flatMap(\.keys)).subtracting(["id"]).sorted()
+            if rows.contains(where: { $0["id"] != nil }) { columns.insert("id", at: 0) }
+            let body: [[String]] = rows.map { row in columns.map { text(row[$0]) } }
+            let name = named.contains(key) ? "server_\(key)" : key
+            tables.append((name, [columns] + body))
+        }
         return tables
     }
+
+    /// A table's name for a kind of document: "gym_profile" → "gym_profiles".
+    static func plural(_ kind: String) -> String { kind.hasSuffix("s") ? kind : kind + "s" }
 
     /// A CSV file for each table, RFC 4180, CRLF line ends.
     public static func csvFiles(_ export: Data) throws -> [File] {
@@ -233,11 +264,11 @@ public enum ExportFiles {
         header: ["session_id", "revision", "updated_at", "session", "started_at", "ended_at", "time_zone", "exercise_position",
                  "exercise_id", "superset_id", "set_position", "set_id", "kind", "side", "effort", "reps", "load", "load_unit",
                  "duration_s", "distance_m", "rir", "completed_at", "bodyweight", "bodyweight_unit", "program_id", "program_day_id",
-                 "program_cycle"],
+                 "program_cycle", "session_notes", "exercise_notes"],
         rows: { p, d in
             let program = object(p["program"])
             let session: [Any?] = header(d) + [p["name"], p["startedAt"], p["endedAt"], p["timeZoneID"]]
-            let tail: [Any?] = mass(p["bodyweight"]) + [program["programID"], program["dayID"], program["cycle"]]
+            let tail: [Any?] = mass(p["bodyweight"]) + [program["programID"], program["dayID"], program["cycle"], p["notes"]]
             var rows: [[Any?]] = []
             for (e, exercise) in list(p["exercises"]).enumerated() {
                 for (s, set) in list(exercise["sets"]).enumerated() {
@@ -246,7 +277,7 @@ public enum ExportFiles {
                         row += [e + 1, exercise["exerciseID"], exercise["supersetID"], s + 1, set["id"], set["kind"], set["side"], f + 1]
                         row += [effort["reps"]] + mass(effort["load"])
                         row += [effort["duration"], effort["distance"], set["rir"], set["completedAt"]]
-                        rows.append(row + tail)
+                        rows.append(row + tail + [exercise["notes"]])
                     }
                 }
             }
