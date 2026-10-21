@@ -227,6 +227,100 @@ test('a password reset clears the guess budget, the change-password limit and th
   assert.equal(changed.status, 200, JSON.stringify(changed.body));
 });
 
+// On App Platform every request arrives from DigitalOcean's ingress, which
+// X-Forwarded-For names; the client is in do-connecting-ip.
+const viaAppPlatform = (email, password, client, ingress = '10.244.0.7') =>
+  api.post(
+    '/login',
+    { email, password },
+    { headers: { 'X-Forwarded-For': ingress, 'do-connecting-ip': client } }
+  );
+
+test('on App Platform, limits follow the client in do-connecting-ip, not the shared ingress', async () => {
+  process.env.EXERLY_APP_PLATFORM = '1';
+  try {
+    const user = await signUp(api);
+    for (let i = 0; i < 10; i++) {
+      const guess = await viaAppPlatform(user.email, `guess-${i}`, `198.51.100.${i + 1}`);
+      assert.equal(guess.status, 401, 'each client has its own per-address limit');
+    }
+    assert.equal((await viaAppPlatform(user.email, user.password, '198.51.100.24')).status, 429);
+    // The owner arrives through the same ingress from another network.
+    const owner = await viaAppPlatform(user.email, user.password, '203.0.113.7');
+    assert.equal(owner.status, 200, JSON.stringify(owner.body));
+    // Another client through the same ingress isn't held back either.
+    const other = await signUp(api);
+    assert.equal((await viaAppPlatform(other.email, other.password, '192.0.2.50')).status, 200);
+    // A header that isn't an address falls back to the connection's address.
+    const odd = await viaAppPlatform(other.email, other.password, 'not-an-ip', '192.0.2.60');
+    assert.equal(odd.status, 200);
+  } finally {
+    delete process.env.EXERLY_APP_PLATFORM;
+  }
+});
+
+test('without the App Platform flag, a do-connecting-ip header is ignored', async () => {
+  delete process.env.EXERLY_APP_PLATFORM;
+  const user = await signUp(api);
+  // Self-hosted behind one proxy: X-Forwarded-For is the client. Rotating a
+  // spoofed do-connecting-ip doesn't make one client look like many.
+  for (let i = 0; i < 8; i++) {
+    assert.equal(
+      (await viaAppPlatform(user.email, `guess-${i}`, `203.0.113.${i + 1}`, '198.51.100.23'))
+        .status,
+      401
+    );
+  }
+  const spoofed = await viaAppPlatform(user.email, user.password, '192.0.2.99', '198.51.100.23');
+  assert.equal(spoofed.status, 429, 'the per-address limit still counts the real client');
+});
+
+test('a reset clears the guess budget even while wrong guesses are still being checked', async () => {
+  const bcrypt = require('bcrypt');
+  const original = bcrypt.compare;
+  let open;
+  const gate = new Promise((resolve) => (open = resolve));
+  let held = 0;
+  bcrypt.compare = async (password, hash) => {
+    if (String(password).startsWith('held-guess-')) {
+      held += 1;
+      await gate;
+    }
+    return original.call(bcrypt, password, hash);
+  };
+  try {
+    const user = await signUp(api);
+    const inFlight = Array.from({ length: 10 }, (_, i) =>
+      deleteAccount(user.token, { password: `held-guess-${i}` })
+    );
+    while (held < 10) await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await forgot(api, user.email);
+    const code = await mailedCode(user.email);
+    assert.equal(
+      (await resetPassword(api, user.email, code, 'after-reset-passphrase')).status,
+      200
+    );
+
+    // The guesses finish after the reset, wrong.
+    open();
+    for (const res of await Promise.all(inFlight)) assert.equal(res.status, 403);
+
+    const signedIn = await api.post('/login', {
+      email: user.email,
+      password: 'after-reset-passphrase',
+    });
+    assert.equal(signedIn.status, 200);
+    const deleted = await deleteAccount(signedIn.body.token, {
+      password: 'after-reset-passphrase',
+    });
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  } finally {
+    open();
+    bcrypt.compare = original;
+  }
+});
+
 test('signup is limited per email as well as per address', async () => {
   const email = `limited-${randomBytes(4).toString('hex')}@exerly.test`;
   const attempt = (i) =>

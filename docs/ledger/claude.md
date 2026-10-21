@@ -27,7 +27,7 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     refreshing (Done tapped right after opening Your details, or a reminder switch
     flipped at once) was dropped; a day with food in one hour lost By time's hour.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
-  1-3 fixed (guess budget holds under bursts, per-network sign-in limit). Needs round 4, deploy, app update.
+  1-4 fixed (limits use do-connecting-ip on App Platform; resets beat in-flight guesses). Needs round 5.
 
 ## Current outcome
 

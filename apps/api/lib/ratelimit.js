@@ -20,10 +20,28 @@ const sweeper = setInterval(() => {
 }, SWEEP_MS);
 sweeper.unref?.();
 
-function clientKey(req) {
-  // trust proxy is set on the app, so req.ip already reflects X-Forwarded-For
-  // when running behind DigitalOcean's load balancer.
+/**
+ * The address of the client that sent a request, for every per-address and
+ * per-network limit.
+ *
+ * On DigitalOcean App Platform, X-Forwarded-For names DigitalOcean's ingress,
+ * which every client shares, and the client is in `do-connecting-ip`
+ * (https://docs.digitalocean.com/support/where-can-i-find-the-client-ip-address-of-a-request-connecting-to-my-app/).
+ * That header is trusted only when EXERLY_APP_PLATFORM=1, which .do/app.yaml
+ * sets: anyone can send it to a self-hosted server. Otherwise this is req.ip,
+ * which follows the app's trust proxy setting (one proxy, as in
+ * docker-compose behind a reverse proxy).
+ */
+function clientIP(req) {
+  if (process.env.EXERLY_APP_PLATFORM === '1') {
+    const client = String(req.get?.('do-connecting-ip') ?? '').trim();
+    if (net.isIP(client)) return client;
+  }
   return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function clientKey(req) {
+  return clientIP(req);
 }
 
 /**
@@ -106,7 +124,10 @@ function failureLimit({ max, windowMs, name, message }) {
         if (settled) return;
         settled = true;
         entry.pending -= 1;
-        if (failed) (live(key) ?? fresh(key)).count += 1;
+        // Only the bucket this attempt was counted in. If that was cleared
+        // (a password reset) or replaced by a new window meanwhile, the
+        // failure belongs to nothing that still exists.
+        if (failed && buckets.get(id(key)) === entry) entry.count += 1;
       };
       return { fail: () => settle(true), release: () => settle(false) };
     },
@@ -154,4 +175,12 @@ function reset() {
   buckets.clear();
 }
 
-module.exports = { rateLimit, failureLimit, forget, networkPrefix, reset, clientKey };
+module.exports = {
+  rateLimit,
+  failureLimit,
+  forget,
+  networkPrefix,
+  reset,
+  clientKey,
+  clientIP,
+};

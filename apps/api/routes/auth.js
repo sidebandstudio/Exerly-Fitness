@@ -5,7 +5,7 @@ const store = require('../data');
 const { asyncHandler, unauthorized, conflict, badRequest } = require('../lib/errors');
 const { authenticate, adminEmails } = require('../lib/auth');
 const sessions = require('../lib/sessions');
-const { rateLimit, failureLimit, forget, networkPrefix } = require('../lib/ratelimit');
+const { rateLimit, failureLimit, forget, networkPrefix, clientIP } = require('../lib/ratelimit');
 const { confirmationFailures, passwordMatches } = require('../lib/reauth');
 const v = require('../lib/validate');
 const { requireUser, newUserFields } = require('../lib/users');
@@ -113,7 +113,7 @@ router.post(
     const password = v.str(req.body.password, 'password', { max: 200, trim: false });
     // Places are held before the password is hashed, so a burst can't all
     // pass the check while bcrypt runs.
-    const network = loginNetworkFailures.reserve(`${email} ${networkPrefix(req.ip)}`);
+    const network = loginNetworkFailures.reserve(`${email} ${networkPrefix(clientIP(req))}`);
     const account = loginAccountFailures.reserve(email);
     let user;
     let ok = null;

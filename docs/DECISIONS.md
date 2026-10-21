@@ -1529,3 +1529,20 @@ renewed by anyone: ten wrong passwords every 15 minutes kept a public address
 - The count of failed reset emails is no longer in the public /api/health: a
   failure only happens for an address with an account, so it told anyone who
   asked for a reset whether one existed. It's logged instead.
+
+## 2026-10-20: rate limits read the client from do-connecting-ip, only on App Platform
+
+Security review round 4. On App Platform, X-Forwarded-For names DigitalOcean's
+ingress, so every client shared one address and anyone could throttle the
+owner through it. Limits now take the client from `do-connecting-ip`, but
+only when `EXERLY_APP_PLATFORM=1`, which `.do/app.yaml` sets. The header alone
+proves nothing: anyone can send it to a self-hosted server, so without the
+flag it is ignored and Express's one-proxy `req.ip` is used, as before.
+
+A failure limit's in-flight attempts now count only against the window they
+started in. A password reset clears the window, and guesses still being
+checked when it happened no longer charge the fresh one.
+
+A webhook paused while a successful delivery is in flight doesn't record that
+delivery, so turning it back on can send that notice again. Notices carry no
+data and receivers already handle repeats, so this stays.

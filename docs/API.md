@@ -291,6 +291,8 @@ because there is no way back in short of editing the database.
 
 ## Rate limits
 
+Per-address and per-network limits use the client's address: `do-connecting-ip` on DigitalOcean App Platform, trusted only when `EXERLY_APP_PLATFORM=1` (set in `.do/app.yaml`), and otherwise `req.ip` with Express trusting one proxy, as behind docker-compose's reverse proxy. Self-hosted servers must not set the flag, or clients could pick their own address.
+
 | Scope          | Limit                                                                                                                      |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | All `/api`     | 600 per minute per IP                                                                                                      |
