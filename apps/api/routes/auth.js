@@ -5,7 +5,8 @@ const store = require('../data');
 const { asyncHandler, unauthorized, conflict, badRequest } = require('../lib/errors');
 const { authenticate, adminEmails } = require('../lib/auth');
 const sessions = require('../lib/sessions');
-const { rateLimit } = require('../lib/ratelimit');
+const { rateLimit, failureLimit } = require('../lib/ratelimit');
+const { confirmationFailures, passwordMatches } = require('../lib/reauth');
 const v = require('../lib/validate');
 const { requireUser, newUserFields } = require('../lib/users');
 const { normalizeTimeZone } = require('../lib/dates');
@@ -33,9 +34,35 @@ const signupLimiter = rateLimit({
   message: 'Too many accounts created from this address.',
 });
 
+// Signup says whether an email already has an account (a 409); see
+// DECISIONS.md, 2026-10-20. Per address and per email, so it can't be used to
+// sweep through a list of addresses quickly.
+const emailKey = (req) =>
+  String(req.body?.email ?? '')
+    .trim()
+    .toLowerCase();
+const signupEmailLimiter = rateLimit({
+  name: 'signup-email',
+  max: 5,
+  windowMs: 60 * 60 * 1000,
+  key: emailKey,
+  message: 'Too many attempts with this email. Try again in an hour.',
+});
+
+// The per-address limit above doesn't stop guesses at one email spread over
+// many addresses. Every email gets ten wrong passwords per 15 minutes,
+// whether or not it has an account.
+const loginEmailFailures = failureLimit({
+  name: 'login-email',
+  max: 10,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many sign-in attempts for this email. Wait 15 minutes, or reset your password.',
+});
+
 router.post(
   '/signup',
   signupLimiter,
+  signupEmailLimiter,
   asyncHandler(async (req, res) => {
     const name = v.str(req.body.name, 'name', { max: 80 });
     const email = v.email(req.body.email);
@@ -70,6 +97,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const email = v.email(req.body.email);
     const password = v.str(req.body.password, 'password', { max: 200, trim: false });
+    loginEmailFailures.check(email);
 
     const user = await store.findOne('users', { email });
     // Hash a throwaway password when the user doesn't exist, or signed up with
@@ -77,11 +105,15 @@ router.post(
     // emails are registered.
     if (!user?.hash) {
       await bcrypt.compare(password, '$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
+      loginEmailFailures.fail(email);
       throw unauthorized('Invalid credentials');
     }
 
     const ok = await bcrypt.compare(password, user.hash);
-    if (!ok) throw unauthorized('Invalid credentials');
+    if (!ok) {
+      loginEmailFailures.fail(email);
+      throw unauthorized('Invalid credentials');
+    }
 
     let current = user;
     if (adminEmails().includes(email) && !user.is_admin) {
@@ -124,10 +156,40 @@ router.post(
   )
 );
 
+// Whoever knew the old password may have signed in, made an agent token, or
+// pointed a webhook at their own server, which would tell them when the
+// account changes. A new password ends all of it: sessions and tokens are
+// revoked, and webhooks made from a session are paused (a token's webhooks
+// stop with the token, lib/webhooks.js). Paused webhooks stay listed, and the
+// person can turn theirs back on.
+const PASSWORD_CHANGED =
+  'Password changed. Every device is signed out, agent tokens are revoked and webhooks are paused.';
+async function endAccessFromOldPassword(accountID, now = new Date()) {
+  await sessions.revokeAll(accountID);
+  await store.updateMany(
+    'personal_access_tokens',
+    { account_id: accountID, revoked_at: null },
+    { revoked_at: now }
+  );
+  await store.updateMany(
+    'webhooks',
+    { account_id: accountID, token_id: null, disabled_at: null },
+    {
+      disabled_at: now,
+      last_error: 'Paused when the password changed. Turn it on again if you set it up.',
+    }
+  );
+}
+
 router.post(
   '/api/change-password',
   authenticate,
-  rateLimit({ name: 'change-password', max: 10, windowMs: 60 * 60 * 1000 }),
+  rateLimit({
+    name: 'change-password',
+    max: 10,
+    windowMs: 60 * 60 * 1000,
+    key: (req) => req.account.id,
+  }),
   asyncHandler(async (req, res) => {
     const currentPassword = v.str(req.body.currentPassword, 'currentPassword', {
       max: 200,
@@ -136,8 +198,11 @@ router.post(
     const newPassword = v.password(req.body.newPassword, 'newPassword');
 
     const user = await requireUser(req.user.email);
-    const ok = !!user.hash && (await bcrypt.compare(currentPassword, user.hash));
-    if (!ok) throw unauthorized('Current password is incorrect');
+    // Wrong guesses share the account's confirmation budget (lib/reauth.js).
+    confirmationFailures.check(user.id);
+    if (!(await passwordMatches(currentPassword, user))) {
+      throw unauthorized('Current password is incorrect');
+    }
 
     await store.update(
       'users',
@@ -147,8 +212,8 @@ router.post(
         credentials_version: (user.credentials_version ?? 0) + 1,
       }
     );
-    await sessions.revokeAll(user.id);
-    res.json({ message: 'Password changed successfully' });
+    await endAccessFromOldPassword(user.id);
+    res.json({ message: PASSWORD_CHANGED });
   })
 );
 
@@ -255,13 +320,7 @@ router.post(
         { id: user.id },
         { hash, credentials_version: (user.credentials_version ?? 0) + 1 }
       );
-      // Whoever knew the old password may have signed in or made a token.
-      await sessions.revokeAll(user.id);
-      await store.updateMany(
-        'personal_access_tokens',
-        { account_id: user.id, revoked_at: null },
-        { revoked_at: now }
-      );
+      await endAccessFromOldPassword(user.id, now);
       return true;
     });
     if (!changed) {

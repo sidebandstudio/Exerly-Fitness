@@ -64,8 +64,40 @@ function rateLimit({ max, windowMs, name, key = clientKey, message }) {
   };
 }
 
+/**
+ * Counts failures rather than requests, for limits on guessing: `check(key)`
+ * throws a 429 once `max` failures have been recorded for `key` in the
+ * window, and `fail(key)` records one. Shares the sweeper and `reset()`.
+ */
+function failureLimit({ max, windowMs, name, message }) {
+  const live = (key) => {
+    const entry = buckets.get(`${name}:${key}`);
+    return entry && Date.now() <= entry.resetAt ? entry : null;
+  };
+  return {
+    check(key) {
+      if (limitsOff()) return;
+      const entry = live(key);
+      if (entry && entry.count >= max) {
+        const { ApiError } = require('./errors');
+        const minutes = Math.ceil((entry.resetAt - Date.now()) / 60000);
+        throw new ApiError(429, message || `Too many attempts. Try again in ${minutes} minutes.`, {
+          code: 'too_many_attempts',
+          retry_after_minutes: minutes,
+        });
+      }
+    },
+    fail(key) {
+      if (limitsOff()) return;
+      const entry = live(key) ?? { count: 0, resetAt: Date.now() + windowMs };
+      entry.count += 1;
+      buckets.set(`${name}:${key}`, entry);
+    },
+  };
+}
+
 function reset() {
   buckets.clear();
 }
 
-module.exports = { rateLimit, reset, clientKey };
+module.exports = { rateLimit, failureLimit, reset, clientKey };

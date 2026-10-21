@@ -5,8 +5,20 @@ const bcrypt = require('bcrypt');
 const store = require('../data');
 const apple = require('./apple');
 const { badRequest, ApiError } = require('./errors');
+const { failureLimit } = require('./ratelimit');
 
 const APPLE_CONFIRMATION_MAX_AGE_S = 10 * 60;
+
+// One budget per account for wrong passwords and refused Apple confirmations,
+// shared by every route that asks for one (deleting, connecting and
+// disconnecting Apple, creating a token, changing the password), so a copied
+// session gets ten guesses an hour in total, not ten per route.
+const confirmationFailures = failureLimit({
+  name: 'confirmation-failures',
+  max: 10,
+  windowMs: 60 * 60 * 1000,
+  message: 'Too many attempts to confirm it’s you. Try again in an hour.',
+});
 
 /** Records a token's nonce; a second use of the same nonce is a replay. */
 async function consumeNonce(nonceHash) {
@@ -32,12 +44,14 @@ const notConfirmed = (message, code) => new ApiError(403, message, { code });
  * `purpose` finishes "Enter your password to …".
  */
 async function confirmIdentity({ password, identityToken, nonce }, user, purpose) {
+  confirmationFailures.check(user.id);
   if (user.hash) {
     if (typeof password !== 'string' || !password) {
       throw badRequest(`Enter your password to ${purpose}.`, { code: 'password_required' });
     }
-    const ok = password.length <= 200 && (await bcrypt.compare(password, user.hash));
-    if (!ok) throw notConfirmed('That password is incorrect.', 'wrong_password');
+    if (!(await passwordMatches(password, user))) {
+      throw notConfirmed('That password is incorrect.', 'wrong_password');
+    }
     return;
   }
   if (identityToken === undefined) {
@@ -50,6 +64,7 @@ async function confirmIdentity({ password, identityToken, nonce }, user, purpose
     verified = await apple.verifyIdentityToken(identityToken, nonce);
   } catch (error) {
     if (error.status !== 401) throw error;
+    confirmationFailures.fail(user.id);
     throw notConfirmed('Apple couldn’t confirm it’s you. Try again.', 'apple_not_confirmed');
   }
   const connected = await store.findOne('account_identities', {
@@ -60,11 +75,13 @@ async function confirmIdentity({ password, identityToken, nonce }, user, purpose
   // A token without an issue time has no age, so it fails this check too.
   const age = Date.now() / 1000 - verified.issuedAt;
   if (!connected || !(age <= APPLE_CONFIRMATION_MAX_AGE_S)) {
+    confirmationFailures.fail(user.id);
     throw notConfirmed('Apple couldn’t confirm it’s you. Try again.', 'apple_not_confirmed');
   }
   try {
     await consumeNonce(verified.nonceHash);
   } catch {
+    confirmationFailures.fail(user.id);
     throw notConfirmed(
       'That Apple confirmation was already used. Try again.',
       'apple_not_confirmed'
@@ -72,4 +89,20 @@ async function confirmIdentity({ password, identityToken, nonce }, user, purpose
   }
 }
 
-module.exports = { confirmIdentity, consumeNonce };
+/**
+ * Whether `password` is the account's, counting a wrong one against the
+ * shared budget. Call `confirmationFailures.check` first.
+ */
+async function passwordMatches(password, user) {
+  const ok = !!user.hash && password.length <= 200 && (await bcrypt.compare(password, user.hash));
+  if (!ok) confirmationFailures.fail(user.id);
+  return ok;
+}
+
+module.exports = {
+  confirmIdentity,
+  consumeNonce,
+  notConfirmed,
+  passwordMatches,
+  confirmationFailures,
+};

@@ -208,3 +208,33 @@ test('wrong guesses made at once cannot add up to more than five', async () => {
   resetRateLimits();
   assert.equal((await resetPassword(api, user.email, code)).status, 400);
 });
+
+test('shutting down finishes queued reset mail before closing the database', async () => {
+  const { shutdown } = require('../lib/shutdown');
+  const order = [];
+  let release;
+  passwordReset.afterResponse('synthetic@exerly.test', async () => {
+    await new Promise((resolve) => (release = resolve));
+    order.push('mail sent');
+  });
+  const stopping = shutdown({
+    server: { close: (done) => (order.push('server closed'), done()) },
+    store: { disconnect: async () => order.push('database closed') },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(order, ['server closed'], 'the database waits for queued mail');
+  release();
+  await stopping;
+  assert.deepEqual(order, ['server closed', 'mail sent', 'database closed']);
+});
+
+test('a reset email that fails to send is counted where health reports it', async () => {
+  const before = passwordReset.metrics.deliveryFailures;
+  passwordReset.afterResponse('synthetic@exerly.test', async () => {
+    throw new Error('No mail transport for synthetic@exerly.test');
+  });
+  await passwordReset.settle();
+  assert.equal(passwordReset.metrics.deliveryFailures, before + 1);
+  const health = await api.get('/api/health');
+  assert.equal(health.body.password_reset.delivery_failures, before + 1);
+});

@@ -49,17 +49,21 @@ const deliverable = (email) => !email.endsWith('.invalid');
 // Anything that depends on whether an address has an account runs after the
 // response has gone, so how long the response takes says nothing about it.
 const pending = new Set();
+// The person was told a code was sent, so a failure is counted where
+// /api/health reports it, as well as logged.
+const metrics = { deliveryFailures: 0 };
 
 /** Runs `work` for `email` after the current response. Failures are logged without the address. */
 function afterResponse(email, work) {
   const job = new Promise((resolve) => setImmediate(resolve))
     .then(work)
-    .catch((error) =>
+    .catch((error) => {
+      metrics.deliveryFailures += 1;
       console.error(
-        'Password reset not sent:',
+        `Password reset not sent (failures since start: ${metrics.deliveryFailures}):`,
         String(error?.message ?? error).replaceAll(email, '<address>')
-      )
-    )
+      );
+    })
     .finally(() => pending.delete(job));
   pending.add(job);
 }
@@ -78,6 +82,7 @@ module.exports = {
   deliverable,
   afterResponse,
   settle,
+  metrics,
   TTL_MS,
   MAX_ATTEMPTS,
 };

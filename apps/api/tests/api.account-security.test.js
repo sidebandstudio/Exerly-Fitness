@@ -55,18 +55,191 @@ test('a password account is deleted only with its password', async () => {
   assert.equal(await api.store.count('users', { email: user.email }), 0);
 });
 
-test('deletion attempts are limited per account', async () => {
+test('a copied session gets ten wrong confirmations an hour across every route that asks', async () => {
   const user = await signUp(api);
   const bystander = await signUp(api);
-  for (let i = 0; i < 5; i++) {
-    assert.equal((await deleteAccount(user.token, { password: `guess-${i}-wrong` })).status, 403);
+  const wrong = 'not-the-password';
+  const key = () => ({ 'Idempotency-Key': `guess-${randomBytes(6).toString('hex')}` });
+  const guesses = [
+    () => deleteAccount(user.token, { password: wrong }),
+    () => deleteAccount(user.token, { password: wrong }),
+    () =>
+      api.post(
+        '/api/account/identities/apple',
+        { ...appleCredential(appleSubject()), password: wrong },
+        { token: user.token }
+      ),
+    () =>
+      api.post(
+        '/api/account/identities/apple',
+        { ...appleCredential(appleSubject()), password: wrong },
+        { token: user.token }
+      ),
+    () =>
+      api.del('/api/account/identities/apple', { token: user.token, body: { password: wrong } }),
+    () =>
+      api.post(
+        '/v1/tokens',
+        { name: 'Synthetic agent', scopes: ['read'], password: wrong },
+        { token: user.token, headers: key() }
+      ),
+    () =>
+      api.post(
+        '/v1/tokens',
+        { name: 'Synthetic agent', scopes: ['read'], password: wrong },
+        { token: user.token, headers: key() }
+      ),
+    () =>
+      api.post(
+        '/api/change-password',
+        { currentPassword: wrong, newPassword: 'a-brand-new-passphrase' },
+        { token: user.token }
+      ),
+    () =>
+      api.post(
+        '/api/change-password',
+        { currentPassword: wrong, newPassword: 'a-brand-new-passphrase' },
+        { token: user.token }
+      ),
+    () => deleteAccount(user.token, { password: wrong }),
+  ];
+  for (const [i, guess] of guesses.entries()) {
+    const res = await guess();
+    assert.ok([401, 403].includes(res.status), `guess ${i}: ${res.status}`);
   }
+  // The eleventh try is refused even with the right password, on any route.
   const limited = await deleteAccount(user.token, { password: user.password });
   assert.equal(limited.status, 429);
+  assert.equal(limited.body.details.code, 'too_many_attempts');
+  const changing = await api.post(
+    '/api/change-password',
+    { currentPassword: user.password, newPassword: 'a-brand-new-passphrase' },
+    { token: user.token }
+  );
+  assert.equal(changing.status, 429);
   assert.equal(await api.store.count('users', { email: user.email }), 1);
-  // Another account on the same address is not held back.
-  const other = await deleteAccount(bystander.token, { password: 'wrong-for-bystander' });
-  assert.equal(other.status, 403);
+  assert.equal((await api.get('/api/me', { token: user.token })).status, 200);
+  // Missing proof isn't a guess, and another account isn't held back.
+  assert.equal((await deleteAccount(bystander.token, {})).status, 400);
+  assert.equal((await deleteAccount(bystander.token, { password: wrong })).status, 403);
+  assert.equal(
+    (await deleteAccount(bystander.token, { password: bystander.password })).status,
+    200
+  );
+});
+
+test('change-password is limited per account, not per address', async () => {
+  const one = await signUp(api);
+  const two = await signUp(api);
+  const change = (user, i) =>
+    api.post(
+      '/api/change-password',
+      { currentPassword: 'short', newPassword: `x${i}` },
+      { token: user.token }
+    );
+  for (let i = 0; i < 10; i++) assert.equal((await change(one, i)).status, 400);
+  assert.equal((await change(one, 10)).status, 429);
+  assert.equal((await change(two, 0)).status, 400, 'a second account on the same address');
+});
+
+test('wrong passwords for one email are limited however many addresses send them', async () => {
+  const user = await signUp(api);
+  const login = (email, password, ip) =>
+    api.post('/login', { email, password }, { headers: { 'X-Forwarded-For': ip } });
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await login(user.email, `guess-${i}`, `198.51.100.${i + 1}`)).status, 401);
+  }
+  const limited = await login(user.email, user.password, '198.51.100.200');
+  assert.equal(limited.status, 429);
+  assert.match(limited.body.message, /this email/);
+  // An address without an account is limited the same way, so a 429 says nothing.
+  for (let i = 0; i < 10; i++) {
+    await login('nobody-here@exerly.test', `guess-${i}`, `203.0.113.${i + 1}`);
+  }
+  assert.equal((await login('nobody-here@exerly.test', 'x', '203.0.113.200')).status, 429);
+  const other = await signUp(api);
+  assert.equal((await login(other.email, other.password, '198.51.100.201')).status, 200);
+});
+
+test('signup is limited per email as well as per address', async () => {
+  const email = `limited-${randomBytes(4).toString('hex')}@exerly.test`;
+  const attempt = (i) =>
+    api.post(
+      '/signup',
+      { name: 'Synthetic', email, password: 'correct-horse-battery' },
+      { headers: { 'X-Forwarded-For': `192.0.2.${i + 1}` } }
+    );
+  assert.equal((await attempt(0)).status, 201);
+  for (let i = 1; i < 5; i++) assert.equal((await attempt(i)).status, 409);
+  assert.equal((await attempt(5)).status, 429);
+});
+
+test('with Apple revocation on, a password account connected to Apple deletes with both', async () => {
+  const apple = require('../lib/apple');
+  const saved = {
+    env: ['APPLE_TEAM_ID', 'APPLE_KEY_ID', 'APPLE_PRIVATE_KEY'].map((k) => [k, process.env[k]]),
+    revoke: apple.revokeAuthorizationCode,
+  };
+  const revoked = [];
+  process.env.APPLE_TEAM_ID = 'SYNTHETIC';
+  process.env.APPLE_KEY_ID = 'SYNTHETIC';
+  process.env.APPLE_PRIVATE_KEY = 'synthetic';
+  apple.revokeAuthorizationCode = async (code) => revoked.push(code);
+  try {
+    const person = await signUp(api);
+    const sub = appleSubject();
+    const linked = await api.post(
+      '/api/account/identities/apple',
+      { ...appleCredential(sub), password: person.password },
+      { token: person.token }
+    );
+    assert.equal(linked.status, 201);
+
+    const passwordOnly = await deleteAccount(person.token, { password: person.password });
+    assert.equal(passwordOnly.status, 400);
+    assert.equal(passwordOnly.body.details.code, 'apple_reauthorization_required');
+    const appleOnly = await deleteAccount(person.token, {
+      ...appleCredential(sub),
+      appleAuthorizationCode: 'synthetic-code',
+    });
+    assert.equal(appleOnly.status, 400);
+    assert.equal(appleOnly.body.details.code, 'password_required');
+    assert.deepEqual(revoked, []);
+    assert.equal(await api.store.count('users', { email: person.email }), 1);
+
+    // Asking again any number of times doesn't use up the guess budget.
+    for (let i = 0; i < 10; i++) {
+      assert.equal((await deleteAccount(person.token, { password: person.password })).status, 400);
+    }
+    const both = await deleteAccount(person.token, {
+      password: person.password,
+      appleAuthorizationCode: 'synthetic-code',
+    });
+    assert.equal(both.status, 200, JSON.stringify(both.body));
+    assert.equal(both.body.apple_revoked, true);
+    assert.deepEqual(revoked, ['synthetic-code']);
+    assert.equal(await api.store.count('users', { email: person.email }), 0);
+  } finally {
+    for (const [k, value] of saved.env) {
+      if (value === undefined) delete process.env[k];
+      else process.env[k] = value;
+    }
+    apple.revokeAuthorizationCode = saved.revoke;
+  }
+});
+
+test('an Apple sign-in used again to connect Apple is refused with 403, not 401', async () => {
+  const person = await signUp(api);
+  const credential = { ...appleCredential(appleSubject()), password: person.password };
+  const link = (body) => api.post('/api/account/identities/apple', body, { token: person.token });
+  assert.equal((await link(credential)).status, 201);
+  const replayed = await link(credential);
+  assert.equal(replayed.status, 403);
+  assert.equal(replayed.body.details.code, 'apple_not_confirmed');
+  const forged = await link({ ...credential, identityToken: 'not-a-jwt' });
+  assert.equal(forged.status, 403);
+  assert.equal(forged.body.details.code, 'apple_not_confirmed');
+  assert.equal((await api.get('/api/me', { token: person.token })).status, 200);
 });
 
 test('an Apple account is deleted only with a fresh authorization for the same Apple ID', async () => {

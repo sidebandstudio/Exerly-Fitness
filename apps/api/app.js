@@ -61,6 +61,10 @@ function createApp({ logger = console } = {}) {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       database: { driver: store.name, status: ready ? 'connected' : 'disconnected' },
+      // Reset codes the server said it sent but couldn't, since it started.
+      password_reset: {
+        delivery_failures: require('./lib/passwordReset').metrics.deliveryFailures,
+      },
       memory: {
         used: `${Math.round(process.memoryUsage().heapUsed / 1048576)} MB`,
         total: `${Math.round(process.memoryUsage().heapTotal / 1048576)} MB`,

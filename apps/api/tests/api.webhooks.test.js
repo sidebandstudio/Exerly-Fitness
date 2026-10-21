@@ -221,3 +221,36 @@ test('only public https URLs, at most five an account', async () => {
     process.env.EXERLY_WEBHOOKS_ALLOW_PRIVATE = '1';
   }
 });
+
+test('a new password revokes agent tokens and pauses webhooks made from a session', async () => {
+  const user = await signUp(api);
+  const minted = await api.post(
+    '/v1/tokens',
+    { name: 'Synthetic agent', scopes: ['read', 'write'], password: user.password },
+    { token: user.token, headers: key() }
+  );
+  const agent = minted.body.token;
+  const fromSession = await api.post('/v1/webhooks', { url: url() }, { token: user.token });
+  const fromAgent = await api.post('/v1/webhooks', { url: url() }, { token: agent });
+  assert.equal(fromSession.status, 201);
+  assert.equal(fromAgent.status, 201);
+
+  const changed = await api.post(
+    '/api/change-password',
+    { currentPassword: user.password, newPassword: 'a-brand-new-passphrase' },
+    { token: user.token }
+  );
+  assert.equal(changed.status, 200);
+  assert.match(changed.body.message, /agent tokens are revoked/);
+  assert.equal((await api.get('/v1/changes', { token: agent })).status, 401);
+  assert.equal((await api.post('/mcp', {}, { token: agent })).status, 401);
+  const paused = await api.store.findOne('webhooks', { id: fromSession.body.id });
+  assert.ok(paused.disabled_at, 'the webhook a session made is paused');
+  assert.match(paused.last_error, /password changed/);
+
+  // The token's own webhook stops with the token at its next delivery.
+  const login = await api.post('/login', { email: user.email, password: 'a-brand-new-passphrase' });
+  await writeDocument({ token: login.body.token });
+  await webhooks.deliverDue({ send: async () => 200 });
+  assert.ok((await api.store.findOne('webhooks', { id: fromAgent.body.id })).disabled_at);
+});

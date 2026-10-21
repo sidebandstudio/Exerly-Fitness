@@ -1453,3 +1453,31 @@ then use a fresh Sign in with Apple to delete a password account. Now:
 - The export on the delete screen counts only once the share sheet finishes
   sharing or saving it. Cancelling it used to count, which hid the "you
   haven't exported" warning.
+
+## 2026-10-20: one guess budget per account, a new password ends agent access, and signup may say an email is taken
+
+Security review round 2.
+
+- Wrong passwords and refused Apple confirmations now share one budget of ten
+  per account per hour across deleting, connecting and disconnecting Apple,
+  creating a token and changing the password (lib/reauth.js). The separate
+  per-route limits added up to 45 guesses an hour and are gone. Change
+  password is also limited per account instead of per address. A missing
+  proof, such as a password account asked for Sign in with Apple as well,
+  doesn't count, so finishing a deletion never runs out of tries.
+- Sign-in also allows ten wrong passwords per email per 15 minutes, whatever
+  address they come from. Someone who knows an email can use that to hold
+  its owner out of password sign-in for 15 minutes at a time; the message
+  points to password reset, which still works. That is the usual trade, and
+  better than unlimited guessing spread over many addresses.
+- Changing the password now revokes every agent token, as a reset already
+  did, and both pause webhooks made from a session. Such a webhook carries no
+  data, but it tells whoever owns its URL when the account changes, so one
+  set up by an intruder would keep leaking activity times. It is paused
+  rather than deleted, stays listed with the reason, and the person can turn
+  theirs back on. Webhooks made by a token stop with the token.
+- Signup still answers 409 when an email already has an account. Accepted:
+  a signup that never says so needs email verification, which needs the
+  email provider Ali hasn't chosen yet (QUESTIONS_FOR_ALI.md). It's limited
+  to 5 an hour per address and 5 an hour per email. Revisit once email
+  verification exists.

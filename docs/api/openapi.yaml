@@ -197,8 +197,9 @@ paths:
         alone isn't enough: send `password` for a password account, or for an
         account without one, `currentIdentityToken` and `currentNonce` from a
         Sign in with Apple in the last ten minutes as an Apple ID it already
-        has. Errors are as for deleting the account. Five attempts per account
-        per hour.
+        has. Errors are as for deleting the account, including the shared
+        budget of ten failed confirmations per account per hour. A refused or
+        reused new token is a 403 (`apple_not_confirmed`).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -227,7 +228,8 @@ paths:
       summary: Disconnect Sign in with Apple
       description: |
         Needs `password`. Refused when the account has no password, because the
-        person could not sign in again. Five attempts per account per hour.
+        person could not sign in again. Wrong passwords count against the
+        shared budget of ten failed confirmations per account per hour.
       requestBody:
         required: true
         content:
@@ -253,11 +255,15 @@ paths:
         password account, even one with Apple connected; for an account without
         a password, `identityToken` and raw `nonce` from a Sign in with Apple
         authorization in the last ten minutes for an Apple ID connected to it.
-        Five attempts per account per hour. Removes every row the account owns,
+        Wrong passwords and refused Apple confirmations share one budget of
+        ten per account per hour with the other routes that ask for proof;
+        past it, `429` with `details.code = too_many_attempts`. Removes every row the account owns,
         including every session and token, in one transaction. When the account
         uses Sign in with Apple and the server can revoke Apple tokens, also
-        send `appleAuthorizationCode` from the same authorization; revocation
-        happens first, and if it fails nothing is deleted (`502`).
+        send `appleAuthorizationCode` from the same authorization, or, for a
+        password account, from a fresh Sign in with Apple alongside the
+        password. Without it the answer is 400 `apple_reauthorization_required`.
+        Revocation happens first, and if it fails nothing is deleted (`502`).
       requestBody:
         required: true
         content:
