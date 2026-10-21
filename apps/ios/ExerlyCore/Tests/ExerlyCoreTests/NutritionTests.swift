@@ -363,10 +363,10 @@ enum Foods {
         #expect(phone.day(monday).status == .partial && phone.day(monday).notes == "Travel day, hotel breakfast")
     }
 
-    /// PARITY I03 and N08: when two devices change one entry before syncing,
-    /// the entry merges as a whole value and the device that syncs second wins.
-    /// Nothing records the other edit or asks which to keep; a review would.
-    @Test func twoDevicesEditingOneEntryKeepOneEditWithoutAReview() async throws {
+    /// PARITY I03 and N08: when two devices change one entry's amount before
+    /// syncing, the device that syncs second keeps its own and records the
+    /// other in a conflict that reaches both, so neither edit is lost.
+    @Test func twoDevicesEditingOneEntryKeepTheOtherEditForReview() async throws {
         let server = FakeDocumentServer()
         let phoneStore = InMemoryTrainingPersistence(), tabletStore = InMemoryTrainingPersistence()
         let phone = try store(phoneStore), tablet = try store(tabletStore)
@@ -384,6 +384,9 @@ enum Foods {
         try await tabletSync.sync()
         try await phoneSync.sync()
         #expect(phone.entries(on: monday).map(\.grams) == [90] && tablet.entries(on: monday).map(\.grams) == [90])
-        #expect(phone.entries(on: monday).first?.id == logged.id, "One entry, the phone's 60 g gone")
+        let conflict = try #require(phoneSync.conflicts.unresolved.first)
+        #expect(conflict.documentID == logged.id.uuidString && conflict.fields == ["grams"])
+        #expect(tabletSync.conflicts.unresolved.map(\.id) == [conflict.id], "Both devices show it")
+        #expect(try conflict.remote?.decode(FoodEntry.self).grams == 60, "The phone's 60 g is kept for review")
     }
 }

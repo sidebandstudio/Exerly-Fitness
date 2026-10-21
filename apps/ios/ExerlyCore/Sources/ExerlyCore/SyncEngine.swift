@@ -16,7 +16,11 @@ public protocol DocumentAPI: Sendable {
 /// A document needs pushing when its canonical JSON differs from the base:
 /// the last version the server acknowledged. Because that is derived rather
 /// than flagged, a crash between saving and syncing can't lose a change.
-/// Conflicts merge three ways and are pushed again.
+/// Conflicts merge three ways, field by field, and are pushed again. When
+/// both devices changed one field differently, or one deleted what the
+/// other changed, the record keeps this device's version or stays deleted,
+/// and both versions are kept in `conflicts` for the person to review. A
+/// deleted record never comes back on its own.
 ///
 /// Before an account is signed out, switched or deleted, call `shutdown()`.
 /// It stops the current run and waits for it, after which the engine writes
@@ -37,6 +41,8 @@ public final class SyncEngine {
     /// Server versions this device couldn't read, set aside so sync carries on.
     /// Loaded at the start of each sync.
     public private(set) var rejected: [RejectedDocument] = []
+    /// What two devices changed at once, kept for review and synced like a document.
+    public let conflicts: SyncConflictStore
 
     @ObservationIgnored private let hosts: [DocumentHost]
     @ObservationIgnored private let stateStore: SyncStateStore
@@ -50,8 +56,13 @@ public final class SyncEngine {
 
     /// `hosts` are synced in order, kind by kind, so a host's earlier kinds
     /// (custom exercises) arrive before the ones that use them (sessions).
-    public init(hosts: [DocumentHost], state: SyncStateStore, api: DocumentAPI, now: @escaping () -> Date = Date.init) {
-        self.hosts = hosts
+    /// Conflicts sync last; pass the account's store of them to share it
+    /// with the review screen, or one is made over `state`.
+    public init(hosts: [DocumentHost], state: SyncStateStore, api: DocumentAPI, conflicts: SyncConflictStore? = nil,
+                now: @escaping () -> Date = Date.init) {
+        let conflicts = conflicts ?? SyncConflictStore(state: state, hosts: hosts, now: now)
+        self.conflicts = conflicts
+        self.hosts = hosts + [conflicts]
         stateStore = state
         self.api = api
         self.now = now
@@ -168,24 +179,42 @@ public final class SyncEngine {
         let local = try host.payload(kind: change.kind, id: change.id)
         let clean = base.map { local == $0.payload } ?? (local == nil)
         var write: Data??
+        var found: (fields: [String], local: Data?, remote: Data?)?
         if clean {
             write = .some(remote)
+        } else if !host.reviewsConflicts(kind: change.kind) {
+            // The kind's own rule decides; a change beats a deletion.
+            if let remote { write = .some(try local.map { try host.merge(kind: change.kind, base: base?.payload, local: $0, remote: remote) } ?? remote) }
         } else if let remote, let local {
-            write = .some(try host.merge(kind: change.kind, base: base?.payload, local: local, remote: remote))
+            let outcome = try host.merge(kind: change.kind, base: base?.payload, local: local, remote: remote, preferring: .local)
+            write = .some(outcome.merged)
+            if !outcome.conflicts.isEmpty { found = (outcome.conflicts, local, remote) }
         } else if let remote {
-            // Deleted here, changed there: the change wins.
-            write = .some(remote)
+            // Deleted here, changed there: it stays deleted, and the change
+            // waits for review.
+            if remote != base?.payload { found = ([], nil, remote) }
+        } else if let local {
+            // Changed here, deleted there: the deletion stands, and this
+            // device's change waits for review. The workout in progress stays.
+            if !host.keepsWhenDeletedElsewhere(kind: change.kind, id: change.id) { write = .some(nil) }
+            found = ([], local, nil)
         }
-        // Changed here, deleted there: local stays and is pushed back.
+        let conflict = try found.map {
+            try conflicts.found(kind: change.kind, id: change.id, base: base?.payload, local: $0.local, remote: $0.remote,
+                                fields: $0.fields, remoteAt: change.updatedAt)
+        }
         let newBase = SyncBase(kind: change.kind, id: change.id, revision: change.revision, payload: remote)
         let remaining = rejected.filter { $0.kind != change.kind || $0.id != change.id }
         var publish: () -> Void = {}
+        var publishConflict: () -> Void = {}
         try stateStore.performAtomically {
             if let write { publish = try host.prepareWrite(kind: change.kind, id: change.id, payload: write) }
+            if let conflict { publishConflict = try conflicts.stage(conflict) }
             try stateStore.saveSyncBase(newBase)
             if remaining != rejected { try stateStore.saveRejectedDocuments(remaining) }
         }
         publish()
+        publishConflict()
         bases[key] = newBase
         rejected = remaining
         return true
@@ -217,6 +246,10 @@ public final class SyncEngine {
         for document in ordered where host(for: document.kind) != nil {
             if try await pushDocument(document.kind, document.id) { wrote = true }
         }
+        // Conflicts found while pushing go out in the same run.
+        for id in conflicts.documentIDs(kind: SyncConflictStore.kind) where try await pushDocument(SyncConflictStore.kind, id) {
+            wrote = true
+        }
         return wrote
     }
 
@@ -247,6 +280,9 @@ public final class SyncEngine {
                 try checkActive()
                 try stateStore.removeSyncBase(kind: kind, id: id)
                 bases[Self.key(kind, id)] = nil
+                return false
+            } catch APIError.server(status: 400, _) where kind == SyncConflictStore.kind {
+                // A server from before conflicts sync: keep it here and try next time.
                 return false
             }
             switch result {

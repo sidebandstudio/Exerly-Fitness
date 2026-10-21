@@ -21,6 +21,11 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     private func key(_ kind: String, _ id: String) -> String { "\(kind)/\(DocumentWrite.canonicalID(id))" }
 
     func revision(_ kind: String, _ id: String) -> Int? { lock.withLock { documents[key(kind, id)]?.revision } }
+    func stored(_ kind: String, _ id: String) -> Stored? { lock.withLock { documents[key(kind, id)] } }
+    /// Every version written, oldest first.
+    func history(_ kind: String, _ id: String) -> [Stored] {
+        lock.withLock { feed.filter { key($0.kind, $0.id) == key(kind, id) }.map { Stored(revision: $0.revision, payload: $0.payload) } }
+    }
 
     func putDocument(kind: String, id: String, payload: Data, baseRevision: Int, idempotencyKey: String) async throws -> DocumentWriteResult {
         try write(kind, id, payload, baseRevision, idempotencyKey)

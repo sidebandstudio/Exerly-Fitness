@@ -17,6 +17,17 @@ public protocol DocumentHost: AnyObject {
     /// another (a session using a custom exercise created alongside it).
     func validate(batch: [DocumentWrite]) throws
     func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data
+    /// Like `merge`, also naming the fields both sides changed differently,
+    /// which take `prefer`'s value. By default top-level fields merge; hosts
+    /// whose documents have structure, or whose kinds never conflict, say so.
+    func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome
+    /// Whether a document this device changed stays when another device
+    /// deleted it, such as the workout in progress. The conflict is still kept.
+    func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool
+    /// False for kinds whose own rule settles every clash, such as proposals:
+    /// they keep the older behaviour, where a change beats a deletion, and
+    /// raise no conflict.
+    func reviewsConflicts(kind: String) -> Bool
     /// Persists a write, nil to delete, and returns the step that publishes it in
     /// memory. Call inside `performAtomically` and publish only after it commits.
     func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void
@@ -61,11 +72,43 @@ public struct DocumentWrite: Sendable, Hashable {
     static func canonicalID(_ id: String) -> String { UUID(uuidString: id)?.uuidString ?? id }
 }
 
+/// A merged document and the fields both sides changed differently.
+public struct MergeOutcome: Sendable, Hashable {
+    public var merged: Data
+    /// Empty when the two sides combined cleanly.
+    public var conflicts: [String]
+
+    public init(merged: Data, conflicts: [String]) {
+        self.merged = merged
+        self.conflicts = conflicts
+    }
+}
+
 extension DocumentHost {
     public func validate(batch: [DocumentWrite]) throws {
         for write in batch {
             if let payload = write.payload { try validate(kind: write.kind, id: write.id, payload: payload) }
         }
+    }
+
+    public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        try fieldMerge(kind: kind, base: base, local: local, remote: remote, preferring: prefer)
+    }
+
+    public func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool { false }
+
+    public func reviewsConflicts(kind: String) -> Bool { true }
+
+    /// Merges a document's top-level fields, `groups` together. A result this
+    /// host can't read keeps the preferred side whole, reported as "*".
+    public func fieldMerge(kind: String, base: Data?, local: Data, remote: Data, groups: [[String]] = [],
+                           preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        let result = Merge.fields(base: try base.map(JSONValue.init(data:)), local: try JSONValue(data: local),
+                                  remote: try JSONValue(data: remote), groups: groups, preferring: prefer)
+        if let merged = try? canonicalize(kind: kind, payload: result.merged.canonicalData) {
+            return MergeOutcome(merged: merged, conflicts: result.conflicts)
+        }
+        return MergeOutcome(merged: prefer == .local ? local : remote, conflicts: ["*"])
     }
 }
 
@@ -152,6 +195,23 @@ extension TrainingStore: DocumentHost {
                 remote: try decoder.decode(Exercise.self, from: remote)
             ))
         }
+    }
+
+    /// Sessions merge set by set; a custom exercise as a whole value.
+    public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        guard kind == Self.sessionKind else {
+            return try fieldMerge(kind: kind, base: base, local: local, remote: remote, preferring: prefer)
+        }
+        let decoder = ExerlyJSON.decoder
+        let result = Merge.session(base: try base.map { try decoder.decode(WorkoutSession.self, from: $0) },
+                                   local: try decoder.decode(WorkoutSession.self, from: local),
+                                   remote: try decoder.decode(WorkoutSession.self, from: remote), preferring: prefer)
+        return MergeOutcome(merged: try ExerlyJSON.canonical(result.merged), conflicts: result.conflicts)
+    }
+
+    /// The workout in progress isn't taken away mid-session.
+    public func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool {
+        kind == Self.sessionKind && activeSession?.id.uuidString == id
     }
 
     public func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {

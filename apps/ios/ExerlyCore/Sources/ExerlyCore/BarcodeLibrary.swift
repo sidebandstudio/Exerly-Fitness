@@ -115,6 +115,9 @@ public final class BarcodeLibrary {
     /// The offline scans each logged entry consumed, by entry ID. Undo reads
     /// only this, so it needs nothing kept in memory.
     static let provenanceKey = "barcode_library.consumed.v1"
+    /// The scans Undo put back, by the entry it removed, so a conflict that
+    /// brings that entry back keeps each scan logged once.
+    static let undoneKey = "barcode_library.undone.v1"
 
     /// Latest first, one per code.
     public private(set) var history: [Scan] = []
@@ -289,17 +292,60 @@ public final class BarcodeLibrary {
             var provenance = try storedProvenance()
             let stored = try storedPending()
             var restored: [Pending] = []
+            var undone = try storedValue([String: [Pending]].self, Self.undoneKey) ?? [:]
             for id in deleted.ids {
                 let kept = provenance.removeValue(forKey: id.uuidString) ?? []
                 restored += kept.filter { scan in !(stored + restored).contains { $0.id == scan.id } }
+                if !kept.isEmpty { undone[id.uuidString] = kept }
             }
             try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: (stored + restored).sorted(by: order))), forKey: Self.key)
             try persistence.saveValue(try ExerlyJSON.canonical(provenance), forKey: Self.provenanceKey)
+            try persistence.saveValue(try ExerlyJSON.canonical(undone), forKey: Self.undoneKey)
             persistence.afterCommit { [self] in
                 deleted.publish()
                 pending = (pending + restored.filter { scan in !pending.contains { $0.id == scan.id } }).sorted(by: order)
             }
         }
+    }
+
+    /// The entry a scan undone with `entryID` was logged again as, if it's still logged.
+    public func relog(of entryID: UUID, in store: NutritionStore) -> UUID? {
+        guard let scans = try? storedValue([String: [Pending]].self, Self.undoneKey)?[entryID.uuidString],
+              let provenance = try? storedProvenance() else { return nil }
+        let ids = Set(scans.map(\.id))
+        return store.entries.first { entry in provenance[entry.id.uuidString]?.contains { ids.contains($0.id) } == true }?.id
+    }
+
+    /// Brings back an entry Undo removed, as another device changed it,
+    /// keeping each of its scans logged once: when a scan was logged again,
+    /// that entry takes the other device's changes instead; when the scans
+    /// are pending, bringing it back logs them. Returns how to undo it, or
+    /// nil when no scan is involved. Call inside a transaction.
+    func bringBack(_ id: UUID, as entry: FoodEntry, base: FoodEntry?, to store: NutritionStore) throws -> (() throws -> Void)? {
+        guard (store.persistence as AnyObject) === (persistence as AnyObject) else { throw LogError.separateStores }
+        var undone = try storedValue([String: [Pending]].self, Self.undoneKey) ?? [:]
+        guard let scans = undone[id.uuidString], !scans.isEmpty else { return nil }
+        if let other = relog(of: id, in: store), let current = store.entries.first(where: { $0.id == other }) {
+            let merged = try store.merge(kind: NutritionStore.entryKind, base: base.map(ExerlyJSON.canonical),
+                                         local: ExerlyJSON.canonical(current), remote: ExerlyJSON.canonical(entry), preferring: .remote)
+            try store.commit(NutritionStore.entryKind, other.uuidString, ExerlyJSON.decoder.decode(FoodEntry.self, from: merged.merged))
+            return { try store.commit(NutritionStore.entryKind, other.uuidString, current) }
+        }
+        let pendingNow = try storedPending()
+        let back = scans.filter { scan in pendingNow.contains { $0.id == scan.id } }
+        guard !back.isEmpty else { return nil }
+        let ids = Set(back.map(\.id))
+        try persistence.performAtomically {
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: pendingNow.filter { !ids.contains($0.id) })), forKey: Self.key)
+            try store.commit(NutritionStore.entryKind, id.uuidString, entry)
+            var provenance = try storedProvenance()
+            provenance[id.uuidString] = back
+            undone[id.uuidString] = nil
+            try persistence.saveValue(try ExerlyJSON.canonical(provenance), forKey: Self.provenanceKey)
+            try persistence.saveValue(try ExerlyJSON.canonical(undone), forKey: Self.undoneKey)
+            persistence.afterCommit { [self] in pending.removeAll { ids.contains($0.id) } }
+        }
+        return { [self] in try undo([id], from: store) }
     }
 
     /// The person logged or dismissed an offline scan.
@@ -334,6 +380,10 @@ public final class BarcodeLibrary {
     private func storedPending() throws -> [Pending] {
         guard let data = try persistence.loadValue(forKey: Self.key) else { return [] }
         return try ExerlyJSON.decoder.decode(Saved.self, from: data).pending ?? []
+    }
+
+    private func storedValue<T: Decodable>(_ type: T.Type, _ key: String) throws -> T? {
+        try persistence.loadValue(forKey: key).map { try ExerlyJSON.decoder.decode(type, from: $0) }
     }
 
     private func storedProvenance() throws -> [String: [Pending]] {

@@ -709,6 +709,36 @@ test('import provenance syncs as documents named by import and part', async () =
   assert.equal(partless.status, 400);
 });
 
+test('sync conflicts sync as documents, both versions kept', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const conflict = {
+    id,
+    kind: 'food_entry',
+    documentID: randomUUID().toUpperCase(),
+    device: { id: randomUUID().toUpperCase(), name: 'iPhone' },
+    detectedAt: '2026-10-21T14:14:00.000Z',
+    changedAt: '2026-10-21T14:14:00.000Z',
+    local: { grams: 60 },
+    remote: { grams: 90 },
+    fields: ['grams'],
+  };
+  const saved = await api.put(
+    `/v1/documents/sync_conflict/${id}`,
+    { payload: conflict, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/sync_conflict/${id}`, { token });
+  assert.deepEqual(read.body.payload, conflict);
+  const bare = await api.put(
+    `/v1/documents/sync_conflict/${randomUUID()}`,
+    { payload: { id, kind: 'food_entry' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(bare.status, 400);
+});
+
 test('legacy food logs and saved foods stay in their own feeds', async () => {
   const { token } = await signUp(api);
   await api.post('/api/food', { name: 'Logged oats', calories: 300 }, { token });

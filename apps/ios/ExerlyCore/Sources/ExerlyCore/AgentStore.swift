@@ -221,6 +221,13 @@ extension AgentStore: DocumentHost {
         return try ExerlyJSON.canonical(Merge.value(try base.map { try decoder.decode(Proposal.self, from: $0) }, mine, theirs))
     }
 
+    /// Proposals and audit events never need a review: the rule above decides.
+    public func reviewsConflicts(kind: String) -> Bool { false }
+
+    public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        MergeOutcome(merged: try merge(kind: kind, base: base, local: local, remote: remote), conflicts: [])
+    }
+
     public func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
         guard let uuid = UUID(uuidString: id) else { throw DocumentError(message: "Invalid ID") }
         guard let payload else {

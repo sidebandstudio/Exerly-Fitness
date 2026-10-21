@@ -38,10 +38,34 @@ public protocol SyncStateStore: AnyObject {
     func saveRejectedDocuments(_ documents: [RejectedDocument]) throws
     /// Runs several writes as one unit: all of them persist, or none.
     func performAtomically(_ body: () throws -> Void) throws
+    /// Conflicts sync found, as canonical JSON, kept with the account's data.
+    func syncConflicts() throws -> [Data]
+    /// Saves a conflict, nil to remove it.
+    func saveSyncConflict(id: String, payload: Data?) throws
+    /// This device's ID in the conflicts it finds, made once per account.
+    func syncDeviceID() throws -> UUID
 }
 
 private let cursorKey = "sync.cursor"
 private let rejectedKey = "sync.rejected"
+private let deviceKey = "sync.device"
+let syncConflictKind = "sync_conflict"
+
+extension SyncStateStore where Self: TrainingPersistence & DocumentPersistence {
+    public func syncConflicts() throws -> [Data] { try loadDocuments(kind: syncConflictKind) }
+    public func saveSyncConflict(id: String, payload: Data?) throws {
+        if let payload { try saveDocument(kind: syncConflictKind, id: id, payload: payload) } else {
+            try deleteDocument(kind: syncConflictKind, id: id)
+        }
+    }
+
+    public func syncDeviceID() throws -> UUID {
+        if let data = try loadValue(forKey: deviceKey), let id = String(bytes: data, encoding: .utf8).flatMap(UUID.init) { return id }
+        let id = UUID()
+        try saveValue(Data(id.uuidString.utf8), forKey: deviceKey)
+        return id
+    }
+}
 
 private func loadRejected(_ data: Data?) throws -> [RejectedDocument] {
     try data.map { try JSONDecoder().decode([RejectedDocument].self, from: $0) } ?? []

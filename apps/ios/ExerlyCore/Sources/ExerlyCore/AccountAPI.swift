@@ -447,7 +447,8 @@ enum Wire {
         else { throw APIError.invalidResponse }
         let payload = try (json["payload"] as? [String: Any]).map { try JSONSerialization.data(withJSONObject: $0) }
         return RemoteDocument(kind: kind, id: id, revision: revision, deleted: deleted, payload: payload,
-                              sequence: json["sequence"] as? Int)
+                              sequence: json["sequence"] as? Int,
+                              updatedAt: (json["updated_at"] as? String).flatMap(ISOMilliseconds.parse).map(Date.milliseconds))
     }
 
     static func writeResult(_ status: Int, _ data: Data) throws -> DocumentWriteResult {

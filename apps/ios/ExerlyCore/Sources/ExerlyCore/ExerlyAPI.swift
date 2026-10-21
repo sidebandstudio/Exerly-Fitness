@@ -76,6 +76,8 @@ public struct RemoteDocument: Sendable, Hashable {
     public var deleted: Bool
     public var payload: Data?
     public var sequence: Int?
+    /// When the server took this version.
+    public var updatedAt: Date?
 }
 
 public enum DocumentWriteResult: Sendable, Hashable {

@@ -89,6 +89,18 @@ const KINDS = {
     Number.isInteger(p.parts)
       ? []
       : ['provenance needs a source, importedAt, its documents and its part'],
+  // Two devices' versions of one record, kept until the person picks one.
+  // ExerlyCore decodes and merges it; the server only keeps it in step.
+  sync_conflict: (p) =>
+    typeof p.kind === 'string' &&
+    typeof p.documentID === 'string' &&
+    typeof p.detectedAt === 'string' &&
+    typeof p.changedAt === 'string' &&
+    Array.isArray(p.fields)
+      ? []
+      : [
+          'a conflict needs the kind and ID of its record, when it was found and changed, and its fields',
+        ],
   proposal: proposalProblems,
   audit_event: auditEventProblems,
 };
