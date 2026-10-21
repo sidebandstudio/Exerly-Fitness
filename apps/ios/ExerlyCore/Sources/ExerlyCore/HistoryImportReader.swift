@@ -237,16 +237,25 @@ public enum HistoryImportReader {
                 plan.lines.append(ImportLine(key: kind, title: ExerlyExportFile.title(kind), new: count.new, existing: count.existing))
             }
         }
+        // The server's older tables, restored through the account.
+        for (table, count) in file.serverRows.sorted(by: { $0.key < $1.key }) {
+            plan.lines.append(ImportLine(key: "server/\(table)", title: ExerlyExportFile.restorable[table] ?? table, new: count))
+        }
+        plan.serverTables = file.serverTables
         plan.dateRange = file.dateRange
         plan.units = ["Every document keeps its own units, time zone and IDs"]
+        if file.serverTables != nil {
+            plan.units.append("Older records are restored through your account, so this import needs a connection")
+        }
         if file.offline { plan.lost.append("The export was made offline, so it holds what that device had.") }
         for (kind, count) in unsupported.sorted(by: { $0.key < $1.key }) {
             plan.lost.append("\(count) \(ExerlyExportFile.title(kind).lowercased()) this version of Exerly can't keep on a phone")
         }
-        for (table, count) in file.otherTables.sorted(by: { $0.key < $1.key }) where count > 0 {
-            plan.lost.append("\(table.replacingOccurrences(of: "_", with: " ").capitalized): \(count) older \(count == 1 ? "row" : "rows") kept by the server, not restored here")
+        for (table, count) in file.otherTables.sorted(by: { $0.key < $1.key }) where count > 0 && file.serverRows[table] == nil {
+            let name = table.replacingOccurrences(of: "_", with: " ").capitalized
+            plan.lost.append("\(name): \(ExerlyExportFile.notRestored[table] ?? "Exerly doesn't know this table, so it isn't restored.")")
         }
-        if file.hasAccount { plan.lost.append("Account details, sign-in and settings stay with the account they came from.") }
+        if file.hasAccount { plan.lost.append("Account details and settings stay with the account they came from.") }
         plan.approximated.append("Documents keep their IDs. One this account already has is kept as it is, not overwritten.")
     }
 

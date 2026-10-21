@@ -14,6 +14,7 @@ struct HistoryImportFlow: View {
     var shared: [ImportFile]?
     var changed: () -> Void
     @EnvironmentObject private var sync: SyncEngine
+    @EnvironmentObject private var auth: AuthViewModel
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .subheadline) private var stepSize = 28.0
     @State private var phase: Phase = .start
@@ -537,7 +538,9 @@ struct HistoryImportFlow: View {
             // Let the progress show before the save holds the main thread.
             try? await Task.sleep(for: .milliseconds(80))
             do {
-                let record = try workspace.importer.commit(plan)
+                let record = try await workspace.importer.commit(plan, api: api)
+                // Restored older records reach this phone through its account's feed.
+                if record.serverRows?.isEmpty == false { Task { await sync.synchronize() } }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 withAnimation(.snappy) { phase = .done(record) }
                 UIAccessibility.post(notification: .announcement, argument: "Import finished")
@@ -607,17 +610,22 @@ struct HistoryImportFlow: View {
             + "Undo removes exactly these, now or later from Profile → Import & export."
     }
 
+    /// The signed-in account's API, for imports that restore older tables on the server.
+    private var api: AccountAPI? { auth.accountAPI.flatMap { $0.accountID == workspace.accountID ? $0 : nil } }
+
     private func undo(_ record: ImportRecord) {
-        do {
-            let result = try workspace.importer.undo(record.id)
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            withAnimation(.snappy) { phase = .undone(result) }
-            UIAccessibility.post(notification: .announcement, argument: "Import undone. " + ImportCopy.undone(result))
-            changed()
-            Task { await workspace.synchronize() }
-        } catch {
-            withAnimation(.snappy) {
-                phase = .unreadable("The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))")
+        Task {
+            do {
+                let result = try await workspace.importer.undo(record.id, api: api)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                withAnimation(.snappy) { phase = .undone(result) }
+                UIAccessibility.post(notification: .announcement, argument: "Import undone. " + ImportCopy.undone(result))
+                changed()
+                Task { await workspace.synchronize() }
+            } catch {
+                withAnimation(.snappy) {
+                    phase = .unreadable("The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))")
+                }
             }
         }
     }

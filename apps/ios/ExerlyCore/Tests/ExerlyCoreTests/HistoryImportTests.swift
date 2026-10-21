@@ -458,6 +458,62 @@ import Testing
         return try JSONSerialization.data(withJSONObject: export)
     }
 
+    /// The server's import endpoints, answering as `POST /v1/import` and `/v1/import/undo` do.
+    final class FakeServer: SessionTransport, @unchecked Sendable {
+        private let lock = NSLock()
+        private var sent: [(path: String, body: Data?)] = []
+        var reachable = true
+
+        var requests: [(path: String, body: Data?)] { lock.withLock { sent } }
+
+        func send(_ method: String, path: String, body: Data?, headers: [String: String], as accountID: String) async throws
+            -> (status: Int, data: Data) {
+            lock.withLock { sent.append((path, body)) }
+            guard lock.withLock({ reachable }) else { throw URLError(.notConnectedToInternet) }
+            switch path {
+            case "/v1/import":
+                let json: [String: Any] = ["imported": 0, "kept": 0, "skipped": [Any](), "ignored_tables": [Any](),
+                                           "restored": [["table": "measurements", "id": "row-7", "revision": 1],
+                                                        ["table": "water", "id": "row-3", "revision": 1]],
+                                           "not_restored": [String: String]()]
+                return (200, try JSONSerialization.data(withJSONObject: json))
+            case "/v1/import/undo": return (200, Data(#"{"removed":2,"kept":0}"#.utf8))
+            default: return (404, Data())
+            }
+        }
+    }
+
+    @Test func aRestoreSendsTheServersTablesThroughTheAccountAndIsBothOrNeither() async throws {
+        let first = try Account()
+        try first.importer.commit(try plan(Self.strong, options: .init(timeZone: Fixture.newYork, unit: .kilograms), hosts: first.hosts))
+        let export = try serverExport(first)
+        let second = try Account()
+        let restore = try second.restore(export)
+        #expect(restore.lines.filter { $0.key.hasPrefix("server/") }.map(\.key) == ["server/goals", "server/measurements", "server/water"])
+        #expect(restore.lost.contains("Account details and settings stay with the account they came from."))
+        let server = FakeServer()
+        let api = AccountAPI(accountID: "synthetic-second", transport: server)
+
+        // The account can't be reached: nothing is kept.
+        server.reachable = false
+        await #expect(throws: HistoryImporter.ImportError.self) { try await second.importer.commit(restore, api: api) }
+        #expect(second.training.history.sessions.isEmpty && second.provenance.provenance.isEmpty)
+        #expect(try second.importer.records().isEmpty)
+
+        server.reachable = true
+        let record = try await second.importer.commit(restore, api: api)
+        #expect(second.training.history.sessions.count == 2)
+        #expect(record.serverRows?.map(\.id) == ["row-7", "row-3"])
+        let body = try #require(server.requests.last?.body)
+        let sent = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(Set(sent.keys) == ["exported_at", "version", "goals", "measurements", "water"], "Only the older tables go to the server")
+
+        let undone = try await second.importer.undo(record.id, api: api)
+        #expect(server.requests.last?.path == "/v1/import/undo")
+        #expect(undone.undone == 2 + 3, "Two rows on the server; two workouts and their provenance here")
+        #expect(second.training.history.sessions.isEmpty && second.provenance.provenance.isEmpty)
+    }
+
     @Test func everyKindOfDocumentAndEveryServerTableHasACSVAndASheet() throws {
         let account = try Account()
         try account.training.addCustomExercise(Exercise(id: "custom-synthetic-press", name: "Synthetic Press", aliases: [], metric: .weightReps,

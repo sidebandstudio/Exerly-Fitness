@@ -109,9 +109,11 @@ public struct HistoryImportPlan: Sendable {
     public var skipped: [String]
     public var skippedCount: Int
     public var writes: [PlannedWrite]
+    /// The server's older tables an Exerly export restores, through the account.
+    public var serverTables: Data?
 
     /// Nothing to save: the file is empty or already in Exerly.
-    public var isEmpty: Bool { writes.isEmpty }
+    public var isEmpty: Bool { writes.isEmpty && serverTables == nil }
     /// What the import adds or updates, counting workouts rather than the
     /// exercises and sets inside them.
     public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new + $1.updated } }
@@ -158,6 +160,8 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
     public var lines: [ImportLine]
     public var dateRange: ClosedRange<LocalDate>?
     public var changes: [Change]
+    /// Rows of the server's older tables the import restored, undone through the account.
+    public var serverRows: [RestoredRow]?
     public var undoneAt: Date?
 
     /// Documents the import added, rather than changed or removed.
@@ -187,6 +191,8 @@ public struct HistoryImporter {
     public enum ImportError: Error, Equatable {
         /// What the plan expected changed since it was made: read the file again.
         case stale
+        /// The import needs the account on the server, which couldn't be reached. Nothing was saved.
+        case needsAccount(String)
         case noStore(String)
         case invalid(String)
         case alreadyUndone
@@ -257,6 +263,53 @@ public struct HistoryImporter {
         try validate(batches)
         try apply(batches, saving: record)
         return record
+    }
+
+    /// Saves a plan that also restores the server's older tables: the documents
+    /// here, then the tables through `api`. If the server can't be reached or
+    /// refuses, the documents are taken out again and the import is forgotten,
+    /// so it's both or neither.
+    public func commit(_ plan: HistoryImportPlan, api: AccountAPI?) async throws -> ImportRecord {
+        guard let tables = plan.serverTables else { return try commit(plan) }
+        guard let api else { throw ImportError.needsAccount("Sign in, then try again.") }
+        var record = try commit(plan)
+        let saved = !record.changes.isEmpty
+        let result: ImportResult
+        do {
+            result = try await api.importExport(tables)
+        } catch {
+            if saved {
+                _ = try? undo(record.id)
+                try? persistence.deleteDocument(kind: Self.recordKind, id: record.id.uuidString)
+            }
+            throw ImportError.needsAccount(Self.describe(error))
+        }
+        record.serverRows = result.restored
+        if saved || !result.restored.isEmpty {
+            try persistence.saveDocument(kind: Self.recordKind, id: record.id.uuidString, payload: ExerlyJSON.canonical(record))
+        }
+        return record
+    }
+
+    /// Undoes an import that restored the server's older tables too: those
+    /// first, through `api`, then the documents here. If the server can't be
+    /// reached, nothing is undone.
+    public func undo(_ id: UUID, api: AccountAPI?) async throws -> UndoResult {
+        guard let record = try records().first(where: { $0.id == id }) else { throw ImportError.invalid("That import isn't in this account") }
+        guard record.undoneAt == nil else { throw ImportError.alreadyUndone }
+        var server = (removed: 0, kept: 0)
+        if let rows = record.serverRows, !rows.isEmpty {
+            guard let api else { throw ImportError.needsAccount("Sign in, then try again.") }
+            do {
+                server = try await api.undoRestore(rows)
+            } catch {
+                throw ImportError.needsAccount(Self.describe(error))
+            }
+        }
+        var result = try undo(id)
+        result.undone += server.removed
+        result.kept += server.kept
+        return result
     }
 
     /// Removes what an import added and puts back what it replaced. A document
@@ -347,6 +400,7 @@ public struct HistoryImporter {
         case ImportError.noStore(let kind): "Exerly can't keep \(kind) documents on this device"
         case ImportError.alreadyUndone: "This import was already undone"
         case ImportError.stale: "Your data changed since this preview, so it was read again"
+        case ImportError.needsAccount(let why): "Your account couldn't be reached, so nothing was restored. \(why)"
         case let error as DocumentError: error.message
         case NutritionStore.StoreError.invalid(let problems): problems.joined(separator: "; ")
         case TrainingStore.StoreError.edit(let problem): "A workout isn't valid: \(problem)"

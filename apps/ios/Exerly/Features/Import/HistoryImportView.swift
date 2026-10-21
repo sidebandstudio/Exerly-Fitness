@@ -13,6 +13,7 @@ struct ImportExportView: View {
     let timeZone: TimeZone
     var exportActions: AccountManagementActions?
     @Environment(\.dynamicTypeSize) private var typeSize
+    @EnvironmentObject private var auth: AuthViewModel
     @State private var records: [ImportRecord] = []
     @State private var undoing: ImportRecord?
     @State private var message: String?
@@ -139,17 +140,20 @@ struct ImportExportView: View {
     private func undo(_ record: ImportRecord) {
         undoing = nil
         error = nil
-        do {
-            let result = try workspace.importer.undo(record.id)
-            let text = "Import undone. " + ImportCopy.undone(result)
-            message = text
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-            UIAccessibility.post(notification: .announcement, argument: text)
-            Task { await workspace.synchronize() }
-        } catch {
-            self.error = "The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))"
+        let api = auth.accountAPI.flatMap { $0.accountID == workspace.accountID ? $0 : nil }
+        Task {
+            do {
+                let result = try await workspace.importer.undo(record.id, api: api)
+                let text = "Import undone. " + ImportCopy.undone(result)
+                message = text
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                UIAccessibility.post(notification: .announcement, argument: text)
+                Task { await workspace.synchronize() }
+            } catch {
+                self.error = "The import couldn't be undone. Nothing changed. \(HistoryImporter.describe(error))"
+            }
+            reload()
         }
-        reload()
     }
 }
 

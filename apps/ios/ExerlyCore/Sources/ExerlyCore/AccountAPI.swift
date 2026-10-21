@@ -135,16 +135,35 @@ public struct AccountAPI: DocumentAPI {
     }
 
     /// Restores an Exerly JSON export, as `exportAccount()` returns it, into
-    /// this account. Documents the account already has are kept; importing
-    /// twice changes nothing.
+    /// this account: its documents and the server's older tables. Anything the
+    /// account already has is kept; importing twice changes nothing.
     public func importExport(_ export: Data) async throws -> ImportResult {
         let (status, data) = try await send("POST", "/v1/import", body: export, headers: ["Content-Type": "application/json"])
         let json = try? JSONSerialization.jsonObject(with: data)
         guard status == 200, let result = json as? [String: Any], let imported = result["imported"] as? Int,
               let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
         let skipped = (result["skipped"] as? [[String: Any]] ?? []).compactMap { $0["reason"] as? String }
+        let restored = (result["restored"] as? [[String: Any]] ?? []).compactMap { row -> RestoredRow? in
+            guard let table = row["table"] as? String, let id = row["id"] as? String else { return nil }
+            return RestoredRow(table: table, id: id, revision: (row["revision"] as? NSNumber)?.intValue)
+        }
         return ImportResult(imported: imported, kept: kept, skipped: skipped,
-                            ignoredTables: result["ignored_tables"] as? [String] ?? [])
+                            ignoredTables: result["ignored_tables"] as? [String] ?? [], restored: restored,
+                            notRestored: result["not_restored"] as? [String: String] ?? [:])
+    }
+
+    /// Undoes a restore of the server's older tables: removes the rows it
+    /// restored, except any changed since. All or nothing.
+    public func undoRestore(_ rows: [RestoredRow]) async throws -> (removed: Int, kept: Int) {
+        let body: [String: Any] = ["rows": rows.map { row -> [String: Any] in
+            var json: [String: Any] = ["table": row.table, "id": row.id]
+            if let revision = row.revision { json["revision"] = revision }
+            return json
+        }]
+        let (status, json) = try await sendJSON("POST", "/v1/import/undo", body: body)
+        guard status == 200, let result = json as? [String: Any], let removed = result["removed"] as? Int,
+              let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
+        return (removed, kept)
     }
 
     /// Deletes the account and everything in it on the server, once
@@ -322,8 +341,26 @@ public struct ImportResult: Sendable, Hashable {
     public var kept: Int
     /// Documents that failed the server's checks, with the reasons (at most 50).
     public var skipped: [String]
-    /// Legacy tables in the export, which aren't imported.
+    /// Tables in the export the server doesn't know.
     public var ignoredTables: [String]
+    /// Rows of the server's older tables it restored, for Undo.
+    public var restored: [RestoredRow] = []
+    /// Tables never restored into another account, with why.
+    public var notRestored: [String: String] = [:]
+}
+
+/// A row of the server's older tables that an import restored.
+public struct RestoredRow: Sendable, Hashable, Codable {
+    public var table: String
+    public var id: String
+    /// Its revision when restored; a row changed since is kept by Undo.
+    public var revision: Int?
+
+    public init(table: String, id: String, revision: Int?) {
+        self.table = table
+        self.id = id
+        self.revision = revision
+    }
 }
 
 /// A personal access token for the person's own agent, without its secret.

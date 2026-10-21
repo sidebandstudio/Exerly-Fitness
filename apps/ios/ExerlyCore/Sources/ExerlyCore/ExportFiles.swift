@@ -18,6 +18,27 @@ public struct ExerlyExportFile: Sendable {
     public var hasAccount: Bool
     /// Made on a device without the server's copy.
     public var offline: Bool
+    /// The server's older tables the server can restore, as a JSON export
+    /// without documents; nil when there are none.
+    public var serverTables: Data?
+    /// Rows to restore, by table.
+    public var serverRows: [String: Int] = [:]
+
+    /// The server's older tables `POST /v1/import` restores, as in the API's
+    /// lib/portability.js, with what each is called here.
+    public static let restorable: [String: String] = [
+        "food": "Older food log", "measurements": "Body measurements", "weights": "Older weigh-ins", "water": "Water",
+        "diary_days": "Older day notes", "target_versions": "Older target versions", "activities": "Activities",
+        "sleep": "Sleep", "goals": "Goals", "program": "Older nutrition program", "checkins": "Older check-ins",
+        "library_foods": "Older food library", "recipes": "Older recipes", "workouts": "Older workout templates",
+        "ai_plans": "Coach plans",
+    ]
+    /// Exported, never restored into another account, and why.
+    public static let notRestored: [String: String] = [
+        "account_identities": "Sign-in methods belong to the account they were set up for.",
+        "webhooks": "Webhooks would send this account's data to addresses set up elsewhere.",
+        "onboarding_drafts": "A setup draft belongs to the account being set up.",
+    ]
     public var dateRange: ClosedRange<LocalDate>?
 
     /// Top-level keys that describe the export rather than hold data.
@@ -40,9 +61,18 @@ public struct ExerlyExportFile: Sendable {
             }
         }
         self.documents = documents
-        otherTables = json.filter { !Self.metadata.contains($0.key) }.compactMapValues { ($0 as? [Any])?.count }
+        otherTables = json.filter { !Self.metadata.contains($0.key) }.compactMapValues { value in
+            (value as? [Any])?.count ?? (value is [String: Any] ? 1 : nil)
+        }
         hasAccount = json["account"] is [String: Any]
         offline = json["source"] as? String == "device"
+        serverRows = otherTables.filter { Self.restorable[$0.key] != nil && $0.value > 0 }
+        if !serverRows.isEmpty {
+            var tables = json.filter { serverRows[$0.key] != nil }
+            tables["exported_at"] = json["exported_at"] ?? ""
+            tables["version"] = json["version"] ?? 3
+            serverTables = try JSONSerialization.data(withJSONObject: tables, options: [.sortedKeys])
+        }
         if let first = dates.min(), let last = dates.max() { dateRange = first...last }
     }
 
