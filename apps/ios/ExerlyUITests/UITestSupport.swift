@@ -184,6 +184,10 @@ class ExerlyUITestCase: XCTestCase {
             dismissKeyboard(app)
         }
         let missing = !element.exists
+        // Where the element was before the last drag. A drag that starts on
+        // a chart scrubs it instead of scrolling, and at the largest text the
+        // trend chart fills the middle of Progress: drag in the margin then.
+        var frameBeforeDrag: CGRect?
         for attempt in 0..<48 {
             // An element that never appeared after ten drags won't: let the
             // caller's assertion fail now instead of dragging for minutes.
@@ -250,8 +254,11 @@ class ExerlyUITestCase: XCTestCase {
             let distance = element.exists ? 0.16 : 0.34
             let low = top + height * (0.5 - distance)
             let high = top + height * (0.5 + distance)
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (down ? low : high) / app.frame.height))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (down ? high : low) / app.frame.height))
+            let frame = element.exists ? element.frame : nil
+            let dx = frame != nil && frame == frameBeforeDrag ? 6 / app.frame.width : 0.5
+            frameBeforeDrag = frame
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? low : high) / app.frame.height))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? high : low) / app.frame.height))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         }
     }

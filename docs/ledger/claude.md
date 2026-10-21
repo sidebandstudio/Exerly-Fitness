@@ -18,17 +18,16 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     with quick adds, Undo, a daily goal and a Log water shortcut; By time view;
     habits calendar from the date; day status and note from a menu; hide or
     reorder Today's cards.
-  - iOS 26's clear keyboard Done bar took taps meant for fields drawn behind it
-    (Calories in Edit food on a 17 Pro); the keyboard area is now filled, and a
-    nutrient's caption focuses its field.
-  - Found by the full suite: a preference changed while its screen was still
-    refreshing (Done tapped right after opening Your details, or a reminder switch
-    flipped at once) was dropped; a day with food in one hour lost By time's hour.
+  - iOS 26's clear keyboard Done bar no longer takes taps meant for fields; a preference
+    changed while its screen refreshed is no longer dropped; By time keeps every hour.
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
     measurements; preview, Undo, full export. Reviews 2–5 fixed: restores (validated, exact
     tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
+- claude/polish6 (not landed): run 7 and review round 1. Gain or Maintain for a passed goal weight;
+  liquids by density, exact drained cans; Customize Today and the water goal kept offline and sent
+  alone (QuickPreferences); Next in each form's order; weigh-ins read with time, fat, source.
 
 ## Current outcome
 
@@ -36,8 +35,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 
 ## Next three steps
 
-1. Code-blind run 7 on a 17 Pro covering recipe import, body goal and measurements,
-   water and Customize Today; fix what it finds.
+1. Land `claude/polish6` after review and ship it to TestFlight, then code-blind run 8
+   on a 17 Pro; fix what it finds.
 2. Outcome 3 from PARITY.md, reconciled (35 Built, 71 Partial, 5 Missing): rows whose Core
    is tested but unused (T13, T16-T18, I13, B07); waist ratios, hiding unused measurements.
 3. Outcome 4: widgets and watch complications once Ali registers the App Group;
@@ -59,9 +58,10 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 
 ## Merge status
 
-| Branch      | Unlanded | Last landed |
-| ----------- | -------- | ----------- |
-| claude/next | nothing  | this commit |
+| Branch      | Unlanded               | Last landed                             |
+| ----------- | ---------------------- | --------------------------------------- |
+| claude/next | nothing                | this commit                             |
+| polish6     | 12 commits on 8e39690a | not yet: fast-forwards onto claude/next |
 
 ## Risks
 
@@ -69,11 +69,11 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
   widgets and watch complications wait on it.
 - Watch, App Intents and reminders: unverified on hardware, with a passcode, from
   the Action button, and when an action relaunches a terminated app.
-- Recipe import matched 16 of 47 lines on three real pages (all correct); the
-  bundled USDA table lacks salt, flour, most spices and oils.
-- Progress photos: camera capture and moving photos from a real older store are
-  unverified; photos never leave the device unless shared.
+- Recipe import matched 16 of 47 real lines (all correct); USDA table lacks salt, flour, spices, oils.
+- Water: Other right after a bottle didn't open its sheet in 2 of 6 polish6 runs (0 of 3 on next).
+- Progress photos: camera capture and moving a real older store unverified; kept on device.
 - The swipe to Hide is a custom pan; checked by XCTest's swipe, not by hand.
-- Package sizes are tested on synthetic data only, not live Open Food Facts.
+- The trend chart's scrub takes a drag that starts on it, so at the largest text Progress
+  scrolls only from beside it (UI tests drag in the margin). Package sizes: synthetic only.
 - Open Food Facts search budget is 10/min server-wide; type-ahead spends it faster.
 - Six idle "Exerly App" simulators from the Astra run are left alone per the brief.

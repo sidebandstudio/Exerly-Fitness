@@ -82,6 +82,9 @@ struct TodayCustomizeView: View {
     @EnvironmentObject private var auth: AuthViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The move arrows grow with the text, so at the largest sizes they don't sit tiny under it.
+    @ScaledMetric(relativeTo: .body) private var scaledArrow: CGFloat = 14
+    private var arrowSize: CGFloat { min(scaledArrow, 28) }
 
     var body: some View {
         NavigationStack {
@@ -149,9 +152,9 @@ struct TodayCustomizeView: View {
             withAnimation(.snappy) { layout = layout.moving(card, by: offset) }
             UISelectionFeedbackGenerator().selectionChanged()
         } label: {
-            Image(systemName: icon).font(.system(size: 14, weight: .semibold))
+            Image(systemName: icon).font(.system(size: arrowSize, weight: .semibold))
                 .foregroundStyle(disabled ? Color.exTextMuted.opacity(0.4) : Color.exPrimaryText)
-                .frame(width: 44, height: 44).contentShape(Rectangle())
+                .frame(width: max(44, arrowSize * 2), height: max(44, arrowSize * 2)).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .disabled(disabled)

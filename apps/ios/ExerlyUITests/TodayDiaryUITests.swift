@@ -64,8 +64,7 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         signIn(app, email: person.email)
         XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 20))
         tapCount = 0
-        tap(app.buttons["today.dayMenu"], in: app)
-        tap(app.buttons["today.dayMenu.customize"], in: app)
+        openCustomizeFromDayMenu(app)
         XCTAssertTrue(app.buttons["What's left"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["What's left"].isSelected)
         tap(app.buttons["What you've eaten"], in: app)
@@ -74,8 +73,7 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         tap(app.buttons["today.customize.done"], in: app)
         XCTAssertEqual(tapCount, 4, "Day options, Customize Today, What you've eaten, Done")
         XCTAssertTrue(app.staticTexts["kcal eaten"].waitForExistence(timeout: 15))
-        tap(app.buttons["today.dayMenu"], in: app)
-        tap(app.buttons["today.dayMenu.customize"], in: app)
+        openCustomizeFromDayMenu(app)
         XCTAssertTrue(app.buttons["What you've eaten"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["What you've eaten"].isSelected, "Reopened on the saved choice")
         tap(app.buttons["What's left"], in: app)
@@ -124,8 +122,7 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         signIn(app, email: person.email)
         XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 20))
         try await control(["offline": true])
-        tap(app.buttons["today.dayMenu"], in: app)
-        tap(app.buttons["today.dayMenu.customize"], in: app)
+        openCustomizeFromDayMenu(app)
         tap(app.buttons["What you've eaten"], in: app)
         XCTAssertTrue(app.buttons["What you've eaten"].isSelected)
         let displayNote = app.staticTexts["today.customize.displayNote"]
@@ -257,8 +254,7 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         XCTAssertNotNil(targetEnergy(app))
         XCTAssertTrue(app.buttons["today.quickAdd"].exists)
         // From the day menu; after the relaunch, from the link under the meals.
-        tap(app.buttons["today.dayMenu"], in: app)
-        tap(app.buttons["today.dayMenu.customize"], in: app)
+        openCustomizeFromDayMenu(app)
         XCTAssertTrue(app.navigationBars["Customize Today"].waitForExistence(timeout: 5))
         let quick = app.switches["today.customize.show.quickActions"]
         XCTAssertEqual(quick.value as? String, "1")
@@ -366,6 +362,24 @@ final class TodayDiaryUITests: ExerlyUITestCase {
             try await Task.sleep(for: .milliseconds(500))
         }
         XCTFail("The server has \(total) ml of water, not \(milliliters)")
+    }
+
+    /// Day options, then Customize Today, two taps. At the largest text the
+    /// menu runs under the tab bar, so it's dragged up first, as a person
+    /// would; a drag beside it would close it.
+    private func openCustomizeFromDayMenu(_ app: XCUIApplication) {
+        tap(app.buttons["today.dayMenu"], in: app)
+        let customize = app.buttons["today.dayMenu.customize"]
+        XCTAssertTrue(customize.waitForExistence(timeout: 10), app.debugDescription)
+        // A flick on an item the menu shows; a slow drag would choose the
+        // item it ends on.
+        let items = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'today.dayMenu.'"))
+        for _ in 0..<3 where !customize.isHittable {
+            items.allElementsBoundByIndex.first { $0.isHittable }?.swipeUp()
+        }
+        XCTAssertTrue(customize.isHittable, app.debugDescription)
+        customize.tap()
+        tapCount += 1
     }
 
     /// Waits for the account's preference `key` to be `value` on the server.
