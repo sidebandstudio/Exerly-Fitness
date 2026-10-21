@@ -265,6 +265,36 @@ import Testing
         #expect(london.sessions.map(\.id) == (try read()).sessions.map(\.id), "Known by the start the file writes, not an instant")
     }
 
+    /// An import's writes show once the outermost transaction commits, never on
+    /// a rollback, and hidden suggestions are a kind it can write.
+    @Test func writeAllPublishesAfterTheCommitAndTakesHiddenSuggestions() throws {
+        let (_, source, _) = try stores()
+        let oats = try source.log(Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380])), grams: 80,
+                                  on: LocalDate("2026-10-01")!, meal: "Breakfast", at: Fixture.instant())
+        try source.hideSuggestion(oats.food)
+        let hidden = try #require(source.hiddenSuggestions.first)
+        let entry = try #require(try source.payload(kind: NutritionStore.entryKind, id: oats.id.uuidString))
+        let suggestion = try #require(try source.payload(kind: NutritionStore.hiddenKind, id: hidden.id))
+
+        let (persistence, store, _) = try stores()
+        try persistence.performAtomically {
+            try store.writeAll(kind: NutritionStore.entryKind, [(oats.id.uuidString, entry)])
+            #expect(store.entries.isEmpty, "Not shown while the caller's transaction is open")
+        }
+        #expect(store.entries.map(\.id) == [oats.id], "Shown once it commits")
+        try store.writeAll(kind: NutritionStore.hiddenKind, [(hidden.id, suggestion)])
+        #expect(store.hiddenSuggestions.map(\.id) == [hidden.id])
+
+        struct Abandoned: Error {}
+        #expect(throws: Abandoned.self) {
+            try persistence.performAtomically {
+                try store.writeAll(kind: NutritionStore.entryKind, [(oats.id.uuidString, nil)])
+                throw Abandoned()
+            }
+        }
+        #expect(store.entries.map(\.id) == [oats.id], "A rolled-back removal isn't shown")
+    }
+
     @Test func skippedRowsUnknownColumnsAndLeftOutSheetsAreReported() throws {
         let report = try read().report
         let foodLog = report.skipped.filter { $0.sheet == "Food Log" }
