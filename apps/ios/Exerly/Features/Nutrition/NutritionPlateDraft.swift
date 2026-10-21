@@ -98,6 +98,10 @@ final class NutritionPlateDraft: ObservableObject {
     func stage(_ food: ExerlyCore.Food, amount: LoggedAmount, replacing reviewed: Row? = nil, checked: Bool = true,
                pending: UUID? = nil) -> Bool {
         guard saved == nil else { error = "This meal is already logged. Start a new meal to add more foods."; return false }
+        if let pending, rows.contains(where: { $0.id != reviewed?.id && $0.pending.contains(pending) }) {
+            error = "This scan is already on your meal."
+            return false
+        }
         let row = Row(id: reviewed?.id ?? UUID(), food: food, amount: amount, checked: checked,
                       pending: (reviewed?.pending ?? []).union(pending.map { [$0] } ?? []))
         var updated = rows

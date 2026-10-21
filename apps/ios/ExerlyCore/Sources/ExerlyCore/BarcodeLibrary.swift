@@ -304,9 +304,10 @@ public final class BarcodeLibrary {
         save()
     }
 
-    /// Dismisses every offline scan that has resolved; waiting ones stay.
-    public func dismissResolved() {
-        pending.removeAll { $0.state != .waiting }
+    /// Dismisses every offline scan that has resolved; waiting ones stay,
+    /// and so do those in `keeping`, such as scans on a plate.
+    public func dismissResolved(keeping: Set<Pending.ID> = []) {
+        pending.removeAll { $0.state != .waiting && !keeping.contains($0.id) }
         save()
     }
 

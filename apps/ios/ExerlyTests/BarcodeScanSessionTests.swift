@@ -75,11 +75,13 @@ final class BarcodeScanSessionTests: XCTestCase {
                         per100g: NutrientAmounts([.energy: 400]), servings: [Serving("1 pack", grams: 40)])
     }
 
-    private func session(_ transport: BarcodeTransport, workspace existing: TrainingWorkspace? = nil) throws -> (BarcodeScanSession, TrainingWorkspace) {
+    private func session(_ transport: BarcodeTransport, workspace existing: TrainingWorkspace? = nil,
+                         excluded: @escaping () -> Set<UUID> = { [] }) throws -> (BarcodeScanSession, TrainingWorkspace) {
         let workspace = try existing ?? openWorkspace()
         let api = AccountAPI(accountID: "barcode-account", transport: transport)
         let date = try XCTUnwrap(LocalDate("2026-10-20"))
-        return (BarcodeScanSession(workspace: workspace, api: api, date: date, meal: "Lunch", unit: .kilograms, timeZone: .gmt), workspace)
+        return (BarcodeScanSession(workspace: workspace, api: api, date: date, meal: "Lunch", unit: .kilograms, timeZone: .gmt,
+                                   excluded: excluded), workspace)
     }
 
     /// Two foods on the plate, then Log on a past scan: it joins the plate,
@@ -243,6 +245,34 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertEqual(removedOne.save(consuming: library)?.count, 1)
         XCTAssertEqual(library.ready.map(\.id), [third.id], "The removed row's scan stays ready")
         XCTAssertEqual(try openWorkspace().barcodes.ready.map(\.id), [third.id])
+    }
+
+    /// A meal builder's scanner, opened twice: the offline scan picked the
+    /// first time isn't offered the second, isn't counted or dismissed as
+    /// ready, and can't be staged onto a second row. The meal logs it once.
+    func testAScanOnTheMealIsntOfferedToItsScannerAgain() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar")])
+        let (first, workspace) = try session(transport)
+        let scan = try await readyScan(bar, first, transport)
+        let meal = NutritionPlateDraft(store: workspace.nutrition, date: try XCTUnwrap(LocalDate("2026-10-20")), meal: "Dinner")
+        // What NutritionPlateView gives its picker.
+        let onPickScan = { (food: ExerlyCore.Food, amount: LoggedAmount, pending: UUID) in meal.stage(food, amount: amount, pending: pending) }
+        let portion = try NutritionStore.preview(food(bar, ""), grams: 40)
+        let (picking, _) = try session(transport, workspace: workspace, excluded: { meal.pending })
+        XCTAssertTrue(picking.pastScans.contains(.pending(scan)))
+        XCTAssertTrue(onPickScan(food(bar, "Synthetic oat bar"), portion, scan.id))
+
+        let (again, _) = try session(transport, workspace: workspace, excluded: { meal.pending })
+        XCTAssertFalse(again.pastScans.contains(.pending(scan)), "The scan on the meal isn't offered again")
+        await again.resolveWaiting()
+        XCTAssertNil(again.notice, "Nothing else is ready")
+        again.dismissReady()
+        XCTAssertEqual(workspace.barcodes.ready.map(\.id), [scan.id], "Not needed keeps the scan on the meal")
+        XCTAssertFalse(onPickScan(food(bar, "Synthetic oat bar"), portion, scan.id), "A second row can't hold the same scan")
+        XCTAssertEqual(meal.rows.count, 1)
+        XCTAssertEqual(meal.save(consuming: workspace.barcodes)?.count, 1)
+        XCTAssertEqual(workspace.nutrition.entries.count, 1)
+        XCTAssertTrue(workspace.barcodes.pending.isEmpty)
     }
 
     /// The commit fails: the draft isn't marked logged and nothing changed, so

@@ -47,7 +47,7 @@ struct NutritionBarcodeView: View {
     init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String,
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions,
          onPicked: ((ExerlyCore.Food) -> Void)? = nil, onPickedScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Bool)? = nil,
-         onLogged: @escaping ([FoodEntry]) -> Void) {
+         pickedScans: @escaping () -> Set<UUID> = { [] }, onLogged: @escaping ([FoodEntry]) -> Void) {
         self.workspace = workspace
         self.date = date
         self.timeZone = timeZone
@@ -56,7 +56,7 @@ struct NutritionBarcodeView: View {
         self.onPicked = onPicked
         self.onPickedScan = onPickedScan
         _session = StateObject(wrappedValue: BarcodeScanSession(workspace: workspace, api: api, date: date, meal: meal,
-                                                                unit: unit, timeZone: timeZone))
+                                                                unit: unit, timeZone: timeZone, excluded: pickedScans))
     }
 
     var body: some View {

@@ -114,7 +114,7 @@ struct NutritionPlateView: View {
                                     }, onPickScan: { food, amount, pending in
                                         // The row carries the scan, consumed only when the meal logs.
                                         draft.stage(food, amount: amount, pending: pending) ? draft.rows.count : nil
-                                    }, pickError: { draft.error })
+                                    }, pickedScans: { draft.pending }, pickError: { draft.error })
             }
             .sheet(item: $editing) { row in
                 NutritionPlatePortionEditor(workspace: workspace, plate: draft, row: row)

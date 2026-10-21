@@ -49,10 +49,14 @@ final class BarcodeScanSession: ObservableObject {
     let library: BarcodeLibrary
     private let api: AccountAPI
     private let store: NutritionStore
+    /// Offline scans already on the meal this scanner adds to.
+    private let excluded: () -> Set<UUID>
     private var plateChanges: AnyCancellable?
 
-    init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String, unit: MassUnit, timeZone: TimeZone) {
+    init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String, unit: MassUnit, timeZone: TimeZone,
+         excluded: @escaping () -> Set<UUID> = { [] }) {
         self.api = api
+        self.excluded = excluded
         store = workspace.nutrition
         library = workspace.barcodes
         plate = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: meal, unit: unit, timeZone: timeZone)
@@ -248,13 +252,17 @@ final class BarcodeScanSession: ObservableObject {
     /// Offline scans ready to log first, then those waiting or not found,
     /// then every other code scanned, latest first.
     var pastScans: [PastScan] {
-        // A scan already on this plate isn't offered again while it's there.
-        let onPlate = plate.pending
+        // A scan already on this plate, or on the meal it adds to, isn't
+        // offered again while it's there.
+        let held = held
         let offline = (library.ready + library.waiting + library.pending.filter { $0.state == .missing })
-            .filter { !onPlate.contains($0.id) }
+            .filter { !held.contains($0.id) }
         let codes = Set(library.pending.map(\.gtin))
         return offline.map(PastScan.pending) + library.history.filter { !codes.contains($0.gtin) }.map(PastScan.scan)
     }
+
+    /// Offline scans on this plate or on the meal it adds to.
+    private var held: Set<UUID> { plate.pending.union(excluded()) }
 
     enum PastScanResult {
         case logged(FoodEntry)
@@ -299,12 +307,14 @@ final class BarcodeScanSession: ObservableObject {
     /// they resolved now or in a sync before the scanner opened.
     func resolveWaiting() async {
         if !library.waiting.isEmpty { await library.resolveWaiting(fetch: BarcodeLibrary.fetch(api)) }
-        if !library.ready.isEmpty, notice == nil { show(.ready(library.ready.count)) }
+        let ready = library.ready.filter { !held.contains($0.id) }.count
+        if ready > 0, notice == nil { show(.ready(ready)) }
     }
 
-    /// The person doesn't need the offline scans that resolved.
+    /// The person doesn't need the offline scans that resolved, except those
+    /// already on a plate.
     func dismissReady() {
-        library.dismissResolved()
+        library.dismissResolved(keeping: held)
         notice = nil
     }
 }

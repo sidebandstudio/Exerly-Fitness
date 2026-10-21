@@ -26,6 +26,8 @@ struct NutritionFoodPicker: View {
     let onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)?
     /// An offline scan picked from the scanner, with its amount and identity.
     let onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)?
+    /// The offline scans already on what's being built, not offered again.
+    let pickedScans: () -> Set<UUID>
     let pickError: () -> String?
     let presentation: FoodPickerPresentation
     /// What picked foods go into: a meal or a recipe.
@@ -75,7 +77,7 @@ struct NutritionFoodPicker: View {
          timeZone: TimeZone, unit: MassUnit, actions: NutritionDiaryActions, onLogged: @escaping () -> Void,
          startsWithBarcode: Bool = false, pickedCount: Int = 0, pickedFoodIDs: Set<String> = [],
          onPick: ((ExerlyCore.Food, FoodPickAmount) -> Int?)? = nil,
-         onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)? = nil,
+         onPickScan: ((ExerlyCore.Food, LoggedAmount, UUID) -> Int?)? = nil, pickedScans: @escaping () -> Set<UUID> = { [] },
          pickError: @escaping () -> String? = { nil }, presentation: FoodPickerPresentation = .sheet, pickingInto: String = "meal",
          confirmsAmounts: Bool = false, initialQuery: String = "", entered: Int = 0) {
         self.workspace = workspace
@@ -88,6 +90,7 @@ struct NutritionFoodPicker: View {
         self.onLogged = onLogged
         self.onPick = onPick
         self.onPickScan = onPickScan
+        self.pickedScans = pickedScans
         self.pickError = pickError
         self.presentation = presentation
         self.pickingInto = pickingInto
@@ -134,7 +137,8 @@ struct NutritionFoodPicker: View {
                 NutritionBarcodeView(workspace: workspace, api: api, date: date, meal: meal,
                                      timeZone: timeZone, unit: unit, actions: actions,
                                      onPicked: picking ? { select($0) } : nil,
-                                     onPickedScan: picking ? onPickScan.map { pick in { food, amount, id in pickScan(food, amount, id, pick) } } : nil) { entries in
+                                     onPickedScan: picking ? onPickScan.map { pick in { food, amount, id in pickScan(food, amount, id, pick) } } : nil,
+                                     pickedScans: pickedScans) { entries in
                     showingBarcode = false
                     finish(entries)
                 }
