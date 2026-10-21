@@ -15,6 +15,10 @@ enum HealthDebugSeed {
         return value
     }
 
+    /// Whether a UI test asked for synthetic sleep, heart rate variability
+    /// and resting heart rate, written when each switch is turned on.
+    static var recovery: Bool { ProcessInfo.processInfo.environment["EXERLY_HEALTH_RECOVERY_SEED"] == "1" }
+
     static func readings(_ spec: String, timeZone: TimeZone, now: Date = Date()) -> [(at: Date, kilograms: Double, bodyFat: Double?)] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone

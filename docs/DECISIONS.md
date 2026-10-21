@@ -2582,3 +2582,22 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - The release check for Apple product names in App Intent text now also
   reads phrase lines, which name the app, so it catches a phrase on its own
   line.
+
+## 2026-10-21: Sleep, heart rate variability and resting heart rate from Health
+
+- Each has its own switch under Health settings › Recovery from Health, and
+  asks Health only for its own type. They're read when the screen shows
+  them and never saved, synced, written or used for advertising.
+- They live in `HealthRecoveryReads.swift` with their own HealthKit client,
+  not in `HealthKitService` and `HealthSync`, so the write-access fix on the
+  nutrition branch doesn't conflict with them.
+- A night counts for the day you wake up. It runs 6 PM to 6 PM by when each
+  sample ends, in the time zone the sample was recorded in, so a flight
+  doesn't split it. Overlapping samples count once.
+- Source priority: when two sources recorded the same night or day, only
+  the best one counts. Health doesn't share the order a person set in it,
+  so Exerly ranks the person's own order first (none can be set yet), then
+  Apple's devices, which is Health's default, then the source with the most
+  samples, then the name.
+- No data shows as missing, never zero, with what to check in Health,
+  because Health doesn't say whether reading was allowed.
