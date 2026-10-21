@@ -534,7 +534,7 @@ const collections = {
     indexes: [{ keys: { account_id: 1 } }],
   },
 
-  // What each restore of an export's older tables added, for Undo. Migrations 0009, 0010.
+  // What each restore of an export's older tables added, for Undo. Migration 0009.
   restores: {
     collection: 'restores',
     fields: {

@@ -732,3 +732,28 @@ test('Undo removes a restored row whose only change is a write that left its con
   const undone = await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
   assert.deepEqual([undone.body.removed, undone.body.kept], [1, 0]);
 });
+
+test('a receipt forgets a tombstone that has changed since Undo left it', async () => {
+  const to = await signUp(api);
+  const auth = { token: to.token };
+  const body = legacyExport({
+    measurements: [
+      { client_id: randomUUID(), type: 'waist', value: 80, unit: 'cm', entry_date: today() },
+    ],
+  });
+  const first = await api.post('/v1/import', body, auth);
+  await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
+  const [row] = await api.store.find(
+    'measurements',
+    { account_id: to.user._id },
+    { includeDeleted: true }
+  );
+  await api.store.update('measurements', { id: row.id }, { revision: row.revision + 2 });
+  await api.post('/v1/import', legacyExport({}), auth);
+  const [receipt] = await api.store.find('restores', { id: first.body.restore_id });
+  assert.deepEqual(
+    receipt.rows,
+    [],
+    'restored and deleted again since, so not the Undo’s to bring back'
+  );
+});

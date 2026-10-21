@@ -594,9 +594,32 @@ async function restoreTables(account, body, result, now) {
     account_id: account.id,
     undone_at: { ne: null },
   });
+  // Read in one go per table: a reference whose row is gone, isn't deleted,
+  // or has moved past the revision Undo left is stale, and is dropped.
+  const current = new Map();
+  const byTable = new Map();
+  for (const receipt of receipts)
+    for (const ref of receipt.rows)
+      byTable.set(ref.table, [...(byTable.get(ref.table) ?? []), ref.id]);
+  for (const [table, ids] of byTable) {
+    const collection = RESTORABLE[table].collection ?? table;
+    for (const filter of ownerFilters(collection, account))
+      for (let i = 0; i < ids.length; i += 5000)
+        for (const row of await store.find(
+          collection,
+          { ...filter, id: { in: ids.slice(i, i + 5000) } },
+          { includeDeleted: true }
+        ))
+          current.set(`${table}/${row.id}`, row);
+  }
+  const live = (ref) => {
+    const row = current.get(`${ref.table}/${ref.id}`);
+    return !!row?.deleted_at && row.revision === ref.revision;
+  };
   const tombstones = new Map();
   for (const receipt of receipts)
-    for (const ref of receipt.rows) tombstones.set(`${ref.table}/${ref.id}`, { receipt, ref });
+    for (const ref of receipt.rows.filter(live))
+      tombstones.set(`${ref.table}/${ref.id}`, { receipt, ref });
   const revived = new Set();
   // Each table's rows by their ID in the export, for rows that point at them.
   const ids = {};
@@ -698,11 +721,12 @@ async function restoreTables(account, body, result, now) {
     }
     counts.restored += saved.length;
   }
-  // A tombstone brought back is spent. An undone receipt with nothing left to
-  // bring back is kept a while, to answer a replayed Undo, then removed.
+  // A tombstone brought back is spent, and a stale one dropped. An undone
+  // receipt with nothing left to bring back is kept a while, to answer a
+  // replayed Undo, then removed.
   const cutoff = now.getTime() - RECEIPT_DAYS * 24 * 3600 * 1000;
   for (const receipt of receipts) {
-    const left = receipt.rows.filter((ref) => !revived.has(`${ref.table}/${ref.id}`));
+    const left = receipt.rows.filter((ref) => live(ref) && !revived.has(`${ref.table}/${ref.id}`));
     if (!left.length && new Date(receipt.undone_at).getTime() < cutoff)
       await store.remove('restores', { id: receipt.id });
     else if (left.length !== receipt.rows.length)

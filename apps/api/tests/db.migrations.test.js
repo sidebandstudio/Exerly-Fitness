@@ -139,3 +139,34 @@ test('a failing migration leaves no partial change behind', async () => {
     await c.end();
   }
 });
+
+test('restore receipts are created whole by one migration, so none is ever upgraded', async () => {
+  const schema = await freshSchema();
+  const c = await client(schema);
+  try {
+    const all = loadMigrations();
+    const creating = all.find((m) => /CREATE TABLE restores\b/.test(m.up));
+    assert.ok(creating, 'a migration creates restores');
+    await migrateUp(
+      c,
+      all.filter((m) => m.version <= creating.version)
+    );
+    const { rows } = await c.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'restores'`,
+      [schema]
+    );
+    assert.deepEqual(
+      rows.map((r) => r.column_name).sort(),
+      Object.keys(collections.restores.fields).concat(['id', 'seq']).sort()
+    );
+    assert.deepEqual(
+      all
+        .filter((m) => m.version > creating.version && /\brestores\b/.test(m.up))
+        .map((m) => m.version),
+      [],
+      'no later migration changes receipts'
+    );
+  } finally {
+    await c.end();
+  }
+});
