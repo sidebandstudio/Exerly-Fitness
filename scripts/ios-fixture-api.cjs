@@ -70,6 +70,9 @@ let offline = false;
 // The account export alone fails, the rest of the API answering: the app's
 // export then falls back to the phone's copy.
 let failExport = false;
+// Holds each sync request (/v1/) this long before answering, for a launch whose
+// first sync is still out when someone logs (TodayLoggingUITests).
+let syncDelayMs = 0;
 let disconnect = false;
 let dropSetupAcknowledgement = false;
 let dropPreferencesAcknowledgement = false;
@@ -182,6 +185,7 @@ providers.lookupBarcode = async (identity) => ({
       setAppleRevocation(req.body.appleRevocation === true);
       offline = req.body.offline === true;
       failExport = req.body.failExport === true;
+      syncDelayMs = Math.max(0, Math.min(60000, Number(req.body.syncDelayMs) || 0));
       disconnect = req.body.disconnect === true;
       dropSetupAcknowledgement = req.body.dropSetupAcknowledgement === true;
       dropPreferencesAcknowledgement = req.body.dropPreferencesAcknowledgement === true;
@@ -214,7 +218,12 @@ providers.lookupBarcode = async (identity) => ({
     const processMs = Number(req.body?.processToReadyMs);
     const initMs = Number(req.body?.initToReadyMs);
     if (!Number.isFinite(processMs) || !Number.isFinite(initMs)) return res.sendStatus(400);
-    launchTimings.push({ processToReadyMs: processMs, initToReadyMs: initMs });
+    const entries = Number(req.body?.entries);
+    launchTimings.push({
+      processToReadyMs: processMs,
+      initToReadyMs: initMs,
+      entries: Number.isFinite(entries) ? entries : null,
+    });
     res.sendStatus(204);
   });
   app.get('/__test/launch-timings', (req, res) => {
@@ -449,6 +458,13 @@ providers.lookupBarcode = async (identity) => ({
     } catch (error) {
       next(error);
     }
+  });
+  app.use((req, res, next) => {
+    if (syncDelayMs > 0 && req.path.startsWith('/v1/')) {
+      setTimeout(next, syncDelayMs);
+      return;
+    }
+    next();
   });
   app.use((req, res, next) => {
     if (failExport && req.path === '/api/export') {

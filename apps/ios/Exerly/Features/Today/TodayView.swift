@@ -31,7 +31,7 @@ struct TodayHostView: View {
                 } description: {
                     Text("Your saved data is still on this device. Keep Exerly installed and try again.")
                 } actions: {
-                    Button("Try again") { Task { await account.configure(auth.accountAPI) } }
+                    Button("Try again") { Task { await account.configure(auth.accountAPI, retrying: true) } }
                         .buttonStyle(.borderedProminent).tint(Color.exActionFill)
                 }
             } else { ProgressView("Opening today…") }
@@ -91,6 +91,9 @@ struct TodayView: View {
     @State private var dayRepeated: [FoodEntry]?
     /// The repeat that logged them, for its day's name.
     @State private var dayRepeat: MealRepeat?
+    /// The day, and the meal, Log again was last built for.
+    @State private var ownedOn: LocalDate?
+    @State private var shelfMeal: String?
     /// This week's check-in when it waits for a decision, refreshed with "Log again".
     @State private var checkIn: TargetsCheckInCard.State?
     /// Foods chosen to copy or move together; nil when not choosing.
@@ -108,7 +111,8 @@ struct TodayView: View {
     struct Toast: Equatable {
         enum Undo: Equatable {
             /// Removes entries just logged.
-            case remove([UUID])
+            /// The entries as logged: only those still as they were are removed.
+            case remove([FoodEntry])
             /// Restores the entry the editor just deleted.
             case restoreDeleted
             /// Deletes the weigh-in just saved.
@@ -224,11 +228,11 @@ struct TodayView: View {
                 let checkInAfter = visible.first { $0 == .training } ?? logAgainAfter
                 if logAgainAfter == nil { logAgain }
                 if checkInAfter == nil { checkInBanner }
-                // The first frame draws the first three cards (the logging
-                // tools, the ring, today's workout); the rest, below the fold
-                // on every phone, follow a frame later (PARITY B03).
-                ForEach(Array(visible.enumerated()), id: \.element) { index, card in
-                    if index < 3 || drawsBelowFold { self.card(card) }
+                // The first frame draws the logging tools and the cards above
+                // them (TodayLayout.drawnFirst); the rest follow a frame later.
+                let first = TodayLayout.drawnFirst(visible)
+                ForEach(visible) { card in
+                    if first.contains(card) || drawsBelowFold { self.card(card) }
                     if card == logAgainAfter { logAgain }
                     if card == checkInAfter { checkInBanner }
                 }
@@ -247,7 +251,9 @@ struct TodayView: View {
         .background(Color.exBackground)
         .accessibilityIdentifier("today.screen")
         .navigationTitle(title)
-        .navigationSubtitle(subtitle)
+        // A confirmation takes the date's place, and its Undo the bar's leading
+        // corner: never over Start or Log again (review round 2).
+        .navigationSubtitle(confirmation.map { typeSize.isAccessibilitySize ? TodayToast.headline($0.message) : $0.message } ?? subtitle)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -255,6 +261,13 @@ struct TodayView: View {
                     .accessibilityIdentifier("today.chooseDate")
             }
             ToolbarItem(placement: .topBarTrailing) { dayMenu }
+            ToolbarItem(placement: .topBarLeading) {
+                if let confirmation, confirmation.undo != nil {
+                    Button("Undo") { undo(confirmation) }
+                        .accessibilityLabel("Undo: \(confirmation.message)")
+                        .accessibilityIdentifier(undoIdentifier(confirmation.undo))
+                }
+            }
         }
         // Below the meals, not over them, so the last foods can be chosen too (run 6).
         .exFooter {
@@ -266,14 +279,18 @@ struct TodayView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        // Only a failure, which has nothing to undo, still shows over the bottom;
+        // water's shows in its card.
         .overlay(alignment: .bottom) {
-            if let toast, selection == nil, !toast.isWater {
-                TodayToast(message: toast.message, failed: toast.failed, undo: toast.undo == nil ? nil : { undo(toast) },
-                           undoIdentifier: undoIdentifier(toast.undo))
+            if let toast, toast.failed, selection == nil, !toast.isWater {
+                TodayToast(message: toast.message, failed: true, undo: nil)
                     .padding(.bottom, ExSpacing.small)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: toast.id) { await expire(toast) }
             }
+        }
+        // The one timer for every confirmation and failure, wherever it shows.
+        .task(id: toast?.id) {
+            if let toast { await expire(toast) }
         }
         .onChange(of: actions.deleted) { _, deleted in
             if let deleted { show("Removed \(deleted.food.name)", undo: .restoreDeleted) }
@@ -296,13 +313,12 @@ struct TodayView: View {
             // Today's workout in the first frame, with Start, not "No workout
             // planned" until the task below has run.
             if plan == nil, isToday { plan = workspace.nextWorkout(bodyweight: bodyweight, unit: unit) }
-            LaunchTiming.loggingReady()
             if !drawsBelowFold { _ = NextFrame { drawsBelowFold = true } }
         }
         .task {
             await workspace.synchronize()
             // Synced history can change the chips; not once one was used.
-            if suggestionsLogged.isEmpty { refreshSuggestions() } else { refreshCheckIn() }
+            refreshSuggestions()
         }
         .onChange(of: date) { _, _ in
             selection = nil
@@ -420,8 +436,7 @@ struct TodayView: View {
                 let confirmation = toast.flatMap { toast in
                     toast.isWater ? AnyView(TodayToast(message: toast.message, undo: { undo(toast) },
                                                        undoIdentifier: undoIdentifier(toast.undo), inline: true)
-                        .transition(.opacity)
-                        .task(id: toast.id) { await expire(toast) }) : nil
+                        .transition(.opacity)) : nil
                 }
                 TodayWaterCard(date: date, store: store, imperial: unit == .pounds, goal: waterGoal, confirmation: confirmation) { change in
                     let amount = WaterDisplay.amount(abs(change), imperial: unit == .pounds)
@@ -457,14 +472,18 @@ struct TodayView: View {
         let weigh = TodayQuickAction(title: "Weigh in", icon: "scalemass.fill", identifier: "today.weighIn") {
             destination = .weighIn
         }
-        if typeSize.isAccessibilitySize {
-            Grid(horizontalSpacing: ExSpacing.small, verticalSpacing: ExSpacing.small) {
-                GridRow { search; scan }
-                GridRow { quick; weigh }
+        Group {
+            if typeSize.isAccessibilitySize {
+                Grid(horizontalSpacing: ExSpacing.small, verticalSpacing: ExSpacing.small) {
+                    GridRow { search; scan }
+                    GridRow { quick; weigh }
+                }
+            } else {
+                HStack(spacing: ExSpacing.small) { search; scan; quick; weigh }
             }
-        } else {
-            HStack(spacing: ExSpacing.small) { search; scan; quick; weigh }
         }
+        // Launch's end: the logging controls themselves on screen (LaunchTiming).
+        .onAppear { LaunchTiming.loggingReady(entries: store.entries.count) }
     }
 
     /// The meal new food goes into: by habit and time today, Snacks on other days.
@@ -532,6 +551,7 @@ struct TodayView: View {
                 .scrollIndicators(.hidden)
                 .padding(.horizontal, -ExSpacing.page)
             }
+            .onAppear { LaunchTiming.loggingReady(entries: store.entries.count) }
         } else if let day {
             TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, logged: dayLogged, row: true) { repeatDay(day) }
         }
@@ -556,11 +576,11 @@ struct TodayView: View {
     /// Deletes `copies` that are still as logged, and the confirmation that offered to.
     private func remove(_ copies: [FoodEntry], announcing message: String) {
         do {
-            // An entry edited since is left alone.
-            for copy in copies where store.entries.first(where: { $0.id == copy.id }) == copy { try store.deleteEntry(copy.id) }
+            // An entry edited since is left alone (TodayUndo).
+            for id in TodayUndo.removable(copies, in: store.entries) { try store.deleteEntry(id) }
             UISelectionFeedbackGenerator().selectionChanged()
             withAnimation(.snappy) {
-                if case .remove(let ids) = toast?.undo, Set(ids) == Set(copies.map(\.id)) { toast = nil }
+                if case .remove(let logged) = toast?.undo, Set(logged.map(\.id)) == Set(copies.map(\.id)) { toast = nil }
             }
             UIAccessibility.post(notification: .announcement, argument: message)
             Task { await workspace.synchronize() }
@@ -575,7 +595,8 @@ struct TodayView: View {
 
     /// Those of `entries` still logged as they were; nil if none are.
     private func present(_ entries: [FoodEntry]?) -> [FoodEntry]? {
-        let kept = (entries ?? []).filter { entry in store.entries.first { $0.id == entry.id } == entry }
+        let ids = Set(TodayUndo.removable(entries ?? [], in: store.entries))
+        let kept = (entries ?? []).filter { ids.contains($0.id) }
         return kept.isEmpty ? nil : kept
     }
 
@@ -613,7 +634,7 @@ struct TodayView: View {
             let entry = try store.log(suggestion, on: date, meal: meal)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             withAnimation(.snappy) { suggestionsLogged[suggestion.food.foodID] = entry }
-            show("Logged \(suggestion.food.name) to \(meal)", undo: .remove([entry.id]))
+            show("Logged \(suggestion.food.name) to \(meal)", undo: .remove([entry]))
             Task { await workspace.synchronize() }
         } catch { show("Could not log \(suggestion.food.name). Try again.", failed: true) }
     }
@@ -622,11 +643,11 @@ struct TodayView: View {
     private func unlog(_ entry: FoodEntry) {
         do {
             // An entry edited since is left alone; its chip just resets.
-            if store.entries.first(where: { $0.id == entry.id }) == entry { try store.deleteEntry(entry.id) }
+            for id in TodayUndo.removable([entry], in: store.entries) { try store.deleteEntry(id) }
             UISelectionFeedbackGenerator().selectionChanged()
             withAnimation(.snappy) {
                 suggestionsLogged[entry.food.foodID] = nil
-                if toast?.undo == .remove([entry.id]) { toast = nil }
+                if toast?.undo == .remove([entry]) { toast = nil }
             }
             UIAccessibility.post(notification: .announcement, argument: "Removed \(entry.food.name)")
             Task { await workspace.synchronize() }
@@ -644,15 +665,29 @@ struct TodayView: View {
         } catch { show("Could not hide \(suggestion.food.name). Try again.", failed: true) }
     }
 
+    /// Rebuilds Log again. On the day its chips and repeats logged something
+    /// they still own, that survives any refresh (the launch's first sync,
+    /// pull to refresh, coming back to the app): the shelf, with its checks
+    /// and Undo, while it's still the meal it was built for, and the day's
+    /// repeat all day. A new day starts afresh; another account opens a new
+    /// Today.
     private func refreshSuggestions() {
-        // Once the meal the chips log into has food, its usual foods would log it twice.
-        let mealLogged = store.entries(on: today).contains { $0.meal == currentMeal }
-        suggested = mealLogged ? [] : store.suggestions(at: .now, timeZone: timeZone, limit: 10)
-        suggestionsLogged = [:]
-        mealRepeat = mealLogged ? nil : store.repeatable(currentMeal, for: today)
-        mealRepeated = nil
-        dayRepeated = nil
-        dayRepeat = nil
+        let sameDay = ownedOn == today
+        ownedOn = today
+        let shelfOwns = present(Array(suggestionsLogged.values)) != nil || present(mealRepeated) != nil
+        if !(sameDay && shelfOwns && shelfMeal == currentMeal) {
+            shelfMeal = currentMeal
+            // Once the meal the chips log into has food, its usual foods would log it twice.
+            let mealLogged = store.entries(on: today).contains { $0.meal == currentMeal }
+            suggested = mealLogged ? [] : store.suggestions(at: .now, timeZone: timeZone, limit: 10)
+            suggestionsLogged = [:]
+            mealRepeat = mealLogged ? nil : store.repeatable(currentMeal, for: today)
+            mealRepeated = nil
+        }
+        if !(sameDay && present(dayRepeated) != nil) {
+            dayRepeated = nil
+            dayRepeat = nil
+        }
         refreshCheckIn()
     }
 
@@ -698,31 +733,44 @@ struct TodayView: View {
         }
     }
 
+    /// The confirmation in the navigation bar: not a failure, not water's
+    /// (in its card), and with something still to undo when it offers to
+    /// remove entries.
+    private var confirmation: Toast? {
+        guard let toast, !toast.failed, !toast.isWater else { return nil }
+        if case .remove(let entries) = toast.undo, present(entries) == nil { return nil }
+        return toast
+    }
+
     private func show(_ message: String, undo: Toast.Undo? = nil, failed: Bool = false) {
         withAnimation(.snappy) { toast = Toast(message: message, undo: undo, failed: failed) }
         UIAccessibility.post(notification: .announcement, argument: message)
     }
 
     /// Takes `toast` away once there's been long enough to reach Undo,
-    /// longer still with VoiceOver.
+    /// longer still with VoiceOver. In the bar a confirmation covers nothing,
+    /// so it stays long enough to change one's mind; water's, in its card,
+    /// and a failure stay less long.
     private func expire(_ toast: Toast) async {
-        try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 12 : 6))
+        let voiceOver = UIAccessibility.isVoiceOverRunning
+        let seconds = toast.isWater || toast.failed ? (voiceOver ? 12 : 6) : voiceOver ? 25 : 15
+        try? await Task.sleep(for: .seconds(seconds))
         withAnimation(.snappy) { if self.toast == toast { self.toast = nil } }
     }
 
     private func undo(_ toast: Toast) {
         switch toast.undo {
-        case .remove(let ids):
-            do {
-                for id in ids where store.entries.contains(where: { $0.id == id }) { try store.deleteEntry(id) }
-                withAnimation(.snappy) {
-                    self.toast = nil
-                    suggestionsLogged = suggestionsLogged.filter { !ids.contains($0.value.id) }
-                    if mealRepeated?.contains(where: { ids.contains($0.id) }) == true { mealRepeated = nil }
-                    if dayRepeated?.contains(where: { ids.contains($0.id) }) == true { dayRepeated = nil; dayRepeat = nil }
-                }
-                Task { await workspace.synchronize() }
-            } catch { show("Could not undo. The entries are still logged.", failed: true) }
+        case .remove(let entries):
+            // The same removal as a chip's second tap: an entry changed since,
+            // here or on another device, is left alone.
+            remove(entries, announcing: "Undone")
+            let ids = Set(entries.map(\.id))
+            withAnimation(.snappy) {
+                if self.toast == toast { self.toast = nil }
+                suggestionsLogged = suggestionsLogged.filter { !ids.contains($0.value.id) }
+                if present(mealRepeated) == nil { mealRepeated = nil }
+                if present(dayRepeated) == nil { dayRepeated = nil; dayRepeat = nil }
+            }
         case .restoreDeleted:
             withAnimation(.snappy) { self.toast = nil }
             if actions.undoDeletion() { Task { await workspace.synchronize() } }
@@ -978,7 +1026,7 @@ struct TodayView: View {
             switch action {
             case .copy:
                 let copies = try store.copy(chosen.map(\.id), to: target, meal: meal)
-                show("Copied \(what) to \(place)", undo: .remove(copies.map(\.id)))
+                show("Copied \(what) to \(place)", undo: .remove(copies))
             case .move:
                 try store.move(chosen.map(\.id), to: target, meal: meal)
                 show("Moved \(what) to \(place)", undo: .moveBack(chosen))
@@ -993,7 +1041,7 @@ struct TodayView: View {
         do {
             let entry = try store.log(recipe, on: date, meal: meal)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            show("Logged \(recipe.food.name) to \(meal)", undo: .remove([entry.id]))
+            show("Logged \(recipe.food.name) to \(meal)", undo: .remove([entry]))
             Task { await workspace.synchronize() }
         } catch { show("Could not log \(recipe.food.name). Try again.", failed: true) }
     }
@@ -1007,7 +1055,7 @@ struct TodayView: View {
             let what = repeated.meal.map { "\(source)'s \($0.lowercased())" }
                 ?? (copied.count == store.entries(on: date).count ? "all of \(source)" : "the rest of \(source)")
             show("Repeated \(what): \(TodayRepeatChip.foods(copied.count)), \(TodayNutritionCard.number(repeated.energy)) kcal",
-                 undo: .remove(copied.map(\.id)))
+                 undo: .remove(copied))
             Task { await workspace.synchronize() }
             return copied
         } catch {

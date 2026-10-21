@@ -382,7 +382,8 @@ struct TodayToast: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// "Repeated yesterday's breakfast" of "Repeated yesterday's breakfast: 2 foods, 170 kcal".
-    private var headline: String { String(message.split(separator: ":", maxSplits: 1).first ?? Substring(message)) }
+    static func headline(_ message: String) -> String { String(message.split(separator: ":", maxSplits: 1).first ?? Substring(message)) }
+    private var headline: String { Self.headline(message) }
 
     var body: some View {
         // At the largest sizes Undo goes under the message, as in Add food's toast.

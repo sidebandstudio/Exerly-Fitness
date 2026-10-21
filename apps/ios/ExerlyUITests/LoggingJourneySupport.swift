@@ -14,7 +14,7 @@ extension ExerlyUITestCase {
     func budgetHome(prefix: String) async throws -> (XCUIApplication, (email: String, token: String)) {
         try await control([:])
         let person = try await createAccount(prefix: prefix, units: "imperial")
-        try await seedWeek(token: person.token)
+        try await seedLoggingWeek(token: person.token)
         try await deleteSetupWeight(token: person.token)
         try await seedTwoDayPlan(token: person.token)
         let app = launch(resetSession: true)
@@ -23,6 +23,47 @@ extension ExerlyUITestCase {
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 20))
         XCTAssertTrue(app.navigationBars["Today"].exists, "On the home screen")
         return (app, person)
+    }
+
+    /// seedWeek's foods, with breakfast as a habit around now on four days,
+    /// but yesterday's lunch and dinner at 12:30 and 18:30 on yesterday's
+    /// date, so `yesterdaysFood` is yesterday's at any hour of the day.
+    func seedLoggingWeek(token: String) async throws {
+        let yogurt = SeedFood(name: "Greek yogurt, plain", per100g: ["energy": 73, "protein": 10, "carbohydrate": 3.9, "fat": 1.9])
+        let berries = SeedFood(name: "Blueberries", per100g: ["energy": 57, "protein": 0.7, "carbohydrate": 14.5, "fat": 0.3])
+        let oats = SeedFood(name: "Rolled oats", per100g: ["energy": 380, "protein": 13, "carbohydrate": 67, "fat": 7])
+        let chicken = SeedFood(name: "Chicken breast, grilled", per100g: ["energy": 165, "protein": 31, "carbohydrate": 0, "fat": 3.6])
+        let rice = SeedFood(name: "Jasmine rice, cooked", per100g: ["energy": 130, "protein": 2.7, "carbohydrate": 28, "fat": 0.3])
+        let salmon = SeedFood(name: "Salmon fillet", per100g: ["energy": 208, "protein": 20, "carbohydrate": 0, "fat": 13])
+        let potato = SeedFood(name: "Roasted potatoes", per100g: ["energy": 149, "protein": 2.5, "carbohydrate": 24, "fat": 4.8])
+        for food in [yogurt, berries, oats, chicken, rice, salmon, potato] {
+            let payload: [String: Any] = ["id": food.id, "name": food.name, "source": "custom", "per100g": food.per100g,
+                                          "servings": [], "favorite": false, "createdAt": "2026-10-01T12:00:00.000Z"]
+            _ = try await request("PUT", "/v1/documents/saved_food/\(food.id)", body: ["base_revision": 0, "payload": payload], token: token)
+        }
+        // Breakfast a few minutes before now's time of day on yesterday's date
+        // and three before, odd days with oats; only yesterday's is repeated.
+        var clock = Calendar(identifier: .gregorian)
+        clock.timeZone = Self.newYork
+        let now = clock.dateComponents([.hour, .minute], from: Date())
+        for day in 1...4 {
+            let at = Self.local(-day, now.hour ?? 8, (now.minute ?? 0) - 5)
+            for (food, grams) in [(yogurt, 170.0), (berries, 80)] + (day % 2 == 0 ? [(oats, 50.0)] : []) {
+                try await seedEntry(food, grams: grams, date: Self.day(-day).date, at: at, meal: "Breakfast", token: token)
+            }
+        }
+        for (food, grams, meal, hour) in [(chicken, 180.0, "Lunch", 12), (rice, 200, "Lunch", 12), (salmon, 150, "Dinner", 18), (potato, 220, "Dinner", 18)] {
+            try await seedEntry(food, grams: grams, date: Self.day(-1).date, at: Self.local(-1, hour, 30), meal: meal, token: token)
+        }
+        try await seedEntry(chicken, grams: 150, date: Self.day(-3).date, at: Self.local(-3, 18, 30), meal: "Dinner", token: token)
+    }
+
+    private func seedEntry(_ food: SeedFood, grams: Double, date: String, at: Date, meal: String, token: String) async throws {
+        let id = UUID().uuidString
+        let entry: [String: Any] = ["id": id, "date": date, "meal": meal, "loggedAt": Self.iso(at),
+                                    "food": ["foodID": food.id, "name": food.name, "source": "custom", "per100g": food.per100g],
+                                    "grams": grams]
+        _ = try await request("PUT", "/v1/documents/food_entry/\(id)", body: ["base_revision": 0, "payload": entry], token: token)
     }
 
     /// Counts the next task from zero.

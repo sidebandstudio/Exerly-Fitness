@@ -9,19 +9,33 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "today.suggestion.log.", name)).firstMatch
     }
 
+    /// Taps a Log again chip, scrolling the shelf sideways first when it's
+    /// off to the right; `tap(_:in:)` only scrolls up and down.
+    private func tapChip(_ name: String, in app: XCUIApplication) {
+        let chip = foodChip(name, in: app)
+        let meal = app.buttons["today.repeatMeal"]
+        reveal(meal, in: app)
+        for _ in 0..<5 where chip.exists && !app.frame.contains(chip.frame) {
+            let row = meal.frame.midY / app.frame.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: row))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: row)))
+        }
+        tap(chip, in: app)
+    }
+
     /// Blueberries first, then the meal: the meal adds only the yogurt, and
     /// each check takes back only its own food.
     func testAFoodThenItsMealEachUndoOnlyTheirOwn() async throws {
         let (app, person) = try await budgetHome(prefix: "chips-food-first")
         let meal = app.buttons["today.repeatMeal"]
         XCTAssertTrue(meal.waitForExistence(timeout: 20))
-        tap(foodChip("Blueberries", in: app), in: app)
+        tapChip("Blueberries", in: app)
         try await expectEntries(token: person.token, ["Blueberries"], meal: "Breakfast")
         XCTAssertTrue(meal.label.hasPrefix("Repeat Yesterday's breakfast, 1 food"), "What's left of it: \(meal.label)")
         tap(meal, in: app)
         try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
 
-        tap(foodChip("Blueberries", in: app), in: app)
+        tapChip("Blueberries", in: app)
         try await expectEntries(token: person.token, ["Greek yogurt, plain"])
         XCTAssertTrue(foodChip("Blueberries", in: app).label.hasPrefix("Log Blueberries"), "Its own entry gone, the chip logs again")
         tap(meal, in: app)
@@ -38,7 +52,7 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
         let berries = foodChip("Blueberries", in: app)
         XCTAssertTrue(berries.label.contains("already in breakfast"), berries.label)
-        tap(berries, in: app)
+        tapChip("Blueberries", in: app)
         try await Task.sleep(for: .seconds(2))
         try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"])
 
@@ -59,7 +73,7 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         try await expectEntries(token: person.token, Self.yesterdaysFood)
         XCTAssertTrue(meal.label.contains("already logged"), meal.label)
         tap(meal, in: app)
-        tap(foodChip("Blueberries", in: app), in: app)
+        tapChip("Blueberries", in: app)
         try await Task.sleep(for: .seconds(2))
         try await expectEntries(token: person.token, Self.yesterdaysFood)
         XCTAssertTrue(day.label.hasPrefix("Repeated yesterday, 6 foods. Undo"), day.label)
@@ -105,5 +119,139 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         XCTAssertEqual(tapCount, 2, "Weigh in, Same as last: the weigh-in budget is 3")
         let saved = try await waitForWeighIn(token: person.token) { $0["date"] as? String == today }
         XCTAssertEqual((saved?["weight"] as? [String: Any])?["value"] as? Double ?? 0, 181.4, accuracy: 0.001)
+    }
+
+    // MARK: Review round 2
+
+    /// One entry of today's food on the server, by name.
+    private func todaysEntry(_ name: String, token: String) async throws -> [String: Any]? {
+        let today = Self.day(0).date
+        return try await liveDocuments("food_entry", token: token).values.first {
+            $0["date"] as? String == today && ($0["food"] as? [String: Any])?["name"] as? String == name
+        }
+    }
+
+    /// Changes an entry's grams on the server, as another device would.
+    private func editOnAnotherDevice(_ entry: [String: Any], grams: Double, token: String) async throws {
+        let id = try XCTUnwrap(entry["id"] as? String)
+        let current = try await request("GET", "/v1/documents/food_entry/\(id)", token: token)
+        let revision = try XCTUnwrap(current["revision"] as? Int)
+        var payload = try XCTUnwrap(current["payload"] as? [String: Any])
+        payload["grams"] = grams
+        _ = try await request("PUT", "/v1/documents/food_entry/\(id)", body: ["base_revision": revision, "payload": payload], token: token)
+    }
+
+    /// Leaves the app and comes back, which syncs, until Today shows the
+    /// entry's new amount. What's on screen, its confirmation included, stays.
+    private func syncToday(until label: String, in app: XCUIApplication) {
+        let edited = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "nutrition.entry.", label)).firstMatch
+        for _ in 0..<4 where !edited.exists {
+            XCUIDevice.shared.press(.home)
+            app.activate()
+            _ = edited.waitForExistence(timeout: 8)
+        }
+        XCTAssertTrue(edited.exists, "The edit synced: \(label)")
+    }
+
+    /// A copy edited on another device after a repeat outlives every Undo:
+    /// the confirmation's and the chip's take back only unchanged copies, and
+    /// once nothing they may take back is left, the confirmation's Undo goes.
+    func testAnEditedCopyOutlivesEveryUndo() async throws {
+        let (app, person) = try await budgetHome(prefix: "undo-edited")
+        let meal = app.buttons["today.repeatMeal"]
+        XCTAssertTrue(meal.waitForExistence(timeout: 20))
+        tap(meal, in: app)
+        try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
+        let berries = try await waitForEntry("Blueberries", token: person.token)
+        try await editOnAnotherDevice(berries, grams: 95, token: person.token)
+        syncToday(until: "95 g", in: app)
+        let undo = app.buttons["today.undo"]
+        XCTAssertTrue(undo.exists && undo.isHittable, "The confirmation's Undo is still offered")
+        undo.tap()
+        try await expectEntries(token: person.token, ["Blueberries"])
+        let kept = try await todaysEntry("Blueberries", token: person.token)
+        XCTAssertEqual(kept?["grams"] as? Double, 95, "The edited copy is kept")
+
+        // The whole day, one copy edited, then the day's own Undo: the
+        // confirmation's Undo has nothing left that it may take back.
+        tap(app.buttons["today.repeatDay"], in: app)
+        let rice = try await waitForEntry("Jasmine rice, cooked", token: person.token)
+        try await editOnAnotherDevice(rice, grams: 210, token: person.token)
+        syncToday(until: "210 g", in: app)
+        tap(app.buttons["today.repeatDay"], in: app)
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 5), "Nothing the confirmation may take back is left")
+        try await expectEntries(token: person.token, ["Blueberries", "Jasmine rice, cooked"])
+    }
+
+    private func waitForEntry(_ name: String, token: String) async throws -> [String: Any] {
+        for _ in 0..<60 {
+            if let entry = try await todaysEntry(name, token: token) { return entry }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        throw XCTSkip("\(name) never reached the server")
+    }
+
+    /// The keypad's keys stay where they are while a weight is typed and
+    /// cleared: a key's frame is the same before the first digit, after it,
+    /// and after Delete takes it away.
+    func testTheWeighInKeypadStaysPutWhileTyping() async throws {
+        let (app, _) = try await budgetHome(prefix: "weigh-steady")
+        tap(app.buttons["today.weighIn"], in: app)
+        let five = app.buttons["exerly.keypad.5"]
+        XCTAssertTrue(five.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["weighIn.sameAsLast"].exists)
+        Thread.sleep(forTimeInterval: 1)
+        let before = five.frame
+        app.buttons["exerly.keypad.1"].tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertEqual(five.frame, before, "After the first digit")
+        app.buttons["exerly.keypad.delete"].tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        XCTAssertEqual(five.frame, before, "After Delete empties it")
+    }
+
+    /// A repeat made while the launch's first sync is still out keeps its
+    /// check and its Undo when that sync comes back.
+    func testARepeatKeepsItsUndoThroughTheStartupSync() async throws {
+        let (app, person) = try await budgetHome(prefix: "undo-startup-sync")
+        let day = app.buttons["today.repeatDay"]
+        // All of yesterday on the device before it's opened again.
+        let all = NSPredicate(format: "label BEGINSWITH %@", "Repeat all of yesterday, breakfast, lunch and dinner, 6 foods")
+        await fulfillment(of: [expectation(for: all, evaluatedWith: day)], timeout: 60)
+        // Opened again from what's on the device, with the server holding each
+        // sync request for fifteen seconds.
+        try await control(["syncDelayMs": 15000])
+        app.launchArguments.removeAll { $0 == "--ui-testing" }
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(day.waitForExistence(timeout: 15))
+        day.tap()
+        XCTAssertTrue(day.label.hasPrefix("Repeated yesterday, 6 foods. Undo"), day.label)
+        // Requests from now on are answered at once; the launch's held ones in
+        // under fifteen seconds. Once the copies are on the server and the held
+        // sync is back, the day's own Undo is still there.
+        try await control([:])
+        try await expectEntries(token: person.token, Self.yesterdaysFood)
+        try await Task.sleep(for: .seconds(20))
+        XCTAssertTrue(day.label.hasPrefix("Repeated yesterday, 6 foods. Undo"), "Still its own Undo: \(day.label)")
+        tap(day, in: app)
+        try await expectEntries(token: person.token, [])
+    }
+
+    /// Log, then start today's workout straight away: the confirmation never
+    /// covers Start.
+    func testLoggingThenStartingTheWorkoutStraightAway() async throws {
+        let (app, _) = try await budgetHome(prefix: "log-then-start")
+        let chip = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 20))
+        chip.tap()
+        let start = app.buttons["today.startWorkout"]
+        XCTAssertTrue(start.waitForExistence(timeout: 5))
+        XCTAssertTrue(start.isHittable, "Start isn't under the confirmation")
+        let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged ")).firstMatch
+        XCTAssertTrue(confirmation.exists, "The confirmation shows")
+        XCTAssertFalse(confirmation.frame.intersects(start.frame), "and doesn't overlap Start")
+        start.tap()
+        XCTAssertTrue(app.buttons["training.finish"].waitForExistence(timeout: 10), "The tap started the workout")
     }
 }

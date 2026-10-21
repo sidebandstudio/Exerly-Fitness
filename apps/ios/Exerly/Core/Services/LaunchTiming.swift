@@ -3,9 +3,11 @@ import Foundation
 import QuartzCore
 import os
 
-/// Cold launch to logging (PARITY B03). Two figures, both ending on the first
-/// frame drawn after Today, with Log again, appears (the next display refresh,
-/// not `onAppear`, which runs before anything is drawn):
+/// Cold launch to logging (PARITY B03). Two figures, both ending once the
+/// frame that draws Today's logging controls (Log again, or the shortcuts when
+/// there's no Log again) has been presented: their `onAppear` runs while that
+/// frame is built, the next display refresh commits it, and the one after
+/// follows its presentation, which is when this ends:
 /// - from the process starting, read from the kernel, so it includes loading
 ///   the app's code: the end-to-end number LaunchToLoggingUITests gates on;
 /// - a signpost interval from the app's own start, for Instruments and
@@ -23,6 +25,8 @@ enum LaunchTiming {
     private static var interval: OSSignpostIntervalState?
     private static var started: Date?
     private static var frame: NextFrame?
+    /// Food entries on the device when launch ended, reported with its time.
+    private static var entries = 0
 
     static func begin() {
         guard interval == nil, started == nil else { return }
@@ -31,10 +35,12 @@ enum LaunchTiming {
         mark("app init")
     }
 
-    /// Today, with its logging controls, has appeared: ends on the frame that draws it.
-    static func loggingReady() {
+    /// Today's logging controls have appeared: ends once the frame that
+    /// draws them has been presented, two display refreshes on.
+    static func loggingReady(entries: Int) {
         guard interval != nil, frame == nil else { return }
-        frame = NextFrame { finish() }
+        Self.entries = entries
+        frame = NextFrame { frame = NextFrame { finish() } }
     }
 
     private static func finish() {
@@ -44,7 +50,7 @@ enum LaunchTiming {
         frame = nil
         let now = Date()
         let process = now.timeIntervalSince(processStart) * 1000, app = now.timeIntervalSince(started) * 1000
-        log.info("launch: logging on screen \(Int(process)) ms after the process started, \(Int(app)) ms after the app's")
+        log.info("launch: logging on screen \(Int(process)) ms after the process started, \(Int(app)) ms after the app's, \(entries) entries")
         report(processMs: process, appMs: app)
     }
 
@@ -63,7 +69,8 @@ enum LaunchTiming {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["processToReadyMs": processMs, "initToReadyMs": appMs])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["processToReadyMs": processMs, "initToReadyMs": appMs,
+                                                                        "entries": entries])
         URLSession.shared.dataTask(with: request).resume()
         #endif
     }
