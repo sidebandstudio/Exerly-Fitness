@@ -366,75 +366,173 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertEqual(workspace.barcodes.ready.map(\.id), [ready.id])
     }
 
-    /// 1,000 seeded random runs of the real plate draft: offline scans put on
-    /// the scanner's plate or a meal, merged into a row, cancelled, removed,
-    /// logged with commits that sometimes fail and are retried, discarded, and
-    /// relaunched. Every scan ends pending with its intent or logged exactly once.
+    /// 1,000 seeded runs of 40 steps through real scanner sessions: the
+    /// scanner's plate, and a meal being built that picks only what its own
+    /// scanner offers. Scans offline and online, picks and re-picks from a
+    /// scanner opened again, cancels at a portion, merges, removes rows, logs
+    /// alone or as a plate with commits that fail and are edited and retried,
+    /// undoes all or part of a log, says Not needed, removes history,
+    /// discards, and relaunches. Every offline scan ends exactly one way:
+    /// pending with its meal, day and time, logged once, or dismissed.
     func testRandomPlateHistoriesNeverLoseOrDoubleAScan() async throws {
         for seed in 0..<1_000 { try await randomPlateHistory(seed: UInt64(seed)) }
     }
 
+    private struct ModelLog {
+        var entries: [FoodEntry]
+        /// The scans each food's rows came from.
+        var scans: [String: Set<UUID>]
+    }
+
     private func randomPlateHistory(seed: UInt64) async throws {
         var random = PlateRandom(seed: seed)
-        let disk = CommitFailingStore()
-        var library = BarcodeLibrary(persistence: disk)
-        var store = try NutritionStore(persistence: disk)
+        let disk = CommitFailingStore(), clock = PlateClock()
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar"), juice: food(juice, "Synthetic apple juice"),
+                                                 cola: food(cola, "Synthetic cola")])
+        let api = AccountAPI(accountID: "barcode-account", transport: transport)
         let date = try XCTUnwrap(LocalDate("2026-10-20"))
-        func newPlates() -> [NutritionPlateDraft] {
-            [NutritionPlateDraft(store: store, date: date, meal: "Lunch"), NutritionPlateDraft(store: store, date: date, meal: "Dinner")]
-        }
-        var plates = newPlates()
-        var intents: [UUID: (meal: String, date: LocalDate)] = [:]
+        let codes = [bar, juice, cola], meals = ["Breakfast", "Lunch", "Snacks"]
+        let portions = [try NutritionStore.preview(food(bar, ""), grams: 40), try NutritionStore.preview(food(bar, ""), grams: 80)]
+        var library = BarcodeLibrary(persistence: disk, now: { clock.now })
+        var store = try NutritionStore(persistence: disk)
+        var intents: [UUID: (meal: String, at: Date)] = [:]
         var logged: [UUID: Int] = [:]
+        var dismissed: Set<UUID> = []
         var entries = 0
+        var lastLog: ModelLog?
         var offline = true
-        let codes = [bar, juice, cola]
-        let portion = try NutritionStore.preview(food(bar, ""), grams: 40)
-        func onPlates() -> Set<UUID> { plates.reduce(into: Set<UUID>()) { $0.formUnion($1.pending) } }
-        func relaunch() throws {
-            library = BarcodeLibrary(persistence: disk)
-            store = try NutritionStore(persistence: disk)
-            plates = newPlates()
+        func session(excluding excluded: @escaping () -> Set<UUID> = { [] }) -> BarcodeScanSession {
+            BarcodeScanSession(library: library, store: store, api: api, date: date, meal: "Lunch", unit: .kilograms, timeZone: .gmt,
+                               excluded: excluded)
         }
-        for _ in 0..<30 {
-            let plate = plates[random.next(2)]
-            switch random.next(10) {
+        var scanner = session()
+        var meal = NutritionPlateDraft(store: store, date: date, meal: "Dinner")
+        var mealScanner: BarcodeScanSession?
+        func relaunch() throws {
+            library = BarcodeLibrary(persistence: disk, now: { clock.now })
+            store = try NutritionStore(persistence: disk)
+            scanner = session()
+            meal = NutritionPlateDraft(store: store, date: date, meal: "Dinner")
+            mealScanner = nil
+            lastLog = nil
+        }
+        /// The offline scans a scanner offers that can be used now.
+        func offered(_ session: BarcodeScanSession) -> [BarcodeLibrary.Pending] {
+            session.pastScans.compactMap { past -> BarcodeLibrary.Pending? in
+                guard case .pending(let scan) = past, session.library.usable(scan.gtin) != nil else { return nil }
+                return scan
+            }
+        }
+        func record(_ rows: [(food: String, pending: Set<UUID>)], _ written: [FoodEntry]) {
+            var scans: [String: Set<UUID>] = [:]
+            for row in rows {
+                for id in row.pending { logged[id, default: 0] += 1 }
+                scans[row.food, default: []].formUnion(row.pending)
+            }
+            entries += written.count
+            lastLog = ModelLog(entries: written, scans: scans)
+        }
+        transport.setOffline(offline)
+        for _ in 0..<40 {
+            clock.now += 60
+            switch random.next(15) {
             case 0, 1:
-                let code = codes[random.next(3)], meal = ["Lunch", "Dinner", "Snacks"][random.next(3)]
-                if case .queued = await library.resolve(code, meal: meal, date: date, fetch: { [self] gtin in
-                    offline ? .unavailable : .found(food(gtin, "Synthetic \(gtin.display)"), attribution: "OFF")
-                }) { intents[library.pending.last!.id] = (meal, date) }
+                // A scan for a meal; offline, it's saved with that meal.
+                let chosen = meals[random.next(3)]
+                scanner.plate.meal = chosen
+                let before = Set(library.pending.map(\.id))
+                await scanner.scanned(ScannedCode(gtin: codes[random.next(3)], symbology: .ean13))
+                for scan in library.pending where !before.contains(scan.id) { intents[scan.id] = (chosen, clock.now) }
             case 2:
                 offline.toggle()
-                if !offline { await library.resolveWaiting { [self] gtin in .found(food(gtin, "Synthetic \(gtin.display)"), attribution: "OFF") } }
+                transport.setOffline(offline)
+                if !offline { await scanner.resolveWaiting() }
             case 3, 4:
-                // Onto a plate: a new row, or merged into its food's row.
-                guard let scan = library.ready.filter({ !onPlates().contains($0.id) }).randomElement(using: &random),
-                      let product = library.usable(scan.gtin) else { continue }
-                if let row = plate.rows.first(where: { $0.food.id == product.food.id }), random.next(2) == 0 {
-                    XCTAssertTrue(plate.stage(product.food, amount: portion, replacing: row, pending: scan.id))
-                } else {
-                    XCTAssertTrue(plate.stage(product.food, amount: portion, pending: scan.id))
+                // The scanner's Recent scans: joins its plate, or logs alone.
+                guard let scan = offered(scanner).randomElement(using: &random), let product = library.usable(scan.gtin) else { continue }
+                if !scanner.pastScansJoinThePlate, random.next(4) == 0 {
+                    disk.failNextCommit = true
+                    guard case .failed = scanner.use(.pending(scan)) else { return XCTFail("seed \(seed): a failed commit logs nothing") }
+                    continue
                 }
-            case 5:
-                // Cancelled at its portion step: nothing reaches the draft.
-                continue
-            case 6:
-                if let row = plate.rows.randomElement(using: &random) { XCTAssertTrue(plate.remove(row)) }
+                switch scanner.use(.pending(scan)) {
+                case .logged(let entry):
+                    XCTAssertEqual(entry.meal, intents[scan.id]?.meal, "seed \(seed)")
+                    record([(product.food.id, [scan.id])], [entry])
+                case .addedToPlate: break
+                case .failed: XCTFail("seed \(seed): a scan the scanner offers can be used")
+                }
+            case 5, 6:
+                // The meal's scanner, sometimes opened again for a re-pick.
+                if mealScanner == nil || random.next(3) == 0 {
+                    let draft = meal
+                    mealScanner = session { draft.pending }
+                }
+                guard let picker = mealScanner, let scan = offered(picker).randomElement(using: &random),
+                      let product = library.usable(scan.gtin) else { continue }
+                // Cancelled at its portion step: nothing reaches the meal.
+                if random.next(4) == 0 { continue }
+                XCTAssertTrue(meal.stage(product.food, amount: portions[random.next(2)], pending: scan.id),
+                              "seed \(seed): a scan the meal's scanner offers joins the meal")
             case 7:
+                let plate = random.next(2) == 0 ? scanner.plate : meal
+                if let row = plate.rows.randomElement(using: &random) { XCTAssertTrue(plate.remove(row)) }
+            case 8, 9:
+                // Logs either plate; a failed commit is edited, then retried.
+                let onScanner = random.next(2) == 0
+                let plate = onScanner ? scanner.plate : meal
                 guard !plate.rows.isEmpty else { continue }
-                let ids = plate.pending, count = plate.rows.count
+                if random.next(3) == 0 {
+                    disk.failNextCommit = true
+                    XCTAssertNil(onScanner ? scanner.logAll() : plate.save(consuming: library), "seed \(seed)")
+                    // A scan logged elsewhere stops it before it commits.
+                    disk.failNextCommit = false
+                    if let row = plate.rows.randomElement(using: &random) {
+                        XCTAssertTrue(plate.stage(row.food, amount: portions[random.next(2)], replacing: row))
+                    }
+                }
+                let rows = plate.rows.map { (food: $0.food.id, pending: $0.pending) }
+                guard let written = onScanner ? scanner.logAll() : plate.save(consuming: library) else {
+                    // Only a scan logged elsewhere stops it; the food stays to log on purpose.
+                    XCTAssertEqual(plate.error?.contains("already logged"), true, "seed \(seed): \(plate.error ?? "")")
+                    continue
+                }
+                record(rows, written)
+                if onScanner {
+                    scanner = session()
+                } else {
+                    meal = NutritionPlateDraft(store: store, date: date, meal: "Dinner")
+                    mealScanner = nil
+                }
+            case 10:
+                // Undo, all of the last log or one food of it, sometimes failing.
+                guard var last = lastLog else { continue }
+                let foods = Set(last.entries.map(\.food.foodID))
+                let only = random.next(2) == 0 ? foods : [foods.randomElement(using: &random)!]
+                let undone = last.entries.filter { only.contains($0.food.foodID) }
                 if random.next(4) == 0 {
                     disk.failNextCommit = true
-                    XCTAssertNil(plate.save(consuming: library), "seed \(seed)")
-                    if random.next(3) == 0 { try relaunch(); continue }
+                    XCTAssertThrowsError(try library.unlog(undone, from: store), "seed \(seed)")
+                    continue
                 }
-                XCTAssertNotNil(plate.save(consuming: library), "seed \(seed)")
-                for id in ids { logged[id, default: 0] += 1 }
-                entries += count
-                plates[plates.firstIndex { $0 === plate }!] = NutritionPlateDraft(store: store, date: date, meal: plate.meal)
-            case 8:
-                plate.discard()
+                XCTAssertEqual(try library.unlog(undone, from: store).count, undone.count, "seed \(seed)")
+                for food in only { for id in last.scans[food] ?? [] { logged[id, default: 0] -= 1 } }
+                entries -= undone.count
+                last.entries.removeAll { only.contains($0.food.foodID) }
+                for food in only { last.scans[food] = nil }
+                lastLog = last.entries.isEmpty ? nil : last
+            case 11:
+                // Not needed, on either scanner: resolved scans not on its plates go.
+                let onMeal = random.next(2) == 0 && mealScanner != nil
+                let chosen = onMeal ? mealScanner! : scanner
+                let held = chosen.plate.pending.union(onMeal ? meal.pending : [])
+                for scan in library.pending where scan.state != .waiting && !held.contains(scan.id) { dismissed.insert(scan.id) }
+                chosen.dismissReady()
+            case 12:
+                // Removed from the history; offline scans of it stay.
+                if let scan = library.history.randomElement(using: &random) { library.remove(scan.gtin) }
+            case 13:
+                if random.next(2) == 0 { scanner.discard() } else { meal.discard() }
             default:
                 try relaunch()
             }
@@ -443,9 +541,12 @@ final class BarcodeScanSessionTests: XCTestCase {
         for (id, intent) in intents {
             let times = logged[id] ?? 0
             let record = library.pending.first { $0.id == id }
-            XCTAssertLessThanOrEqual(times, 1, "seed \(seed)")
-            XCTAssertNotEqual(record != nil, times == 1, "seed \(seed): pending \(record != nil), logged \(times)")
-            if let record { XCTAssertTrue(record.meal == intent.meal && record.date == intent.date, "seed \(seed)") }
+            XCTAssertTrue(times == 0 || times == 1, "seed \(seed): logged \(times) times")
+            let ends = [record != nil, times == 1, dismissed.contains(id)].filter { $0 }.count
+            XCTAssertEqual(ends, 1, "seed \(seed): pending \(record != nil), logged \(times), dismissed \(dismissed.contains(id))")
+            if let record {
+                XCTAssertTrue(record.meal == intent.meal && record.date == date && record.scannedAt == intent.at, "seed \(seed)")
+            }
         }
         XCTAssertEqual(store.entries.count, entries, "seed \(seed)")
     }
@@ -499,6 +600,8 @@ private final class CommitFailingStore: TrainingPersistence, DocumentPersistence
         }
     }
 }
+
+private final class PlateClock { var now = Date(timeIntervalSinceReferenceDate: 810_000_000) }
 
 private struct PlateRandom: RandomNumberGenerator {
     private var state: UInt64

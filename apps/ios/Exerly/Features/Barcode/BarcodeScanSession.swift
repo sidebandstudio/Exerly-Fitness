@@ -68,13 +68,19 @@ final class BarcodeScanSession: ObservableObject {
     private let excluded: () -> Set<UUID>
     private var plateChanges: AnyCancellable?
 
-    init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String, unit: MassUnit, timeZone: TimeZone,
-         excluded: @escaping () -> Set<UUID> = { [] }) {
+    convenience init(workspace: TrainingWorkspace, api: AccountAPI, date: LocalDate, meal: String, unit: MassUnit, timeZone: TimeZone,
+                     excluded: @escaping () -> Set<UUID> = { [] }) {
+        self.init(library: workspace.barcodes, store: workspace.nutrition, api: api, date: date, meal: meal, unit: unit,
+                  timeZone: timeZone, excluded: excluded)
+    }
+
+    init(library: BarcodeLibrary, store: NutritionStore, api: AccountAPI, date: LocalDate, meal: String, unit: MassUnit,
+         timeZone: TimeZone, excluded: @escaping () -> Set<UUID> = { [] }) {
         self.api = api
         self.excluded = excluded
-        store = workspace.nutrition
-        library = workspace.barcodes
-        plate = NutritionPlateDraft(store: workspace.nutrition, date: date, meal: meal, unit: unit, timeZone: timeZone)
+        self.store = store
+        self.library = library
+        plate = NutritionPlateDraft(store: store, date: date, meal: meal, unit: unit, timeZone: timeZone)
         // The tray redraws as the plate changes.
         plateChanges = plate.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
