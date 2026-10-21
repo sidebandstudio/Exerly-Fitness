@@ -305,6 +305,26 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertTrue(relaunched.nutrition.entries.isEmpty)
     }
 
+    /// Two plates hold one offline scan and the first logs it: the second
+    /// isn't logged, says which food was already logged, and keeps that food
+    /// as a plain food, so logging again adds it once more on purpose.
+    func testAPlateWhoseScanWasLoggedElsewhereSaysSo() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar")])
+        let (scanner, workspace) = try session(transport)
+        let scan = try await readyScan(bar, scanner, transport)
+        let date = try XCTUnwrap(LocalDate("2026-10-20")), portion = try NutritionStore.preview(food(bar, ""), grams: 40)
+        let (first, second) = (NutritionPlateDraft(store: workspace.nutrition, date: date, meal: "Lunch"),
+                               NutritionPlateDraft(store: workspace.nutrition, date: date, meal: "Dinner"))
+        for plate in [first, second] { XCTAssertTrue(plate.stage(food(bar, "Synthetic oat bar"), amount: portion, pending: scan.id)) }
+        XCTAssertEqual(first.save(consuming: workspace.barcodes)?.count, 1)
+        XCTAssertNil(second.save(consuming: workspace.barcodes))
+        XCTAssertEqual(second.error?.hasPrefix("Synthetic oat bar was already logged"), true, second.error ?? "no error")
+        XCTAssertEqual(workspace.nutrition.entries.count, 1)
+        XCTAssertTrue(second.pending.isEmpty && second.rows.count == 1)
+        XCTAssertEqual(second.save(consuming: workspace.barcodes)?.count, 1)
+        XCTAssertEqual(workspace.nutrition.entries.count, 2)
+    }
+
     /// The commit fails: the draft isn't marked logged and nothing changed, so
     /// trying again writes the entry and consumes the scan, once.
     func testAFailedCommitCanBeRetriedWithoutLosingTheScan() async throws {
