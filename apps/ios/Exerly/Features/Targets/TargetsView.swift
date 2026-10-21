@@ -278,11 +278,8 @@ struct TargetsView: View {
             ExEyebrow("What it's based on")
             if let basis = plan.basis {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(BodyFormat.kcal(basis.expenditure)).font(.exStatMedium).monospacedDigit().foregroundStyle(Color.exTextPrimary)
-                        Text("kcal a day").font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
-                        Text("±\(BodyFormat.kcal(basis.expenditureError))").font(.exLabel).foregroundStyle(Color.exTextMuted)
-                    }
+                    ExFigure(value: BodyFormat.kcal(basis.expenditure), unit: "kcal a day", detail: "±\(BodyFormat.kcal(basis.expenditureError))",
+                             valueFont: .exStatMedium)
                     Text("Expenditure when this version started, likely \(BodyFormat.kcal(basis.expenditure - basis.expenditureError)) "
                         + "to \(BodyFormat.kcal(basis.expenditure + basis.expenditureError)) kcal, at a trend weight of "
                         + "\(BodyFormat.weight(basis.trendWeight, unit)).")
@@ -316,6 +313,7 @@ struct TargetsView: View {
                 Text("Now").font(.exLabel).foregroundStyle(Color.exTextSecondary)
                 Spacer(minLength: ExSpacing.small)
                 Text(BodyFormat.kcal(value.kcal)).font(.exStatSmall).monospacedDigit().foregroundStyle(Color.exTextPrimary)
+                    .lineLimit(1).fixedSize()
                 Text("±\(BodyFormat.kcal(value.error)) kcal").font(.exCaption).foregroundStyle(Color.exTextMuted)
             }
             .accessibilityElement(children: .ignore)

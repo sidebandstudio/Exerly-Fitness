@@ -391,6 +391,37 @@ struct ExFlowLayout: Layout {
     }
 }
 
+/// A figure with its unit and a ± after it: side by side while they fit,
+/// then the unit under the figure, then everything stacked with the figure
+/// shrunk to one line. A number never breaks across lines ("2,6" over "40").
+struct ExFigure: View {
+    let value: String
+    let unit: String
+    var detail: String?
+    var valueFont: Font = .exStat
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) { figure.fixedSize(); unitText.fixedSize(); detailText.fixedSize() }
+            VStack(alignment: .leading, spacing: 0) {
+                figure.fixedSize()
+                HStack(alignment: .firstTextBaseline, spacing: 5) { unitText.fixedSize(); detailText.fixedSize() }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                figure.lineLimit(1).minimumScaleFactor(0.5)
+                unitText
+                detailText
+            }
+        }
+    }
+
+    private var figure: some View { Text(value).font(valueFont).monospacedDigit().foregroundStyle(Color.exTextPrimary) }
+    private var unitText: some View { Text(unit).font(.exBodyMedium).foregroundStyle(Color.exTextSecondary) }
+    @ViewBuilder private var detailText: some View {
+        if let detail { Text(detail).font(.exLabel).foregroundStyle(Color.exTextMuted) }
+    }
+}
+
 struct ExQuantityControl: View {
     let title: String
     @Binding var text: String

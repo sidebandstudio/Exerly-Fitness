@@ -284,11 +284,7 @@ struct BodyWeightSection<Measurements: View>: View {
             ExEyebrow("Expenditure")
             if value.isMeasured {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(BodyFormat.kcal(value.kcal)).font(.exStat).monospacedDigit().foregroundStyle(Color.exTextPrimary)
-                        Text("kcal a day").font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
-                        Text("±\(BodyFormat.kcal(value.error))").font(.exLabel).foregroundStyle(Color.exTextMuted)
-                    }
+                    ExFigure(value: BodyFormat.kcal(value.kcal), unit: "kcal a day", detail: "±\(BodyFormat.kcal(value.error))")
                     Text("Likely \(BodyFormat.kcal(value.kcal - value.error)) to \(BodyFormat.kcal(value.kcal + value.error)) kcal a day")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 }
