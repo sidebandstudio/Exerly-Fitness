@@ -617,10 +617,12 @@ paths:
       summary: Undo a restore of the older tables
       description: |
         Removes the rows the restore named by `restore_id` added, in one
-        transaction, once. A row changed since is kept. `rows`, if sent, must
-        be among them; any other row is refused. Rows a phone syncs are
-        marked deleted, with a change in its feed. The app only, 10 a minute
-        per account.
+        transaction. A row whose content changed since is kept. `rows`, if
+        sent, must be among them; any other row is refused. Rows a phone syncs
+        are marked deleted, with a change in its feed. Sent again, it answers
+        with the first Undo's counts and `already_undone: true`, so a client
+        that lost the answer can finish. The app only, 10 a minute per
+        account.
       requestBody:
         required: true
         content:
@@ -647,10 +649,10 @@ paths:
                 properties:
                   removed: { type: integer }
                   kept: { type: integer }
+                  already_undone: { type: boolean }
         '400': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
 
   /v1/documents/{kind}/{id}:
     parameters:

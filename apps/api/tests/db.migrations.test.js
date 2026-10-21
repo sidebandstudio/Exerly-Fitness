@@ -108,7 +108,7 @@ test('concurrent starts apply each migration exactly once', async () => {
     const results = await Promise.all(clients.map((c) => migrateUp(c)));
     const applied = results.flat();
     assert.deepEqual(
-      applied.sort(),
+      applied.sort((a, b) => a - b),
       loadMigrations().map((m) => m.version)
     );
     const { rows } = await clients[0].query('SELECT count(*)::int AS n FROM schema_migrations');

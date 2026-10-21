@@ -12,7 +12,7 @@ const v = require('./validate');
 const sync = require('./sync');
 const { OWNERSHIP, ownerFilters } = require('./ownership');
 const { NUTRIENTS, NUTRIENT_UNITS } = require('./nutrition/validate');
-const { badRequest, conflict, notFound } = require('./errors');
+const { badRequest, notFound } = require('./errors');
 const { DIET_TYPES } = require('./nutrition');
 // Each table's checks, from the routes that write it.
 const activities = require('../routes/activities');
@@ -320,9 +320,20 @@ const RESTORABLE = {
       note: v.str(row.note, 'note', { required: false, max: 500 }),
     }),
   },
+  checkins: {
+    match: ['entry_date'],
+    check: (row) => ({
+      entry_date: v.dateStr(row.entry_date, 'entry_date'),
+      ...numbers(row, ['expenditure', 'mean_intake', 'calories', 'protein_g', 'carbs_g', 'fat_g']),
+      ...numbers(row, ['trend_weight_kg', 'trend_change_kg'], { min: -500, max: 500 }),
+      note: v.str(row.note, 'note', { required: false, max: 1000 }),
+    }),
+  },
   // Several versions can start on one day; they differ in when and why.
   target_versions: {
     match: ['effective_date', 'created_at', 'reason', 'targets'],
+    // The source account's check-in becomes the restored one, or none.
+    refs: { checkin_id: 'checkins' },
     check: (row) => {
       if (!row.targets || typeof row.targets !== 'object' || Array.isArray(row.targets))
         throw badRequest('targets must be an object');
@@ -452,28 +463,33 @@ const RESTORABLE = {
       last_checkin_date: v.dateStr(row.last_checkin_date, 'last_checkin_date', { required: false }),
     }),
   },
-  checkins: {
-    match: ['entry_date'],
-    check: (row) => ({
-      entry_date: v.dateStr(row.entry_date, 'entry_date'),
-      ...numbers(row, ['expenditure', 'mean_intake', 'calories', 'protein_g', 'carbs_g', 'fat_g']),
-      ...numbers(row, ['trend_weight_kg', 'trend_change_kg'], { min: -500, max: 500 }),
-      note: v.str(row.note, 'note', { required: false, max: 1000 }),
-    }),
-  },
   library_foods: { match: ['name', 'brand', 'barcode'], check: (row) => library.readFood(row) },
   recipes: {
     match: ['name', 'created_at'],
-    // Stored ingredients are already scaled by their servings.
+    // An ingredient is stored as totals for its servings; the route's check
+    // takes it per serving, so it's read back that way first.
     check: (row) => ({
       name: v.str(row.name, 'name', { max: 200 }),
-      ingredients: library
-        .readIngredients(
-          Array.isArray(row.ingredients)
-            ? row.ingredients.map((item) => ({ ...item, servings: undefined }))
-            : row.ingredients
-        )
-        .map((item, i) => ({ ...item, servings: row.ingredients[i]?.servings ?? 1 })),
+      ingredients: library.readIngredients(
+        Array.isArray(row.ingredients)
+          ? row.ingredients.map((item, i) => {
+              const servings =
+                v.num(item?.servings, `ingredients[${i}].servings`, {
+                  required: false,
+                  min: 0.01,
+                  max: 100,
+                }) ?? 1;
+              const per = (value) =>
+                value == null || value === '' || !Number.isFinite(Number(value))
+                  ? value
+                  : Number(value) / servings;
+              const out = { ...item, servings };
+              for (const field of ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'])
+                out[field] = per(item?.[field]);
+              return out;
+            })
+          : row.ingredients
+      ),
       servings: v.num(row.servings, 'servings', { required: false, min: 0.5, max: 100 }) ?? 1,
       note: v.str(row.note, 'note', { required: false, max: 1000 }),
     }),
@@ -528,11 +544,21 @@ function matchValue(value) {
   return typeof value === 'object' ? JSON.stringify(ordered(value)) : String(value);
 }
 
-/** A stored row's fingerprint. Undo removes a restored row only while it's unchanged. */
+/**
+ * A stored row's fingerprint, of what it says rather than when or how often it
+ * was written. Undo removes a restored row only while it says the same.
+ */
+const WRITE_FIELDS = ['updated_at', 'revision', 'revision_locked'];
 const fingerprint = (row) =>
   createHash('sha256')
-    .update(JSON.stringify(ordered(row)))
+    .update(
+      JSON.stringify(
+        ordered(Object.fromEntries(Object.entries(row).filter(([f]) => !WRITE_FIELDS.includes(f))))
+      )
+    )
     .digest('hex');
+// How long an undone receipt with nothing left to bring back answers a replayed Undo.
+const RECEIPT_DAYS = 30;
 
 /** A row as the phone's feed carries it, as the table's routes send it. */
 function feedRecord(rule, row) {
@@ -561,16 +587,19 @@ function matchKeys(rule, row, { stored = false } = {}) {
 /** Restores the server's older tables in the export into the account. Call inside a transaction. */
 async function restoreTables(account, body, result, now) {
   const added = [];
-  // Rows an earlier restore added and its Undo removed: restoring again brings
-  // them back. A row the person deleted, even one a later restore brought
-  // back, stays deleted.
-  const records = await store.find('restores', { account_id: account.id });
-  const refs = (undone) =>
-    records
-      .filter((record) => !!record.undone_at === undone)
-      .flatMap((record) => record.rows.map((ref) => `${ref.table}/${ref.id}`));
-  const live = new Set(refs(false));
-  const undone = new Set(refs(true).filter((ref) => !live.has(ref)));
+  // The deletions earlier Undos made: restoring again brings back exactly
+  // those, while they're still at the revision Undo left. A row deleted any
+  // other way, or changed since, stays as it is.
+  const receipts = await store.find('restores', {
+    account_id: account.id,
+    undone_at: { ne: null },
+  });
+  const tombstones = new Map();
+  for (const receipt of receipts)
+    for (const ref of receipt.rows) tombstones.set(`${ref.table}/${ref.id}`, { receipt, ref });
+  const revived = new Set();
+  // Each table's rows by their ID in the export, for rows that point at them.
+  const ids = {};
   for (const [key, rule] of Object.entries(RESTORABLE)) {
     const collection = rule.collection ?? key;
     const rows = Array.isArray(body[key])
@@ -590,6 +619,8 @@ async function restoreTables(account, body, result, now) {
     const fields = schema.collections[collection].fields;
     const saved = [];
     const pending = [];
+    const origins = { revived: [], pending: [] };
+    const mapped = (ids[key] = new Map());
     for (const original of rows) {
       if (!original || typeof original !== 'object' || original.deleted_at) continue;
       let checked;
@@ -603,15 +634,20 @@ async function restoreTables(account, body, result, now) {
         continue;
       }
       const row = { ...original, ...checked };
+      for (const [field, table] of Object.entries(rule.refs ?? {}))
+        row[field] = ids[table]?.get(String(original[field])) ?? null;
       // A single row (goals, program) is kept when the account has its own.
       const match = matchKeys(rule, row)
         .map((k) => have.get(k))
         .find(Boolean);
-      const revive = match?.deleted_at && undone.has(`${key}/${match.id}`) ? match : null;
+      const tombstone = match?.deleted_at && tombstones.get(`${key}/${match.id}`);
+      const revive = tombstone && tombstone.ref.revision === match.revision ? match : null;
       if (rule.match.length === 0 ? existing.length > 0 : match && !revive) {
+        if (match?.id && original.id != null) mapped.set(String(original.id), match.id);
         counts.kept += 1;
         continue;
       }
+      if (revive) revived.add(`${key}/${revive.id}`);
       for (const field of ['id', '_id', 'pending_sync', ...OWNERSHIP[collection].keys])
         delete row[field];
       const values = { account_id: account.id, userId: account.id, email: account.email };
@@ -637,7 +673,11 @@ async function restoreTables(account, body, result, now) {
             }
           )
         );
-      } else pending.push(row);
+        origins.revived.push(original);
+      } else {
+        pending.push(row);
+        origins.pending.push(original);
+      }
       // The same row twice in one file is kept the second time.
       for (const k of matchKeys(rule, row, { stored: true })) have.set(k, row);
     }
@@ -648,11 +688,25 @@ async function restoreTables(account, body, result, now) {
         account,
         saved.map((row) => ({ kind: rule.feed, record: feedRecord(rule, row) }))
       );
+    const from = [...origins.revived, ...origins.pending];
+    saved.forEach((row, i) => {
+      if (from[i].id != null) mapped.set(String(from[i].id), row.id);
+    });
     for (const row of saved) {
       added.push({ table: key, id: row.id, fingerprint: fingerprint(row) });
       result.restored.push({ table: key, id: row.id, revision: row.revision ?? null });
     }
     counts.restored += saved.length;
+  }
+  // A tombstone brought back is spent. An undone receipt with nothing left to
+  // bring back is kept a while, to answer a replayed Undo, then removed.
+  const cutoff = now.getTime() - RECEIPT_DAYS * 24 * 3600 * 1000;
+  for (const receipt of receipts) {
+    const left = receipt.rows.filter((ref) => !revived.has(`${ref.table}/${ref.id}`));
+    if (!left.length && new Date(receipt.undone_at).getTime() < cutoff)
+      await store.remove('restores', { id: receipt.id });
+    else if (left.length !== receipt.rows.length)
+      await store.update('restores', { id: receipt.id }, { rows: left });
   }
   // What this restore added, so Undo removes exactly those rows.
   if (added.length) {
@@ -747,7 +801,9 @@ async function importExport(account, body, { now = new Date() } = {}) {
  * unless they changed since. Only rows the server recorded for this restore
  * of this account; `rows`, when sent, must be among them. All or nothing.
  * Rows a phone syncs leave a deletion in its feed, as a delete from the app
- * would.
+ * would. Undoing again answers with what the first Undo did and
+ * `already_undone`, so a phone that lost the answer can finish its own part.
+ * The receipt then keeps only the deletions a later restore may bring back.
  */
 async function undoRestore(account, body) {
   const restoreID = body?.restore_id;
@@ -755,13 +811,16 @@ async function undoRestore(account, body) {
     return { error: 'Send the restore_id the import returned.' };
   if (body.rows != null && !Array.isArray(body.rows))
     return { error: 'rows must be the rows the import restored.' };
-  const result = { removed: 0, kept: 0 };
+  let result = { removed: 0, kept: 0 };
   await store.transaction(async () => {
     const record = UUID.test(restoreID)
       ? await store.findOne('restores', { id: restoreID, account_id: account.id })
       : null;
     if (!record) throw notFound('That restore isn’t in this account.');
-    if (record.undone_at) throw conflict('That restore was already undone.');
+    if (record.undone_at) {
+      result = { ...(record.outcome ?? { removed: 0, kept: 0 }), already_undone: true };
+      return;
+    }
     let refs = record.rows;
     if (body.rows) {
       const ids = new Map(record.rows.map((ref) => [`${ref.table}/${ref.id}`, ref]));
@@ -772,6 +831,7 @@ async function undoRestore(account, body) {
       });
     }
     const now = new Date();
+    const tombstones = [];
     const tables = new Map();
     for (const ref of refs) tables.set(ref.table, [...(tables.get(ref.table) ?? []), ref]);
     // Read, removed and reported table by table, not row by row.
@@ -806,7 +866,10 @@ async function undoRestore(account, body) {
               { deleted_at: now, updated_at: now, revision }
             );
         }
-        for (const row of gone) row.updated_at = now;
+        for (const row of gone) {
+          row.updated_at = now;
+          tombstones.push({ table, id: row.id, revision: row.revision });
+        }
       } else {
         const ids = gone.map((row) => row.id);
         for (let i = 0; i < ids.length; i += 5000)
@@ -819,7 +882,11 @@ async function undoRestore(account, body) {
         );
       result.removed += gone.length;
     }
-    await store.update('restores', { id: record.id }, { undone_at: now });
+    await store.update(
+      'restores',
+      { id: record.id },
+      { undone_at: now, outcome: result, rows: tombstones }
+    );
   });
   return result;
 }

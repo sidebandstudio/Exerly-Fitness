@@ -534,7 +534,7 @@ const collections = {
     indexes: [{ keys: { account_id: 1 } }],
   },
 
-  // What each restore of an export's older tables added, for Undo. Migration 0009.
+  // What each restore of an export's older tables added, for Undo. Migrations 0009, 0010.
   restores: {
     collection: 'restores',
     fields: {
@@ -542,8 +542,9 @@ const collections = {
       rows: t.json,
       created_at: t.date,
       undone_at: t.date,
+      outcome: t.json,
     },
-    indexes: [{ keys: { account_id: 1 } }],
+    indexes: [{ keys: { account_id: 1 } }, { keys: { account_id: 1, undone_at: 1 } }],
   },
 
   // Webhooks. Migration 0007.

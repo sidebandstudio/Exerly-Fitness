@@ -466,7 +466,8 @@ test('Undo removes only what the restore added, and keeps rows changed since', a
   assert.deepEqual(names, ['Mine', 'Renamed']);
   assert.deepEqual((await api.get('/api/goals', auth)).body, {});
   const twice = await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
-  assert.equal(twice.status, 409, 'a restore is undone once');
+  assert.equal(twice.status, 200, 'replaying Undo answers with what it did');
+  assert.deepEqual(twice.body, { ...undone.body, already_undone: true });
 });
 
 test('restored rows pass the checks an API write gets, and the rest are listed as skipped', async () => {
@@ -598,4 +599,136 @@ test('importing again after Undo brings the rows back, but not a row the person 
   assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
   const third = await api.post('/v1/import', body, auth);
   assert.equal(third.body.tables.measurements.kept, 1, 'a deletion of their own stays');
+});
+
+// Review round 3.
+
+test('a row Undo kept and the person then deleted stays deleted when the file is imported again', async () => {
+  const to = await signUp(api);
+  const auth = { token: to.token };
+  const body = legacyExport({
+    measurements: [
+      { client_id: randomUUID(), type: 'waist', value: 80, unit: 'cm', entry_date: today() },
+    ],
+  });
+  const first = await api.post('/v1/import', body, auth);
+  const [row] = await api.store.find('measurements', { account_id: to.user._id });
+  const edited = await api.put(
+    `/api/measurements/${row.id}`,
+    { type: 'waist', value: 81, unit: 'cm', entry_date: today(), base_revision: row.revision },
+    { ...auth, headers: key() }
+  );
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  const undone = await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
+  assert.deepEqual([undone.body.removed, undone.body.kept], [0, 1], 'the edit keeps it');
+  const deleted = await api.del(`/api/measurements/${row.id}`, {
+    ...auth,
+    headers: { 'If-Match': String(edited.body.revision), ...key() },
+  });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  const again = await api.post('/v1/import', body, auth);
+  assert.equal(again.body.tables.measurements.kept, 1, 'their own deletion stands');
+  const [after] = await api.store.find(
+    'measurements',
+    { account_id: to.user._id },
+    { includeDeleted: true }
+  );
+  assert.ok(after.deleted_at, 'still deleted');
+});
+
+test('a recipe restores with its ingredient servings checked and its totals read per serving', async () => {
+  const from = await signUp(api);
+  const made = await api.post(
+    '/api/library/recipes',
+    {
+      name: 'Synthetic bulk stew',
+      ingredients: [{ name: 'Synthetic stock', calories: 1000, servings: 50 }],
+    },
+    { token: from.token }
+  );
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const exported = (await api.get('/api/export', { token: from.token })).body;
+  assert.equal(exported.recipes[0].ingredients[0].calories, 50000, 'stored as the total');
+  exported.recipes.push({
+    name: 'Synthetic negative',
+    created_at: '2026-10-01T08:00:00.000Z',
+    ingredients: [{ name: 'Synthetic thing', calories: 100, servings: -5 }],
+  });
+  const to = await signUp(api);
+  const res = await api.post('/v1/import', exported, { token: to.token });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body.tables.recipes, { restored: 1, kept: 0, skipped: 1 });
+  const [stew] = await api.store.find('recipes', { email: to.email });
+  assert.deepEqual(
+    [stew.ingredients[0].calories, stew.ingredients[0].servings],
+    [50000, 50],
+    'the same totals and servings as the source'
+  );
+});
+
+test('a restored target version points at the restored check-in, or at none', async () => {
+  const to = await signUp(api);
+  const day = today();
+  const version = (checkin, at) => ({
+    effective_date: day,
+    targets: { calories: 2000 },
+    reason: 'checkin',
+    checkin_id: checkin,
+    created_at: at,
+  });
+  const body = legacyExport({
+    checkins: [{ id: 'source-checkin', entry_date: day, calories: 2000 }],
+    target_versions: [
+      version('source-checkin', '2026-10-01T08:00:00.000Z'),
+      version('elsewhere', '2026-10-01T09:00:00.000Z'),
+    ],
+  });
+  const res = await api.post('/v1/import', body, { token: to.token });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const [checkin] = await api.store.find('checkins', { email: to.email });
+  const versions = await api.store.find('target_versions', { account_id: to.user._id });
+  assert.deepEqual(versions.map((v) => v.checkin_id).sort(), [checkin.id, null].sort());
+});
+
+test('an undone receipt keeps only the deletions it may bring back, and goes once it holds none', async () => {
+  const to = await signUp(api);
+  const auth = { token: to.token };
+  const body = legacyExport({
+    water: [{ entry_date: today(), ml: 1500 }],
+    measurements: [
+      { client_id: randomUUID(), type: 'waist', value: 80, unit: 'cm', entry_date: today() },
+    ],
+  });
+  const first = await api.post('/v1/import', body, auth);
+  await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
+  const [receipt] = await api.store.find('restores', { account_id: to.user._id });
+  assert.deepEqual(
+    receipt.rows.map((ref) => [ref.table, ref.revision]),
+    [['measurements', 2]],
+    'water is gone for good; the measurement is a tombstone at revision 2'
+  );
+  assert.ok(receipt.rows.every((ref) => !ref.fingerprint));
+
+  // Brought back, so the receipt holds nothing, and an old empty receipt goes.
+  await api.post('/v1/import', body, auth);
+  const [spent] = await api.store.find('restores', { id: first.body.restore_id });
+  assert.deepEqual(spent.rows, []);
+  const old = new Date(Date.now() - 40 * 24 * 3600 * 1000);
+  await api.store.update('restores', { id: spent.id }, { undone_at: old });
+  await api.post('/v1/import', legacyExport({}), auth);
+  assert.equal((await api.store.find('restores', { id: spent.id })).length, 0);
+});
+
+test('Undo removes a restored row whose only change is a write that left its content alone', async () => {
+  const to = await signUp(api);
+  const auth = { token: to.token };
+  const first = await api.post(
+    '/v1/import',
+    legacyExport({ weights: [{ entry_date: today(), weight_kg: 80 }] }),
+    auth
+  );
+  const [row] = await api.store.find('weights', { email: to.email });
+  await api.store.update('weights', { id: row.id }, { revision: 2, updated_at: new Date() });
+  const undone = await api.post('/v1/import/undo', { restore_id: first.body.restore_id }, auth);
+  assert.deepEqual([undone.body.removed, undone.body.kept], [1, 0]);
 });
