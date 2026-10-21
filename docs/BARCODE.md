@@ -44,13 +44,13 @@ and Open Food Facts code for the same inputs (`keysMatchTheServer`).
 
 Prefixes that aren't products are recognised and never looked up:
 
-| GTIN-13 prefix | Meaning | What the scanner says |
-| --- | --- | --- |
-| 020–029, 200–299 | In-store weighed or priced label (item + price or weight) | "This is a store's own label" |
-| 040–049, and EAN-8s starting 0 or 2 | A store's own number (restricted circulation) | "This code only works in its store" |
-| 050–059, 980–984, 990–999 | Coupon or refund receipt | "This is a coupon" |
-| 977–979 | ISSN, ISBN, ISMN | "This is a book or magazine" |
-| GTIN-14 indicator 9 | Variable-measure trade item | "This is a store's own label" |
+| GTIN-13 prefix                      | Meaning                                                   | What the scanner says               |
+| ----------------------------------- | --------------------------------------------------------- | ----------------------------------- |
+| 020–029, 200–299                    | In-store weighed or priced label (item + price or weight) | "This is a store's own label"       |
+| 040–049, and EAN-8s starting 0 or 2 | A store's own number (restricted circulation)             | "This code only works in its store" |
+| 050–059, 980–984, 990–999           | Coupon or refund receipt                                  | "This is a coupon"                  |
+| 977–979                             | ISSN, ISBN, ISMN                                          | "This is a book or magazine"        |
+| GTIN-14 indicator 9                 | Variable-measure trade item                               | "This is a store's own label"       |
 
 GS1 reserves EAN-8s starting 0 or 2 for numbers a company issues for itself, so two
 retailers can use one for different foods: they're never looked up, and a cached product
@@ -133,22 +133,22 @@ noise and a ±2° hand tremble.
 Results on devbox1 (M1 Max, macOS, Vision's current revision), 2026-10-20: hit rate by
 symbology and condition, where a hit is the right GTIN accepted from two frames.
 
-| Symbology | n | clean | rotated | perspective | curved | blurred | low contrast | low light | small | damaged |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| EAN-13 | 10 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| UPC-A | 10 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| EAN-8 | 10 | 100% | 60% | 100% | 100% | 100% | 100% | 100% | 0% | 100% |
-| UPC-E | 10 | 100% | 100% | 100% | 100% | 90% | 100% | 100% | 0% | 100% |
-| ITF-14 | 10 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| GS1-128 | 10 | 100% | 100% | 100% | 100% | 100% | 100% | 60% | 100% | 100% |
-| GS1 DataBar | 10 | 80% | 100% | 80% | 90% | 30% | 80% | 0% | 40% | 80% |
-| GS1 DataBar Stacked | 10 | 70% | 70% | 50% | 70% | 20% | 80% | 0% | 10% | 70% |
-| GS1 Digital Link QR | 10 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 20% |
-| GS1 DataBar Expanded | 6 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| GS1 DataBar Limited | 6 | 100% | 100% | 0% | 100% | 67% | 100% | 0% | 0% | 100% |
-| GS1 DataMatrix | 6 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| Micro QR | 6 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 50% |
-| All | 114 | 96% | 94% | 89% | 96% | 84% | 96% | 74% | 64% | 86% |
+| Symbology            |   n | clean | rotated | perspective | curved | blurred | low contrast | low light | small | damaged |
+| -------------------- | --: | ----: | ------: | ----------: | -----: | ------: | -----------: | --------: | ----: | ------: |
+| EAN-13               |  10 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |    100% |
+| UPC-A                |  10 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |    100% |
+| EAN-8                |  10 |  100% |     60% |        100% |   100% |    100% |         100% |      100% |    0% |    100% |
+| UPC-E                |  10 |  100% |    100% |        100% |   100% |     90% |         100% |      100% |    0% |    100% |
+| ITF-14               |  10 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |    100% |
+| GS1-128              |  10 |  100% |    100% |        100% |   100% |    100% |         100% |       60% |  100% |    100% |
+| GS1 DataBar          |  10 |   80% |    100% |         80% |    90% |     30% |          80% |        0% |   40% |     80% |
+| GS1 DataBar Stacked  |  10 |   70% |     70% |         50% |    70% |     20% |          80% |        0% |   10% |     70% |
+| GS1 Digital Link QR  |  10 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |     20% |
+| GS1 DataBar Expanded |   6 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |    100% |
+| GS1 DataBar Limited  |   6 |  100% |    100% |          0% |   100% |     67% |         100% |        0% |    0% |    100% |
+| GS1 DataMatrix       |   6 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |    100% |
+| Micro QR             |   6 |  100% |    100% |        100% |   100% |    100% |         100% |      100% |  100% |     50% |
+| All                  | 114 |   96% |     94% |         89% |    96% |     84% |          96% |       74% |   64% |     86% |
 
 **Wrong reads accepted: 0.** Single frames with a wrong but check-digit-valid read: 0. Short-code reads refused as too small to trust: 33.
 Mean decode 16 ms over 2052 frames of 960×720 on this machine.
@@ -181,22 +181,22 @@ before logs again from Recent scans in **2** (Scan, Log).
 Measured inside the app (two runs; the stand-in feed decodes four frames through Vision
 revision 1 in the simulator, slower than a phone's current revision):
 
-| Step | Run 1 | Run 2 |
-| --- | ---: | ---: |
-| Scanner open to camera watching | 58 ms | 112 ms |
+| Step                                        |  Run 1 |  Run 2 |
+| ------------------------------------------- | -----: | -----: |
+| Scanner open to camera watching             |  58 ms | 112 ms |
 | Code shown to accepted (two agreeing reads) | 176 ms | 184 ms |
-| Accepted to on the plate (lookup and plate) | 75 ms | 70 ms |
+| Accepted to on the plate (lookup and plate) |  75 ms |  70 ms |
 
 Wall-clock through XCUITest, on devbox1 shared with three other simulators. XCUITest
 polls for elements about once a second and waits for the app to idle after each tap, so
 these measure the harness more than the app:
 
-| Step | Run 1 | Run 2 |
-| --- | ---: | ---: |
-| Tap Scan to camera ready | 8.8 s | 9.3 s |
-| Code shown to food on plate | 1.1 s | 1.1 s |
-| Tap Log to Today showing the entry | 13.9 s | 13.2 s |
-| Open to logged | 25.0 s | 24.8 s |
+| Step                                       |  Run 1 |  Run 2 |
+| ------------------------------------------ | -----: | -----: |
+| Tap Scan to camera ready                   |  8.8 s |  9.3 s |
+| Code shown to food on plate                |  1.1 s |  1.1 s |
+| Tap Log to Today showing the entry         | 13.9 s | 13.2 s |
+| Open to logged                             | 25.0 s | 24.8 s |
 | Repeat scan from the cache, open to logged | 23.9 s | 22.7 s |
 
 ## Still to check on a phone

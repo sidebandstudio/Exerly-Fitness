@@ -62,7 +62,7 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 | Branch      | Unlanded | Last landed |
 | ----------- | -------- | ----------- |
 | claude/next | nothing  | this commit |
-| claude/barcode | barcode wave 1, Undo by stored scans; camera checks left (docs/BARCODE.md) | no |
+
 ## Risks
 
 - The App Group is still unregistered (QUESTIONS_FOR_ALI.md): Today and Next workout

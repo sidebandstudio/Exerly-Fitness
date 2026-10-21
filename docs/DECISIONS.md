@@ -1662,7 +1662,6 @@ it in a larger transaction is safe rather than forbidden. Undo goes through
 in one transaction. Undo is offered only while the app keeps the log in memory, as the toast
 is. A liquid's amount now reads in ml, or fl oz for US units, from its density.
 
-
 ## 2026-10-21: An entry keeps the offline scans it consumed; Undo restores only those
 
 Review round 5. Undo found a log's scans in memory, among the last 20 logs, and chose them
@@ -1683,3 +1682,16 @@ entry the scan's one log again and a later Undo can still put it back.
 two calls in one caller's transaction see each other. A transaction's rollback now drops
 only the after-commit actions it added; it used to drop every action at its depth, a saved
 sibling's included. A pending scan's time is kept to the millisecond, as stored.
+
+## 2026-10-21: A scan undone here and edited elsewhere can log twice; left to conflict review
+
+Final review. The phone logs an offline scan as an entry and syncs; the tablet edits that
+entry while the phone is offline; the phone undoes the entry, which puts the scan back, and
+logs it again as a new entry. On the phone's next sync, `SyncEngine.receive` treats "deleted
+here, changed there" as a reason to restore the entry, so both entries exist and the scan is
+logged twice. That rule is the conflict policy for every synced entry kind, not something
+barcode logging owns, and reviewing such conflicts is already the missing piece PARITY I03
+and N08 track. Changing it here would fork the policy for one kind and pre-empt that slice.
+`BarcodeLoggingModelTests.aScanUndoneHereAndEditedElsewhereIsLoggedOnceAfterSync` drives the
+sequence through two real `SyncEngine`s and the fake document server and expects one entry,
+under `withKnownIssue`, so it starts failing when the conflict-review slice fixes this.

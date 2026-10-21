@@ -203,6 +203,40 @@ private struct ModelRandom {
         #expect(library.pending == scans && store.entries.isEmpty)
     }
 
+    /// The phone logs a scan and syncs; the tablet edits that entry while the
+    /// phone is offline; the phone undoes it and logs the scan again. Sync
+    /// treats "deleted here, changed there" as a reason to restore the entry,
+    /// so the scan ends up logged twice. PARITY I03 and N08: a conflict
+    /// review would ask instead.
+    @Test func aScanUndoneHereAndEditedElsewhereIsLoggedOnceAfterSync() async throws {
+        let server = FakeDocumentServer()
+        let phoneDisk = InMemoryTrainingPersistence(), tabletDisk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: phoneDisk)
+        let phone = try NutritionStore(persistence: phoneDisk), tablet = try NutritionStore(persistence: tabletDisk)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneDisk, api: server)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server)
+        let code = Self.codes[2]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        let first = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var edited = try #require(tablet.entries.first)
+        #expect(edited.id == first[0].id)
+        edited.grams = 60
+        try tablet.saveEntry(edited)
+        try await tabletSync.sync()
+        try library.undo(Set(first.map(\.id)), from: phone)
+        #expect(phone.entries.isEmpty && library.ready.map(\.id) == [scan.id])
+        try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        withKnownIssue("SyncEngine.swift:175 sync restores an entry deleted here but changed elsewhere; fixed by the I03 conflict-review slice") {
+            #expect(phone.entries.count == 1, "The scan is logged once, not as \(phone.entries.map(\.grams)) g")
+        }
+    }
+
     @Test func oneTransactionNeedsOneStore() async throws {
         let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence())
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())
