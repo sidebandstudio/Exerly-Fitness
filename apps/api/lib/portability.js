@@ -600,7 +600,8 @@ async function restoreTables(account, body, result, now) {
   const byTable = new Map();
   for (const receipt of receipts)
     for (const ref of receipt.rows)
-      byTable.set(ref.table, [...(byTable.get(ref.table) ?? []), ref.id]);
+      if (byTable.has(ref.table)) byTable.get(ref.table).push(ref.id);
+      else byTable.set(ref.table, [ref.id]);
   for (const [table, ids] of byTable) {
     const collection = RESTORABLE[table].collection ?? table;
     for (const filter of ownerFilters(collection, account))
@@ -857,7 +858,10 @@ async function undoRestore(account, body) {
     const now = new Date();
     const tombstones = [];
     const tables = new Map();
-    for (const ref of refs) tables.set(ref.table, [...(tables.get(ref.table) ?? []), ref]);
+    for (const ref of refs) {
+      if (tables.has(ref.table)) tables.get(ref.table).push(ref);
+      else tables.set(ref.table, [ref]);
+    }
     // Read, removed and reported table by table, not row by row.
     for (const [table, list] of tables) {
       const rule = RESTORABLE[table];
