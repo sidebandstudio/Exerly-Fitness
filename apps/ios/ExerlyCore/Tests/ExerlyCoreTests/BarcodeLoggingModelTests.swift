@@ -23,6 +23,8 @@ final class CommitFailingPersistence: TrainingPersistence, DocumentPersistence {
 
     private var depth = 0
 
+    func afterCommit(_ action: @escaping () -> Void) { disk.afterCommit(action) }
+
     /// Nested transactions are savepoints; only the outermost commits, so
     /// only it can fail to.
     func performAtomically(_ body: () throws -> Void) throws {
@@ -84,7 +86,7 @@ private struct ModelRandom {
         let (first, second) = (library.ready[0], library.ready[1])
         let entries = try library.log([NutritionStore.PlateItem(Self.food(code), grams: 40)], consuming: [first.id], to: store,
                                       on: Self.days[0], meal: "Lunch")
-        #expect(entries.count == 1 && store.entries.count == 1)
+        #expect(entries.entries.count == 1 && entries.consumed.map(\.id) == [first.id] && store.entries.count == 1)
         #expect(library.pending.map(\.id) == [second.id] && library.pending.first?.meal == "Dinner")
         #expect(BarcodeLibrary(persistence: disk).pending.map(\.id) == [second.id])
     }
@@ -110,6 +112,73 @@ private struct ModelRandom {
         try library.log(plate, consuming: [scan.id], to: store, on: scan.date, meal: scan.meal)
         #expect(store.entries.count == 1 && library.pending.isEmpty)
         #expect(try NutritionStore(persistence: disk).entries.count == 1 && BarcodeLibrary(persistence: disk).pending.isEmpty)
+    }
+
+    /// A log inside a caller's transaction shows nothing until that commits,
+    /// and nothing at all if it rolls back.
+    @Test func aNestedLogPublishesOnlyAfterTheOuterCommit() async throws {
+        let disk = CommitFailingPersistence()
+        let library = BarcodeLibrary(persistence: disk)
+        let store = try NutritionStore(persistence: disk)
+        let code = Self.codes[2]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        struct Abandoned: Error {}
+        #expect(throws: Abandoned.self) {
+            try disk.performAtomically {
+                try library.log(plate, consuming: [scan.id], to: store, on: scan.date, meal: scan.meal)
+                throw Abandoned()
+            }
+        }
+        #expect(store.entries.isEmpty && library.ready.map(\.id) == [scan.id], "A rolled-back outer transaction shows nothing")
+        try disk.performAtomically {
+            try library.log(plate, consuming: [scan.id], to: store, on: scan.date, meal: scan.meal)
+            #expect(store.entries.isEmpty && library.ready.map(\.id) == [scan.id], "Nothing shows before the outer commit")
+        }
+        #expect(store.entries.count == 1 && library.pending.isEmpty)
+    }
+
+    /// A scan logged once can't be logged again, by any plate.
+    @Test func aScanNoLongerPendingIsRefused() async throws {
+        let disk = CommitFailingPersistence()
+        let library = BarcodeLibrary(persistence: disk)
+        let store = try NutritionStore(persistence: disk)
+        let code = Self.codes[3]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        try library.log(plate, consuming: [scan.id], to: store, on: scan.date, meal: scan.meal)
+        #expect(throws: BarcodeLibrary.LogError.alreadyLogged([scan.id])) {
+            try library.log(plate, consuming: [scan.id], to: store, on: scan.date, meal: scan.meal)
+        }
+        #expect(store.entries.count == 1)
+    }
+
+    /// Undo deletes the log's entries and puts its offline scans back with
+    /// their meal, day and time; a failed commit leaves the log in place.
+    @Test func undoPutsTheScansBackWithTheirIntent() async throws {
+        let disk = CommitFailingPersistence()
+        let clock = Clock()
+        let library = BarcodeLibrary(persistence: disk, now: { clock.now })
+        let store = try NutritionStore(persistence: disk)
+        let code = Self.codes[4]
+        _ = await library.resolve(code, meal: "Dinner", date: Self.days[1]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let logged = try library.log([NutritionStore.PlateItem(Self.food(code), grams: 40)], consuming: [scan.id], to: store,
+                                     on: Self.days[0], meal: "Lunch")
+        #expect(library.recentLog(writing: Set(logged.entries.map(\.id))) == logged)
+        disk.failNextCommit = true
+        #expect(throws: CommitFailingPersistence.CommitFailed.self) { try library.undo(logged, from: store) }
+        #expect(store.entries.count == 1 && library.pending.isEmpty)
+        try library.undo(logged, from: store)
+        #expect(store.entries.isEmpty && library.pending == [scan])
+        let relaunched = BarcodeLibrary(persistence: disk)
+        #expect(relaunched.pending == [scan] && relaunched.pending.first?.meal == "Dinner")
+        #expect(try NutritionStore(persistence: disk).entries.isEmpty)
     }
 
     @Test func oneTransactionNeedsOneStore() async throws {

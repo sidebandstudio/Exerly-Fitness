@@ -142,6 +142,10 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         try database.transaction(body)
     }
 
+    public func afterCommit(_ action: @escaping () -> Void) {
+        database.afterCommit(action)
+    }
+
     // MARK: TrainingPersistence
 
     public func loadSessions() throws -> [WorkoutSession] {

@@ -106,6 +106,7 @@ final class SQLiteDatabase {
     }
 
     private var depth = 0
+    private var committed: [(depth: Int, action: () -> Void)] = []
 
     /// Runs `body` in a transaction, committing on success and rolling back on
     /// error. A nested call uses a savepoint, so it can fail on its own.
@@ -113,15 +114,29 @@ final class SQLiteDatabase {
         let savepoint = "level\(depth)"
         try executeScript(depth == 0 ? "BEGIN IMMEDIATE" : "SAVEPOINT \(savepoint)")
         depth += 1
-        defer { depth -= 1 }
+        let level = depth
+        let result: T
         do {
-            let result = try body()
+            result = try body()
             try executeScript(depth == 1 ? "COMMIT" : "RELEASE \(savepoint)")
-            return result
         } catch {
             try? executeScript(depth == 1 ? "ROLLBACK" : "ROLLBACK TO \(savepoint); RELEASE \(savepoint)")
+            committed.removeAll { $0.depth >= level }
+            depth -= 1
             throw error
         }
+        depth -= 1
+        if depth == 0 {
+            let actions = committed
+            committed = []
+            actions.forEach { $0.action() }
+        }
+        return result
+    }
+
+    /// Runs `action` after the outermost transaction commits; at once outside one.
+    func afterCommit(_ action: @escaping () -> Void) {
+        if depth == 0 { action() } else { committed.append((depth, action)) }
     }
 
     private static func value(_ parameter: Any?) -> Value {

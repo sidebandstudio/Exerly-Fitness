@@ -24,6 +24,7 @@ final class FailingPersistence: TrainingPersistence {
         try inner.saveValue(value, forKey: key)
     }
     func performAtomically(_ body: () throws -> Void) throws { try inner.performAtomically(body) }
+    func afterCommit(_ action: @escaping () -> Void) { inner.afterCommit(action) }
 }
 
 @MainActor

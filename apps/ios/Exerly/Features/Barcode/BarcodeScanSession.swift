@@ -283,7 +283,7 @@ final class BarcodeScanSession: ObservableObject {
             if case .pending(let scan) = past {
                 let item = NutritionStore.PlateItem(product.food, grams: portion.grams, serving: portion.serving, quantity: portion.quantity)
                 guard let logged = try library.log([item], consuming: [scan.id], to: store, on: scan.date, meal: scan.meal,
-                                                   at: scan.scannedAt).first else { return .failed }
+                                                   at: scan.scannedAt).entries.first else { return .failed }
                 entry = logged
             } else {
                 entry = try store.log(portion, on: plate.date, meal: plate.meal)

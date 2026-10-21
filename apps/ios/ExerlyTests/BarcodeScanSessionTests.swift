@@ -403,6 +403,8 @@ private final class CommitFailingStore: TrainingPersistence, DocumentPersistence
     func deleteDocument(kind: String, id: String) throws { try disk.deleteDocument(kind: kind, id: id) }
     private var depth = 0
 
+    func afterCommit(_ action: @escaping () -> Void) { disk.afterCommit(action) }
+
     /// Nested transactions are savepoints; only the outermost commits, so
     /// only it can fail to.
     func performAtomically(_ body: () throws -> Void) throws {

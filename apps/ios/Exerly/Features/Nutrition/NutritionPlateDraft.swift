@@ -146,10 +146,17 @@ final class NutritionPlateDraft: ObservableObject {
         }
         do {
             let meal = meal.trimmingCharacters(in: .whitespacesAndNewlines)
-            let entries = try library.map { try $0.log(rows.map(\.item), consuming: pending, to: store, on: date, meal: meal, at: loggedAt) }
+            let entries = try library.map { try $0.log(rows.map(\.item), consuming: pending, to: store, on: date, meal: meal, at: loggedAt) }?.entries
                 ?? store.log(rows.map(\.item), on: date, meal: meal, at: loggedAt)
             saved = entries
             return entries
+        } catch BarcodeLibrary.LogError.alreadyLogged(let gone) {
+            // Those scans were logged elsewhere; the foods stay, as plain foods.
+            let names = rows.filter { !$0.pending.isDisjoint(with: gone) }.map(\.food.name)
+            rows = rows.map { row in var row = row; row.pending.subtract(gone); return row }
+            error = "\(ListFormatter.localizedString(byJoining: names)) was already logged from its scan. "
+                + "Remove it or log again to add it once more."
+            return nil
         } catch { self.error = NutritionDraftError.messages(error).joined(separator: " "); return nil }
     }
 

@@ -18,6 +18,11 @@ public protocol TrainingPersistence: AnyObject {
     func saveValue(_ value: Data?, forKey key: String) throws
     /// Runs several writes as one unit: all of them persist, or none.
     func performAtomically(_ body: () throws -> Void) throws
+    /// Runs `action` once the outermost transaction commits, at once when no
+    /// transaction is open, and never if it rolls back. Stores publish their
+    /// in-memory state through it, so a write nested in a caller's transaction
+    /// shows only once that transaction is saved.
+    func afterCommit(_ action: @escaping () -> Void)
 }
 
 /// Keeps everything in memory. For previews, tests and the app agent's stubs.
@@ -44,14 +49,31 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     public func loadValue(forKey key: String) throws -> Data? { values[key] }
     public func saveValue(_ value: Data?, forKey key: String) throws { values[key] = value }
 
+    private var depth = 0
+    private var committed: [(depth: Int, action: () -> Void)] = []
+
     public func performAtomically(_ body: () throws -> Void) throws {
         let snapshot = (sessions, customExercises, values, bases, documents)
+        depth += 1
+        let level = depth
         do {
             try body()
         } catch {
             (sessions, customExercises, values, bases, documents) = snapshot
+            committed.removeAll { $0.depth >= level }
+            depth -= 1
             throw error
         }
+        depth -= 1
+        if depth == 0 {
+            let actions = committed
+            committed = []
+            actions.forEach { $0.action() }
+        }
+    }
+
+    public func afterCommit(_ action: @escaping () -> Void) {
+        if depth == 0 { action() } else { committed.append((depth, action)) }
     }
 }
 

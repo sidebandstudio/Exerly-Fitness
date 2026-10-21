@@ -135,10 +135,18 @@ public final class NutritionStore {
         try commit(Self.entryKind, entry.id.uuidString, entry)
     }
 
+    /// Deletes these entries, those still logged, inside the caller's
+    /// transaction; hand the result to `afterCommit`.
+    func writeDeletes(_ ids: [UUID]) throws -> () -> Void {
+        let publish = try ids.filter { id in entries.contains { $0.id == id } }
+            .map { try prepareWrite(kind: Self.entryKind, id: $0.uuidString, payload: nil) }
+        return { publish.forEach { $0() } }
+    }
+
     public func deleteEntry(_ id: UUID) throws {
         guard entries.contains(where: { $0.id == id }) else { throw StoreError.notFound }
         let publish = try prepareWrite(kind: Self.entryKind, id: id.uuidString, payload: nil)
-        publish()
+        persistence.afterCommit(publish)
     }
 
     /// Copies a day's entries (or one meal's) to another day, as new entries.
@@ -205,15 +213,18 @@ public final class NutritionStore {
     /// Logs several foods to one meal at once, all or none. Each problem names its food.
     @discardableResult
     public func log(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date? = nil) throws -> [FoodEntry] {
-        var written: (entries: [FoodEntry], publish: () -> Void)?
-        try persistence.performAtomically { written = try writeLog(plate, on: date, meal: meal, at: time) }
-        written!.publish()
-        return written!.entries
+        var entries: [FoodEntry] = []
+        try persistence.performAtomically {
+            let written = try writeLog(plate, on: date, meal: meal, at: time)
+            entries = written.entries
+            persistence.afterCommit(written.publish)
+        }
+        return entries
     }
 
     /// Writes a plate's entries inside the caller's transaction without
-    /// publishing them. Call `publish` once the outermost transaction has
-    /// committed; a failed commit leaves memory as untouched as the disk.
+    /// publishing them. Hand `publish` to `afterCommit`, so a failed commit
+    /// leaves memory as untouched as the disk.
     func writeLog(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date?) throws
         -> (entries: [FoodEntry], publish: () -> Void) {
         let loggedAt = time?.roundedToMilliseconds ?? now()
@@ -330,11 +341,10 @@ public final class NutritionStore {
         var seen = Set<String>()
         let problems = batch.flatMap(\.problems).filter { seen.insert($0).inserted }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
-        var publish: [() -> Void] = []
         try persistence.performAtomically {
-            publish = try batch.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+            let publish = try batch.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+            persistence.afterCommit { publish.forEach { $0() } }
         }
-        publish.forEach { $0() }
     }
 
     // MARK: Days
@@ -411,7 +421,7 @@ public final class NutritionStore {
             throw StoreError.invalid(["This weigh-in comes from Apple Health. Delete it in the Health app and Exerly will follow."])
         }
         let publish = try prepareWrite(kind: Self.weightKind, id: id.uuidString, payload: nil)
-        publish()
+        persistence.afterCommit(publish)
     }
 
     // MARK: Plans
@@ -501,15 +511,15 @@ public final class NutritionStore {
             default:
                 throw DocumentError(message: "Unknown kind \(kind)")
             }
+            persistence.afterCommit(publish)
         }
-        publish()
     }
 
     // MARK: Private
 
     func commit<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
         let publish = try prepareWrite(kind: kind, id: id, payload: ExerlyJSON.canonical(value))
-        publish()
+        persistence.afterCommit(publish)
     }
 }
 
