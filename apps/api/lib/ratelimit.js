@@ -5,6 +5,8 @@
 // runs on more than one instance the counters become per-instance, which is
 // worth remembering before scaling out.
 
+const net = require('node:net');
+
 const buckets = new Map();
 
 // One sweep for all limiters. Without it, every unique IP that ever hits the
@@ -65,20 +67,32 @@ function rateLimit({ max, windowMs, name, key = clientKey, message }) {
 }
 
 /**
- * Counts failures rather than requests, for limits on guessing: `check(key)`
- * throws a 429 once `max` failures have been recorded for `key` in the
- * window, and `fail(key)` records one. Shares the sweeper and `reset()`.
+ * Counts failures rather than requests, for limits on guessing.
+ * `reserve(key)` is synchronous: it throws a 429 once recorded failures plus
+ * attempts still being checked reach `max`, and otherwise holds a place, so a
+ * burst of requests can't all pass the check while slow verification
+ * (bcrypt, Apple) runs. The caller settles the reservation with `fail()` or
+ * `release()`; a second call does nothing, so `release()` can sit in a
+ * `finally`. `failures(key)` is the recorded count. Shares the sweeper and
+ * `reset()`.
  */
 function failureLimit({ max, windowMs, name, message }) {
+  const id = (key) => `${name}:${key}`;
   const live = (key) => {
-    const entry = buckets.get(`${name}:${key}`);
+    const entry = buckets.get(id(key));
     return entry && Date.now() <= entry.resetAt ? entry : null;
   };
+  const fresh = (key) => {
+    const entry = { count: 0, pending: 0, resetAt: Date.now() + windowMs };
+    buckets.set(id(key), entry);
+    return entry;
+  };
+  const unlimited = { fail() {}, release() {} };
   return {
-    check(key) {
-      if (limitsOff()) return;
-      const entry = live(key);
-      if (entry && entry.count >= max) {
+    reserve(key) {
+      if (limitsOff()) return unlimited;
+      const entry = live(key) ?? fresh(key);
+      if (entry.count + entry.pending >= max) {
         const { ApiError } = require('./errors');
         const minutes = Math.ceil((entry.resetAt - Date.now()) / 60000);
         throw new ApiError(429, message || `Too many attempts. Try again in ${minutes} minutes.`, {
@@ -86,18 +100,58 @@ function failureLimit({ max, windowMs, name, message }) {
           retry_after_minutes: minutes,
         });
       }
+      entry.pending += 1;
+      let settled = false;
+      const settle = (failed) => {
+        if (settled) return;
+        settled = true;
+        entry.pending -= 1;
+        if (failed) (live(key) ?? fresh(key)).count += 1;
+      };
+      return { fail: () => settle(true), release: () => settle(false) };
     },
-    fail(key) {
-      if (limitsOff()) return;
-      const entry = live(key) ?? { count: 0, resetAt: Date.now() + windowMs };
-      entry.count += 1;
-      buckets.set(`${name}:${key}`, entry);
+    failures(key) {
+      return live(key)?.count ?? 0;
+    },
+    clear(key) {
+      buckets.delete(id(key));
+    },
+    /** Forgets every key that starts with `prefix`. */
+    clearPrefix(prefix) {
+      for (const key of buckets.keys()) if (key.startsWith(id(prefix))) buckets.delete(key);
     },
   };
+}
+
+/** Forgets one key of a `rateLimit` middleware, as `name` and `key` gave it. */
+function forget(name, key) {
+  buckets.delete(`${name}:${key}`);
+}
+
+/**
+ * The network an address belongs to, for limits a single home or office
+ * shares: the /24 of an IPv4 address and the /56 of an IPv6 one (a typical
+ * household delegation). Anything else is returned as it is.
+ */
+function networkPrefix(address = '') {
+  const ip = String(address).split('%')[0];
+  const v4 = /^(?:::ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/i.exec(ip);
+  if (v4) return `${v4[1]}.0/24`;
+  if (!net.isIPv6(ip)) return ip;
+  const [head, tail] = ip.toLowerCase().split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups =
+    tail === undefined
+      ? left
+      : [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+  if (groups.length !== 8) return ip;
+  const full = groups.map((g) => g.padStart(4, '0'));
+  return `${full.slice(0, 3).join(':')}:${full[3].slice(0, 2)}00::/56`;
 }
 
 function reset() {
   buckets.clear();
 }
 
-module.exports = { rateLimit, failureLimit, reset, clientKey };
+module.exports = { rateLimit, failureLimit, forget, networkPrefix, reset, clientKey };

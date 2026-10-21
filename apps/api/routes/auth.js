@@ -5,7 +5,7 @@ const store = require('../data');
 const { asyncHandler, unauthorized, conflict, badRequest } = require('../lib/errors');
 const { authenticate, adminEmails } = require('../lib/auth');
 const sessions = require('../lib/sessions');
-const { rateLimit, failureLimit } = require('../lib/ratelimit');
+const { rateLimit, failureLimit, forget, networkPrefix } = require('../lib/ratelimit');
 const { confirmationFailures, passwordMatches } = require('../lib/reauth');
 const v = require('../lib/validate');
 const { requireUser, newUserFields } = require('../lib/users');
@@ -49,15 +49,29 @@ const signupEmailLimiter = rateLimit({
   message: 'Too many attempts with this email. Try again in an hour.',
 });
 
-// The per-address limit above doesn't stop guesses at one email spread over
-// many addresses. Every email gets ten wrong passwords per 15 minutes,
-// whether or not it has an account.
-const loginEmailFailures = failureLimit({
-  name: 'login-email',
+// Guesses at one email, whether or not it has an account. Each network (a
+// /24 or /56, lib/ratelimit.js) gets ten wrong passwords per email per 15
+// minutes, so whoever is guessing can't lock the owner out from the owner's
+// own network. Across all networks, wrong passwords for an email only slow
+// every sign-in to it, doubling from the fourth to at most two seconds, so
+// spreading guesses over many networks gets slow without ever shutting the
+// owner out. A password reset, which proves the mailbox, clears both.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginNetworkFailures = failureLimit({
+  name: 'login-network',
   max: 10,
-  windowMs: 15 * 60 * 1000,
-  message: 'Too many sign-in attempts for this email. Wait 15 minutes, or reset your password.',
+  windowMs: LOGIN_WINDOW_MS,
+  message:
+    'Too many sign-in attempts for this email from this network. Wait 15 minutes, or reset your password.',
 });
+const loginAccountFailures = failureLimit({
+  name: 'login-account',
+  max: Infinity,
+  windowMs: LOGIN_WINDOW_MS,
+});
+const LOGIN_BACKOFF_CAP_MS = 2000;
+const loginBackoffMs = (failures) =>
+  failures <= 3 ? 0 : Math.min(100 * 2 ** (failures - 4), LOGIN_BACKOFF_CAP_MS);
 
 router.post(
   '/signup',
@@ -97,23 +111,35 @@ router.post(
   asyncHandler(async (req, res) => {
     const email = v.email(req.body.email);
     const password = v.str(req.body.password, 'password', { max: 200, trim: false });
-    loginEmailFailures.check(email);
-
-    const user = await store.findOne('users', { email });
-    // Hash a throwaway password when the user doesn't exist, or signed up with
-    // Apple and has no password, so the response time doesn't reveal which
-    // emails are registered.
-    if (!user?.hash) {
-      await bcrypt.compare(password, '$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
-      loginEmailFailures.fail(email);
-      throw unauthorized('Invalid credentials');
+    // Places are held before the password is hashed, so a burst can't all
+    // pass the check while bcrypt runs.
+    const network = loginNetworkFailures.reserve(`${email} ${networkPrefix(req.ip)}`);
+    const account = loginAccountFailures.reserve(email);
+    let user;
+    let ok = null;
+    try {
+      const wait = loginBackoffMs(loginAccountFailures.failures(email));
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      user = await store.findOne('users', { email });
+      // Hash a throwaway password when the user doesn't exist, or signed up with
+      // Apple and has no password, so the response time doesn't reveal which
+      // emails are registered.
+      if (user?.hash) {
+        ok = await bcrypt.compare(password, user.hash);
+      } else {
+        await bcrypt.compare(
+          password,
+          '$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv'
+        );
+        ok = false;
+      }
+    } finally {
+      for (const attempt of [network, account]) {
+        if (ok === false) attempt.fail();
+        else attempt.release();
+      }
     }
-
-    const ok = await bcrypt.compare(password, user.hash);
-    if (!ok) {
-      loginEmailFailures.fail(email);
-      throw unauthorized('Invalid credentials');
-    }
+    if (!ok) throw unauthorized('Invalid credentials');
 
     let current = user;
     if (adminEmails().includes(email) && !user.is_admin) {
@@ -199,7 +225,6 @@ router.post(
 
     const user = await requireUser(req.user.email);
     // Wrong guesses share the account's confirmation budget (lib/reauth.js).
-    confirmationFailures.check(user.id);
     if (!(await passwordMatches(currentPassword, user))) {
       throw unauthorized('Current password is incorrect');
     }
@@ -321,8 +346,15 @@ router.post(
         { hash, credentials_version: (user.credentials_version ?? 0) + 1 }
       );
       await endAccessFromOldPassword(user.id, now);
-      return true;
+      return user.id;
     });
+    if (changed) {
+      // Proving the mailbox is the way out of every guessing limit.
+      confirmationFailures.clear(changed);
+      forget('change-password', changed);
+      loginNetworkFailures.clearPrefix(`${email} `);
+      loginAccountFailures.clear(email);
+    }
     if (!changed) {
       throw badRequest(
         'That code is wrong or has expired. Check the latest email, or ask for a new code.',

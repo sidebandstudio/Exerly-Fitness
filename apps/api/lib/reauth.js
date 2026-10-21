@@ -44,7 +44,6 @@ const notConfirmed = (message, code) => new ApiError(403, message, { code });
  * `purpose` finishes "Enter your password to …".
  */
 async function confirmIdentity({ password, identityToken, nonce }, user, purpose) {
-  confirmationFailures.check(user.id);
   if (user.hash) {
     if (typeof password !== 'string' || !password) {
       throw badRequest(`Enter your password to ${purpose}.`, { code: 'password_required' });
@@ -59,43 +58,53 @@ async function confirmIdentity({ password, identityToken, nonce }, user, purpose
       code: 'apple_reauthorization_required',
     });
   }
-  let verified;
+  // Held before verifying, so a burst can't all pass while Apple is checked.
+  const attempt = confirmationFailures.reserve(user.id);
+  const refused = (message) => {
+    attempt.fail();
+    return notConfirmed(message, 'apple_not_confirmed');
+  };
   try {
-    verified = await apple.verifyIdentityToken(identityToken, nonce);
-  } catch (error) {
-    if (error.status !== 401) throw error;
-    confirmationFailures.fail(user.id);
-    throw notConfirmed('Apple couldn’t confirm it’s you. Try again.', 'apple_not_confirmed');
-  }
-  const connected = await store.findOne('account_identities', {
-    account_id: user.id,
-    provider: 'apple',
-    subject: verified.subject,
-  });
-  // A token without an issue time has no age, so it fails this check too.
-  const age = Date.now() / 1000 - verified.issuedAt;
-  if (!connected || !(age <= APPLE_CONFIRMATION_MAX_AGE_S)) {
-    confirmationFailures.fail(user.id);
-    throw notConfirmed('Apple couldn’t confirm it’s you. Try again.', 'apple_not_confirmed');
-  }
-  try {
-    await consumeNonce(verified.nonceHash);
-  } catch {
-    confirmationFailures.fail(user.id);
-    throw notConfirmed(
-      'That Apple confirmation was already used. Try again.',
-      'apple_not_confirmed'
-    );
+    let verified;
+    try {
+      verified = await apple.verifyIdentityToken(identityToken, nonce);
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      throw refused('Apple couldn’t confirm it’s you. Try again.');
+    }
+    const connected = await store.findOne('account_identities', {
+      account_id: user.id,
+      provider: 'apple',
+      subject: verified.subject,
+    });
+    // A token without an issue time has no age, so it fails this check too.
+    const age = Date.now() / 1000 - verified.issuedAt;
+    if (!connected || !(age <= APPLE_CONFIRMATION_MAX_AGE_S)) {
+      throw refused('Apple couldn’t confirm it’s you. Try again.');
+    }
+    try {
+      await consumeNonce(verified.nonceHash);
+    } catch {
+      throw refused('That Apple confirmation was already used. Try again.');
+    }
+  } finally {
+    attempt.release();
   }
 }
 
 /**
- * Whether `password` is the account's, counting a wrong one against the
- * shared budget. Call `confirmationFailures.check` first.
+ * Whether `password` is the account's. Holds a place in the shared budget
+ * before hashing (a 429 once it's spent) and counts a wrong password.
  */
 async function passwordMatches(password, user) {
-  const ok = !!user.hash && password.length <= 200 && (await bcrypt.compare(password, user.hash));
-  if (!ok) confirmationFailures.fail(user.id);
+  const attempt = confirmationFailures.reserve(user.id);
+  let ok = false;
+  try {
+    ok = !!user.hash && password.length <= 200 && (await bcrypt.compare(password, user.hash));
+  } finally {
+    if (ok) attempt.release();
+    else attempt.fail();
+  }
   return ok;
 }
 

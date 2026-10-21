@@ -142,23 +142,89 @@ test('change-password is limited per account, not per address', async () => {
   assert.equal((await change(two, 0)).status, 400, 'a second account on the same address');
 });
 
-test('wrong passwords for one email are limited however many addresses send them', async () => {
+test('wrong passwords sent at once cannot get past the ten-guess budget', async () => {
   const user = await signUp(api);
-  const login = (email, password, ip) =>
-    api.post('/login', { email, password }, { headers: { 'X-Forwarded-For': ip } });
+  const burst = await Promise.all(
+    Array.from({ length: 30 }, (_, i) => deleteAccount(user.token, { password: `guess-${i}` }))
+  );
+  const statuses = burst.map((r) => r.status);
+  assert.ok(statuses.filter((s) => s === 403).length <= 10, JSON.stringify(statuses));
+  assert.equal(statuses.filter((s) => s === 403 || s === 429).length, 30, JSON.stringify(statuses));
+  assert.equal((await deleteAccount(user.token, { password: user.password })).status, 429);
+  assert.equal(await api.store.count('users', { email: user.email }), 1);
+});
+
+const loginFrom = (email, password, ip) =>
+  api.post('/login', { email, password }, { headers: { 'X-Forwarded-For': ip } });
+
+test('wrong sign-ins sent at once from one network stop at ten', async () => {
+  const user = await signUp(api);
+  const burst = await Promise.all(
+    Array.from({ length: 30 }, (_, i) => loginFrom(user.email, `guess-${i}`, `198.51.100.${i + 1}`))
+  );
+  const statuses = burst.map((r) => r.status);
+  assert.ok(statuses.filter((s) => s === 401).length <= 10, JSON.stringify(statuses));
+  assert.equal(statuses.filter((s) => s === 401 || s === 429).length, 30, JSON.stringify(statuses));
+});
+
+test('guesses from one network limit that network, and only slow sign-in from others', async () => {
+  const user = await signUp(api);
   for (let i = 0; i < 10; i++) {
-    assert.equal((await login(user.email, `guess-${i}`, `198.51.100.${i + 1}`)).status, 401);
+    assert.equal((await loginFrom(user.email, `guess-${i}`, `198.51.100.${i + 1}`)).status, 401);
   }
-  const limited = await login(user.email, user.password, '198.51.100.200');
+  // The same /24 is held back, even with the right password.
+  const limited = await loginFrom(user.email, user.password, '198.51.100.200');
   assert.equal(limited.status, 429);
-  assert.match(limited.body.message, /this email/);
-  // An address without an account is limited the same way, so a 429 says nothing.
+  assert.match(limited.body.message, /from this network/);
+  // The owner on another network still gets in, after a capped wait.
+  const started = Date.now();
+  const owner = await loginFrom(user.email, user.password, '203.0.113.7');
+  const waited = Date.now() - started;
+  assert.equal(owner.status, 200);
+  assert.ok(waited >= 1900, `waited ${waited} ms`);
+  assert.ok(waited < 15000, `waited ${waited} ms`);
+});
+
+test('IPv6 sign-in limits cover a /56', async () => {
+  const user = await signUp(api);
   for (let i = 0; i < 10; i++) {
-    await login('nobody-here@exerly.test', `guess-${i}`, `203.0.113.${i + 1}`);
+    assert.equal(
+      (await loginFrom(user.email, `guess-${i}`, `2001:db8:abcd:12${i}f::1`)).status,
+      401
+    );
   }
-  assert.equal((await login('nobody-here@exerly.test', 'x', '203.0.113.200')).status, 429);
-  const other = await signUp(api);
-  assert.equal((await login(other.email, other.password, '198.51.100.201')).status, 200);
+  assert.equal((await loginFrom(user.email, user.password, '2001:db8:abcd:1234::9')).status, 429);
+  assert.equal((await loginFrom(user.email, user.password, '2001:db8:abcd:1300::1')).status, 200);
+});
+
+test('a password reset clears the guess budget, the change-password limit and the sign-in limit', async () => {
+  const user = await signUp(api);
+  const network = '198.51.100.';
+  for (let i = 0; i < 10; i++) {
+    await api.post(
+      '/api/change-password',
+      { currentPassword: `guess-${i}`, newPassword: 'a-brand-new-passphrase' },
+      { token: user.token }
+    );
+    await loginFrom(user.email, `guess-${i}`, `${network}${i + 1}`);
+  }
+  assert.equal((await deleteAccount(user.token, { password: user.password })).status, 429);
+  assert.equal((await loginFrom(user.email, user.password, `${network}99`)).status, 429);
+
+  await forgot(api, user.email);
+  const code = await mailedCode(user.email);
+  assert.equal((await resetPassword(api, user.email, code, 'reset-passphrase-1')).status, 200);
+
+  const started = Date.now();
+  const signedIn = await loginFrom(user.email, 'reset-passphrase-1', `${network}99`);
+  assert.equal(signedIn.status, 200, JSON.stringify(signedIn.body));
+  assert.ok(Date.now() - started < 1500, 'no leftover backoff');
+  const changed = await api.post(
+    '/api/change-password',
+    { currentPassword: 'reset-passphrase-1', newPassword: 'reset-passphrase-2' },
+    { token: signedIn.body.token }
+  );
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
 });
 
 test('signup is limited per email as well as per address', async () => {

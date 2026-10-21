@@ -27,18 +27,18 @@ return a generic message in production and include the stack in development.
 
 ## Auth
 
-| Method | Path                    | Notes                                                                                                                                                                                  |
-| ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/signup`               | `{name, email, password, timezone?}` → `{token, user}`. Password must be 8+ characters. 5 per hour per IP and 5 per hour per email; a 409 says the email has an account (DECISIONS.md) |
-| POST   | `/login`                | `{email, password}` → `{token, user}`. 8 attempts per 10 minutes per IP; 10 wrong passwords per 15 minutes per email                                                                   |
-| POST   | `/auth/refresh`         | Compatibility exchange. Modern clients use it only when upgrading an older saved credential                                                                                            |
-| POST   | `/auth/token`           | `{refreshToken}` with a persisted `Idempotency-Key`; rotates a modern session                                                                                                          |
-| POST   | `/auth/logout`          | Revokes the current server session                                                                                                                                                     |
-| GET    | `/api/sessions`         | Lists this account's active sessions without credentials                                                                                                                               |
-| DELETE | `/api/sessions/:id`     | Revokes an owned session                                                                                                                                                               |
-| POST   | `/api/change-password`  | `{currentPassword, newPassword}`; revokes every session and agent token and pauses session-made webhooks. 10 per hour per account                                                      |
-| POST   | `/auth/password/forgot` | `{email}` → 202 at once, before the address is looked up; the code is issued and mailed afterwards. 5 per 15 min per IP, 3 per hour per email                                          |
-| POST   | `/auth/password/reset`  | `{email, code, newPassword}`; 400 `reset_code_invalid` for any wrong, used, expired or unknown case. 10 per 15 min per IP                                                              |
+| Method | Path                    | Notes                                                                                                                                                                                                                                         |
+| ------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/signup`               | `{name, email, password, timezone?}` → `{token, user}`. Password must be 8+ characters. 5 per hour per IP and 5 per hour per email; a 409 says the email has an account (DECISIONS.md)                                                        |
+| POST   | `/login`                | `{email, password}` → `{token, user}`. 8 attempts per 10 minutes per IP; 10 wrong passwords per email per network (/24 or /56) per 15 minutes; past the third wrong password for an email, every sign-in to it waits, doubling to at most 2 s |
+| POST   | `/auth/refresh`         | Compatibility exchange. Modern clients use it only when upgrading an older saved credential                                                                                                                                                   |
+| POST   | `/auth/token`           | `{refreshToken}` with a persisted `Idempotency-Key`; rotates a modern session                                                                                                                                                                 |
+| POST   | `/auth/logout`          | Revokes the current server session                                                                                                                                                                                                            |
+| GET    | `/api/sessions`         | Lists this account's active sessions without credentials                                                                                                                                                                                      |
+| DELETE | `/api/sessions/:id`     | Revokes an owned session                                                                                                                                                                                                                      |
+| POST   | `/api/change-password`  | `{currentPassword, newPassword}`; revokes every session and agent token and pauses session-made webhooks. 10 per hour per account                                                                                                             |
+| POST   | `/auth/password/forgot` | `{email}` → 202 at once, before the address is looked up; the code is issued and mailed afterwards. 5 per 15 min per IP, 3 per hour per email                                                                                                 |
+| POST   | `/auth/password/reset`  | `{email, code, newPassword}`; 400 `reset_code_invalid` for any wrong, used, expired or unknown case. 10 per 15 min per IP                                                                                                                     |
 
 Signup, login and the compatibility refresh route accept `X-Session-Protocol: 2`. These clients receive a 15-minute access token and a rotating refresh credential with a 90-day session lifetime. They persist the refresh operation key until the replacement credential is saved. A lost acknowledgement can be retried using the same prior credential and operation. Password changes revoke all sessions. Clients without the protocol header receive the compatibility 30-day access token. Both native and browser clients use protocol 2. The browser stores its session under the configured API URL and assigns each refresh credential an operation key before use. Tabs replay the same credential/key pair; a successful rotation atomically replaces both. Fresh launches read `/api/me` without creating another session. Older scoped browser credentials upgrade once through the compatibility endpoint. An old unscoped browser token is adopted only for its original production API. Compatibility refresh remains limited to 60 calls per account per ten minutes.
 
@@ -48,7 +48,7 @@ Password reset codes are 8 characters (shown `ABCD-EFGH`), last 15 minutes, work
 
 `DELETE /api/account` needs `{confirm: true}` and proof of identity: `password` for a password account, always, even with Apple connected; for an account without a password, a Sign in with Apple `identityToken` and raw `nonce` from the last ten minutes for an Apple ID already connected to it. A missing proof is 400 (`password_required` or `apple_reauthorization_required`); a wrong one is 403 (`wrong_password` or `apple_not_confirmed`), never 401, so clients keep the session. When the account has Apple connected and the server can revoke Apple's authorization, a password account sends `appleAuthorizationCode` from a fresh Sign in with Apple as well as its password; without it the answer is 400 `apple_reauthorization_required`.
 
-The same proof is needed to connect Apple (`POST /api/account/identities/apple` with `password`, or `currentIdentityToken` and `currentNonce` alongside the new `identityToken` and `nonce`), to disconnect it (`DELETE` with `{password}`), and to create a personal access token (`POST /v1/tokens` with `password`, or `identityToken` and `nonce`). Wrong passwords and refused Apple confirmations share one budget of ten per account per hour across deleting, connecting and disconnecting Apple, creating a token and changing the password; after that each of them answers 429 `too_many_attempts`, even with the right password. Missing proof doesn't count. Token creation is also limited to 30 per account per hour. Password fields are left out of the request fingerprint kept with an `Idempotency-Key` receipt.
+The same proof is needed to connect Apple (`POST /api/account/identities/apple` with `password`, or `currentIdentityToken` and `currentNonce` alongside the new `identityToken` and `nonce`), to disconnect it (`DELETE` with `{password}`), and to create a personal access token (`POST /v1/tokens` with `password`, or `identityToken` and `nonce`). Wrong passwords and refused Apple confirmations share one budget of ten per account per hour across deleting, connecting and disconnecting Apple, creating a token and changing the password; after that each of them answers 429 `too_many_attempts`, even with the right password. Attempts still being checked count too, so requests sent at once can't exceed it. A password reset clears this budget, the change-password limit and the sign-in limits for that account. Missing proof doesn't count. Token creation is also limited to 30 per account per hour. Password fields are left out of the request fingerprint kept with an `Idempotency-Key` receipt.
 
 ## Bootstrap and setup
 
@@ -291,14 +291,14 @@ because there is no way back in short of editing the database.
 
 ## Rate limits
 
-| Scope          | Limit                                                         |
-| -------------- | ------------------------------------------------------------- |
-| All `/api`     | 600 per minute per IP                                         |
-| Login          | 8 per 10 minutes per IP; 10 failures per 15 minutes per email |
-| Signup         | 5 per hour per IP and per email                               |
-| Food search    | 120 per hour                                                  |
-| Barcode lookup | 60 per hour                                                   |
-| AI coach       | 1 per 10 seconds, on top of the credit system                 |
+| Scope          | Limit                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| All `/api`     | 600 per minute per IP                                                                                                      |
+| Login          | 8 per 10 minutes per IP; 10 failures per email per /24 or /56 per 15 minutes, then a capped wait for that email everywhere |
+| Signup         | 5 per hour per IP and per email                                                                                            |
+| Food search    | 120 per hour                                                                                                               |
+| Barcode lookup | 60 per hour                                                                                                                |
+| AI coach       | 1 per 10 seconds, on top of the credit system                                                                              |
 
 Counters are per instance and held in memory. Running more than one instance
 would need a shared store.

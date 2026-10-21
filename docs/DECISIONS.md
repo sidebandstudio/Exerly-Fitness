@@ -1502,3 +1502,30 @@ in with Apple's authorization code so the server can revoke it.
 - An account without a password still confirms with Sign in with Apple alone.
 - For UI tests, a debug-only launch variable stands in for Apple's sheet, and
   the fixture can turn revocation on and records the codes it would revoke.
+
+## 2026-10-20: sign-in limits are per network, so nobody can lock out a known address
+
+Security review round 3. The per-email sign-in limit from round 2 could be
+renewed by anyone: ten wrong passwords every 15 minutes kept a public address
+(Ali's, for one) out of password sign-in indefinitely.
+
+- The hard limit is now ten wrong passwords per email per network, the /24 of
+  an IPv4 address or the /56 of an IPv6 one. Someone guessing from their own
+  network shuts out only that network.
+- Across all networks, wrong passwords for an email make every sign-in to it
+  wait: nothing for the first three, then 100 ms doubling to a cap of 2 s.
+  Guesses spread over many networks get slow, and the owner always gets in,
+  at worst two seconds late.
+- The trade: an attacker with many networks gets ten guesses per network per
+  15 minutes, each slowed by up to 2 s, instead of ten in total. bcrypt and
+  the 8-per-10-minutes per-address limit still apply. Against a reasonable
+  password that is still hopeless, and a lockout anyone can trigger was the
+  bigger risk for a small app with a public founder.
+- A password reset proves the mailbox, so it clears the sign-in limits, the
+  account's confirmation budget and its change-password limit.
+- Both the confirmation budget and the sign-in limit now hold a place for an
+  attempt before bcrypt or Apple's check runs, so requests sent at once can't
+  all slip past the limit while they are being checked.
+- The count of failed reset emails is no longer in the public /api/health: a
+  failure only happens for an address with an account, so it told anyone who
+  asked for a reset whether one existed. It's logged instead.
