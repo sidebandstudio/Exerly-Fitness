@@ -97,3 +97,4 @@ router.post(
 );
 
 module.exports = router;
+module.exports.FIELDS = FIELDS;

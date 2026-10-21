@@ -494,3 +494,4 @@ async function rememberInLibrary(email, body, entry) {
 }
 
 module.exports = router;
+module.exports.readEntry = readEntry;

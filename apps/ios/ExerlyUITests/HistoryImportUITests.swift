@@ -77,6 +77,31 @@ final class HistoryImportUITests: ExerlyUITestCase {
         capture(app, "hub-02-undone")
     }
 
+    /// An Exerly export whose older tables hold a row a new entry couldn't
+    /// be: the rest is restored, and the done screen says what was left out.
+    func testAnExerlyExportSaysWhatTheServerLeftOut() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "exerly-left-out", units: "metric")
+        let app = launch(file: OtherExports.exerly(weighIns: [["entry_date": "not-a-date", "weight_kg": -5000]]), name: "exerly-export.json")
+        signIn(app, email: person.email)
+        tap(app.tabBars.buttons["Profile"], in: app)
+        reveal(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["profile.importExport"], in: app)
+        tap(app.buttons["import.source.exerly"], in: app)
+        XCTAssertTrue(app.buttons["import.choose"].waitForExistence(timeout: 10))
+        tap(app.buttons["import.testFile"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.preview"].waitForExistence(timeout: 30), app.debugDescription)
+        reveal(app.buttons["import.import"], in: app)
+        tap(app.buttons["import.import"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["import.done"].waitForExistence(timeout: 60), app.debugDescription)
+        let leftOut = app.descendants(matching: .any)["import.doneSkipped"]
+        reveal(leftOut, in: app)
+        XCTAssertTrue(leftOut.exists, app.debugDescription)
+        let reason = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Older weigh-ins: '")).firstMatch
+        XCTAssertTrue(reason.exists, "The left-out weigh-in says why")
+        capture(app, "exerly-04-left-out")
+    }
+
     func testAFileFromAnotherAppIsRefusedWithAReason() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "import-refused", units: "metric")
@@ -362,7 +387,7 @@ private enum OtherExports {
         return Data(rows.joined(separator: "\n").utf8)
     }
 
-    static func exerly() -> Data {
+    static func exerly(weighIns: [[String: Any]] = []) -> Data {
         let days = (1...4).map { offset -> [String: Any] in
             let date = ExerlyUITestCase.day(-offset).date
             return ["kind": "nutrition_day", "document_id": date, "revision": 2, "deleted_at": NSNull(),
@@ -370,8 +395,9 @@ private enum OtherExports {
         }
         let export: [String: Any] = ["exported_at": "2026-10-20T12:00:00.000Z", "version": 3, "account": ["name": "Synthetic"],
                                      "documents": days, "webhooks": [["url": "https://example.test/hook"]],
-                                     "measurements": [["client_id": "synthetic-waist", "type": "waist", "value": 80, "unit": "cm",
-                                                       "entry_date": ExerlyUITestCase.day(-2).date]]]
+                                     "measurements": [["client_id": "0b5e4c4e-2f0a-4c55-9a43-5f2d7a0c1e11", "type": "waist", "value": 80,
+                                                       "unit": "cm", "entry_date": ExerlyUITestCase.day(-2).date]],
+                                     "weights": weighIns]
         return (try? JSONSerialization.data(withJSONObject: export)) ?? Data()
     }
 }

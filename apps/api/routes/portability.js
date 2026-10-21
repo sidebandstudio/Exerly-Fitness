@@ -28,12 +28,17 @@ router.get(
   })
 );
 
+// Import and Undo are limited per account, each on its own: per address, every
+// account behind DigitalOcean's shared ingress would share one limit.
+const perAccount = (name) =>
+  rateLimit({ name, max: 10, windowMs: 60 * 1000, key: (req) => String(req.account.id) });
+
 // Only the person's own app may import into the account. The body, up to
 // 25 MB, is read only after that is checked.
 router.post(
   '/import',
-  rateLimit({ name: 'import', max: 10, windowMs: 60 * 1000 }),
   authenticate,
+  perAccount('import'),
   (req, _res, next) =>
     next(req.pat ? forbidden('Only the Exerly app can import an export.') : null),
   express.json({ limit: '25mb' }),
@@ -44,16 +49,16 @@ router.post(
   })
 );
 
-// Undoes a restore of the server's older tables, with the rows the import
+// Undoes a restore of the server's older tables, by the restore_id the import
 // returned. Rows changed since are kept.
 router.post(
   '/import/undo',
-  rateLimit({ name: 'import', max: 10, windowMs: 60 * 1000 }),
   authenticate,
+  perAccount('import-undo'),
   (req, _res, next) => next(req.pat ? forbidden('Only the Exerly app can undo an import.') : null),
   express.json({ limit: '5mb' }),
   asyncHandler(async (req, res) => {
-    const result = await undoRestore(req.account, req.body?.rows);
+    const result = await undoRestore(req.account, req.body);
     if (result.error) throw badRequest(result.error);
     res.json(result);
   })

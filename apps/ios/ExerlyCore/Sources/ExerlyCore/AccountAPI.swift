@@ -142,24 +142,27 @@ public struct AccountAPI: DocumentAPI {
         let json = try? JSONSerialization.jsonObject(with: data)
         guard status == 200, let result = json as? [String: Any], let imported = result["imported"] as? Int,
               let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
-        let skipped = (result["skipped"] as? [[String: Any]] ?? []).compactMap { $0["reason"] as? String }
+        // A row of an older table says which table, by the name it has here.
+        let skipped = (result["skipped"] as? [[String: Any]] ?? []).compactMap { row -> String? in
+            guard let reason = row["reason"] as? String else { return nil }
+            guard let table = row["table"] as? String else { return reason }
+            return "\(ExerlyExportFile.restorable[table] ?? table): \(reason)"
+        }
         let restored = (result["restored"] as? [[String: Any]] ?? []).compactMap { row -> RestoredRow? in
             guard let table = row["table"] as? String, let id = row["id"] as? String else { return nil }
             return RestoredRow(table: table, id: id, revision: (row["revision"] as? NSNumber)?.intValue)
         }
         return ImportResult(imported: imported, kept: kept, skipped: skipped,
                             ignoredTables: result["ignored_tables"] as? [String] ?? [], restored: restored,
-                            notRestored: result["not_restored"] as? [String: String] ?? [:])
+                            notRestored: result["not_restored"] as? [String: String] ?? [:],
+                            restoreID: result["restore_id"] as? String,
+                            skippedCount: (result["skipped_count"] as? Int) ?? skipped.count)
     }
 
-    /// Undoes a restore of the server's older tables: removes the rows it
-    /// restored, except any changed since. All or nothing.
-    public func undoRestore(_ rows: [RestoredRow]) async throws -> (removed: Int, kept: Int) {
-        let body: [String: Any] = ["rows": rows.map { row -> [String: Any] in
-            var json: [String: Any] = ["table": row.table, "id": row.id]
-            if let revision = row.revision { json["revision"] = revision }
-            return json
-        }]
+    /// Undoes a restore of the server's older tables: the server removes the
+    /// rows it recorded for `restoreID`, except any changed since. All or nothing.
+    public func undoRestore(_ restoreID: String) async throws -> (removed: Int, kept: Int) {
+        let body: [String: Any] = ["restore_id": restoreID]
         let (status, json) = try await sendJSON("POST", "/v1/import/undo", body: body)
         guard status == 200, let result = json as? [String: Any], let removed = result["removed"] as? Int,
               let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
@@ -347,6 +350,10 @@ public struct ImportResult: Sendable, Hashable {
     public var restored: [RestoredRow] = []
     /// Tables never restored into another account, with why.
     public var notRestored: [String: String] = [:]
+    /// The server's record of the restore, which Undo names; nil when it restored nothing.
+    public var restoreID: String?
+    /// How many documents and rows failed the checks; `skipped` lists at most 50.
+    public var skippedCount = 0
 }
 
 /// A row of the server's older tables that an import restored.

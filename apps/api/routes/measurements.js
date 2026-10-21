@@ -183,3 +183,4 @@ router.post(
 );
 
 module.exports = router;
+module.exports.readMeasurement = readMeasurement;

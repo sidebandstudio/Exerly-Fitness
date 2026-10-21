@@ -194,14 +194,26 @@ function current(account, kind, id) {
 
 /** Appends a change to the account's feed. */
 function record(account, row) {
-  return sync.change(account, row.kind, {
-    id: row.document_id,
-    client_id: row.document_id,
-    revision: row.revision,
-    deleted_at: row.deleted_at,
-    payload: row.payload ?? null,
-    updated_at: row.updated_at,
-  });
+  return records(account, [row]);
+}
+
+/** Appends changes to the account's feed, one per document, in order. */
+async function records(account, rows) {
+  if (!rows.length) return null;
+  return sync.changes(
+    account,
+    rows.map((row) => ({
+      kind: row.kind,
+      record: {
+        id: row.document_id,
+        client_id: row.document_id,
+        revision: row.revision,
+        deleted_at: row.deleted_at,
+        payload: row.payload ?? null,
+        updated_at: row.updated_at,
+      },
+    }))
+  );
 }
 
 /**
@@ -246,6 +258,7 @@ module.exports = {
   acknowledge,
   current,
   record,
+  records,
   appendAudit,
   tokenActor,
 };

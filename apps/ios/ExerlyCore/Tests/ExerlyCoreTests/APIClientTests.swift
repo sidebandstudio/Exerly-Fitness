@@ -426,8 +426,9 @@ struct KeychainCredentialStoreTests {
             case ("GET", "/v1/export/food_entries.csv"): return (200, ["unused": true])
             case ("POST", "/v1/import"):
                 #expect(request.body?["version"] as? Int == 3)
-                return (200, ["imported": 7, "kept": 0, "skipped": [["kind": "x", "id": "y", "reason": "Unknown document kind x"]],
-                              "ignored_tables": ["food"]])
+                return (200, ["imported": 7, "kept": 0, "skipped": [["kind": "x", "id": "y", "reason": "Unknown document kind x"],
+                                                                     ["table": "weights", "id": "w", "reason": "weight must be at least 20"]],
+                              "skipped_count": 60, "ignored_tables": ["food"], "restore_id": "R1"])
             default: return (404, ["error": "Not found"])
             }
         }
@@ -435,7 +436,8 @@ struct KeychainCredentialStoreTests {
                                           now: { start }).account()
         #expect(try await account.exportCSV(.foodEntries).isEmpty == false)
         let result = try await account.importExport(Data(#"{"version":3,"documents":[]}"#.utf8))
-        #expect(result == ImportResult(imported: 7, kept: 0, skipped: ["Unknown document kind x"], ignoredTables: ["food"]))
+        #expect(result == ImportResult(imported: 7, kept: 0, skipped: ["Unknown document kind x", "Older weigh-ins: weight must be at least 20"],
+                                       ignoredTables: ["food"], restoreID: "R1", skippedCount: 60))
         await #expect(throws: APIError.self) { try await account.exportCSV(.metrics) }
     }
 }

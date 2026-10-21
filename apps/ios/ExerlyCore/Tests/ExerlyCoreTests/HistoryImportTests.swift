@@ -657,7 +657,9 @@ import Testing
             guard lock.withLock({ reachable }) else { throw URLError(.notConnectedToInternet) }
             switch path {
             case "/v1/import":
-                let json: [String: Any] = ["imported": 0, "kept": 0, "skipped": [Any](), "ignored_tables": [Any](),
+                let json: [String: Any] = ["imported": 0, "kept": 0, "ignored_tables": [Any](), "restore_id": "restore-1",
+                                           "skipped": [["table": "water", "id": "row-9", "reason": "ml must be at most 30000"]],
+                                           "skipped_count": 1,
                                            "restored": [["table": "measurements", "id": "row-7", "revision": 1],
                                                         ["table": "water", "id": "row-3", "revision": 1]],
                                            "not_restored": [String: String]()]
@@ -689,12 +691,18 @@ import Testing
         let record = try await second.importer.commit(restore, api: api)
         #expect(second.training.history.sessions.count == 2)
         #expect(record.serverRows?.map(\.id) == ["row-7", "row-3"])
+        #expect(record.serverRestoreID == "restore-1")
+        #expect(record.serverSkipped == ["Water: ml must be at most 30000"] && record.serverSkippedCount == 1,
+                "What the server left out is kept for the done screen")
         let body = try #require(server.requests.last?.body)
         let sent = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(Set(sent.keys) == ["exported_at", "version", "goals", "measurements", "water"], "Only the older tables go to the server")
 
         let undone = try await second.importer.undo(record.id, api: api)
         #expect(server.requests.last?.path == "/v1/import/undo")
+        let undoBody = try #require(server.requests.last?.body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        #expect(undoBody["restore_id"] as? String == "restore-1" && undoBody["rows"] == nil,
+                "Undo names the restore; the server knows its rows")
         #expect(undone.undone == 2 + 2, "Two rows on the server and two workouts here; their provenance goes too, uncounted")
         #expect(second.training.history.sessions.isEmpty && second.provenance.provenance.isEmpty)
     }

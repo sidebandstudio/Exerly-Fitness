@@ -621,6 +621,7 @@ struct HistoryImportFlow: View {
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
             Text(doneDetail(record)).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
             lines(record.lines, showExisting: false)
+            if let count = record.serverSkippedCount, count > 0 { serverSkipped(record.serverSkipped ?? [], count: count) }
             if record.changes.contains(where: { ["food_entry", "weight_entry"].contains($0.kind) }) {
                 NavigationLink { ProgressView_(initialDate: sync.today) } label: {
                     Label("See your trend", systemImage: "chart.line.uptrend.xyaxis")
@@ -637,6 +638,21 @@ struct HistoryImportFlow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("import.done")
+    }
+
+    /// Rows the account's server refused, with why: they'd fail the checks a new entry gets.
+    private func serverSkipped(_ reasons: [String], count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ExSectionHeading("Left out", detail: count.formatted())
+            Text("These didn't pass the checks a new entry gets, so they weren't restored.")
+                .font(.exSmall).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(reasons.prefix(5).enumerated()), id: \.offset) { _, text in bullet(text, icon: "minus") }
+            if count > 5 {
+                Text("and \((count - 5).formatted()) more").font(.exSmall).foregroundStyle(Color.exTextMuted)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("import.doneSkipped")
     }
 
     private func doneDetail(_ record: ImportRecord) -> String {

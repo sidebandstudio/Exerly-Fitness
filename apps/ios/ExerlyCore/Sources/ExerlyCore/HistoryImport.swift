@@ -164,6 +164,11 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
     public var changes: [Change]
     /// Rows of the server's older tables the import restored, undone through the account.
     public var serverRows: [RestoredRow]?
+    /// The server's record of that restore, which Undo names.
+    public var serverRestoreID: String?
+    /// What the server left out, with why (at most 50), and how many in all.
+    public var serverSkipped: [String]?
+    public var serverSkippedCount: Int?
     /// Body measurements the import added to the measurement log.
     public var measurements: [ImportedMeasurement]?
     public var undoneAt: Date?
@@ -305,6 +310,11 @@ public struct HistoryImporter {
             throw ImportError.needsAccount(Self.describe(error))
         }
         record.serverRows = result.restored
+        record.serverRestoreID = result.restoreID
+        if result.skippedCount > 0 {
+            record.serverSkipped = result.skipped
+            record.serverSkippedCount = result.skippedCount
+        }
         if saved || !result.restored.isEmpty {
             try persistence.saveDocument(kind: Self.recordKind, id: record.id.uuidString, payload: ExerlyJSON.canonical(record))
         }
@@ -318,10 +328,10 @@ public struct HistoryImporter {
         guard let record = try records().first(where: { $0.id == id }) else { throw ImportError.invalid("That import isn't in this account") }
         guard record.undoneAt == nil else { throw ImportError.alreadyUndone }
         var server = (removed: 0, kept: 0)
-        if let rows = record.serverRows, !rows.isEmpty {
+        if let restoreID = record.serverRestoreID {
             guard let api else { throw ImportError.needsAccount("Sign in, then try again.") }
             do {
-                server = try await api.undoRestore(rows)
+                server = try await api.undoRestore(restoreID)
             } catch {
                 throw ImportError.needsAccount(Self.describe(error))
             }

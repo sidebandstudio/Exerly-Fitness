@@ -250,3 +250,5 @@ router.delete(
 
 module.exports = router;
 module.exports.recipeTotals = recipeTotals;
+module.exports.readFood = readFood;
+module.exports.readIngredients = readIngredients;

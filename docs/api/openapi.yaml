@@ -557,10 +557,13 @@ paths:
         already has is kept, so a second import changes nothing. The older
         tables (food, measurements, weights, water, diary days and the rest)
         are restored with this account as owner and new row IDs, matched on
-        their natural keys so a second import adds nothing; `restored` lists
-        the new rows for `/v1/import/undo`. Sign-in identities, webhooks and
-        setup drafts are never restored (`not_restored` says why). The app
-        only: tokens get 403.
+        their natural keys so a second import adds nothing, and a day the
+        account already has keeps its own row. Each row passes the checks its
+        routes make; one that fails is listed in `skipped` with its `table`.
+        `restore_id` names what was restored, for `/v1/import/undo`. Sign-in
+        identities, webhooks and setup drafts are never restored
+        (`not_restored` says why). The app only: tokens get 403. 10 a minute
+        per account.
       requestBody:
         required: true
         content:
@@ -580,9 +583,12 @@ paths:
                     items:
                       type: object
                       properties:
-                        kind: { type: string }
-                        id: { type: string }
+                        kind: { type: string, description: A document's kind. }
+                        table: { type: string, description: An older table's name. }
+                        id: { type: string, nullable: true }
                         reason: { type: string }
+                  skipped_count: { type: integer, description: All left out; `skipped` lists 50. }
+                  restore_id: { type: string, description: Absent when nothing was restored. }
                   ignored_tables: { type: array, items: { type: string } }
                   tables:
                     type: object
@@ -591,6 +597,7 @@ paths:
                       properties:
                         restored: { type: integer }
                         kept: { type: integer }
+                        skipped: { type: integer }
                   restored:
                     type: array
                     items:
@@ -609,16 +616,20 @@ paths:
       operationId: undoImportRestore
       summary: Undo a restore of the older tables
       description: |
-        Removes the rows an import's `restored` listed, in one transaction. A
-        row whose revision changed since is kept. Rows a phone syncs are
-        marked deleted, with a change in its feed. The app only.
+        Removes the rows the restore named by `restore_id` added, in one
+        transaction, once. A row changed since is kept. `rows`, if sent, must
+        be among them; any other row is refused. Rows a phone syncs are
+        marked deleted, with a change in its feed. The app only, 10 a minute
+        per account.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [restore_id]
               properties:
+                restore_id: { type: string }
                 rows:
                   type: array
                   items:
@@ -626,7 +637,6 @@ paths:
                     properties:
                       table: { type: string }
                       id: { type: string }
-                      revision: { type: integer }
       responses:
         '200':
           description: What was removed.
@@ -639,6 +649,8 @@ paths:
                   kept: { type: integer }
         '400': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
 
   /v1/documents/{kind}/{id}:
     parameters:
