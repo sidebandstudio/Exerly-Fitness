@@ -84,17 +84,21 @@ public struct MacroFactorExport: Sendable {
     public var plans: [NutritionPlan] = []
     /// Finished sessions, earliest first.
     public var sessions: [WorkoutSession] = []
+    /// Body measurements, for the account's measurement log.
+    public var measurements: [ImportedMeasurement] = []
     public var report = MacroFactorReport()
 
     /// The first and last day with food, a day status, a weigh-in or a workout.
     public var dateRange: ClosedRange<LocalDate>? {
         let dates = entries.map(\.date) + dayTotals.map(\.date) + days.map(\.date) + weights.map(\.date) + sessions.map(\.localDate)
+            + measurements.map(\.date)
         guard let first = dates.min(), let last = dates.max() else { return nil }
         return first...last
     }
 
     public var isEmpty: Bool {
         foods.isEmpty && entries.isEmpty && dayTotals.isEmpty && days.isEmpty && weights.isEmpty && plans.isEmpty && sessions.isEmpty
+            && measurements.isEmpty
     }
 
     /// The meal of food log rows without a time, and of day totals.
@@ -157,6 +161,7 @@ enum MFField: Hashable {
 struct MFReader {
     enum Role: Equatable {
         case foodLog, customFoods, favorites, recipes, day, fasting, partial, foodNotes, program, weightGoals, workouts, workoutNotes
+        case bodyMetrics
         case leftOut(String)
 
         var title: String {
@@ -173,6 +178,7 @@ struct MFReader {
             case .weightGoals: "Weight goals"
             case .workouts: "Workouts"
             case .workoutNotes: "Workout notes"
+            case .bodyMetrics: "Body measurements"
             case .leftOut(let reason): reason
             }
         }
@@ -243,7 +249,7 @@ struct MFReader {
     mutating func read(_ spreadsheet: Spreadsheet) {
         // Foods first, so log rows link to them; weigh-ins before workouts, for bodyweight.
         let order: [Role] = [.customFoods, .favorites, .recipes, .foodLog, .day, .fasting, .partial, .foodNotes, .weightGoals,
-                             .program, .workouts, .workoutNotes]
+                             .program, .workouts, .workoutNotes, .bodyMetrics]
         var tables: [(role: Role, table: Table)] = []
         for sheet in spreadsheet.sheets {
             let (role, table) = classify(sheet)
@@ -287,7 +293,7 @@ struct MFReader {
         add(.leftOut("Exerly works out your trend weight from your weigh-ins."), ["weight trend", "trend weight"])
         add(.leftOut("Exerly works out your expenditure from your food log and weigh-ins."), ["expenditure"])
         add(.leftOut("Steps come from Apple Health."), ["steps"])
-        add(.leftOut("Body measurements aren't imported yet."), ["body metrics", "measurements", "body measurements"])
+        add(.bodyMetrics, ["body metrics", "measurements", "body measurements"])
         add(.leftOut("Training programs aren't imported yet. Your workouts are."), ["training programs", "training program", "programs"])
         add(.leftOut("Your profile is set in Exerly."), ["user profile", "profile"])
         add(.leftOut("Workout settings stay in MacroFactor."), ["workout settings", "exercise settings"])
@@ -416,6 +422,7 @@ struct MFReader {
                     (.exerciseNotes, ["exercise notes", "exercise note", "set notes"], nil),
                     (.workoutNotes, role == .workoutNotes ? ["notes", "note", "workout notes", "workout log notes", "comment"]
                         : ["workout notes", "workout note", "session notes", "notes", "note"], nil)]
+        case .bodyMetrics: return [(.date, dateNames, nil)]
         case .leftOut: return []
         }
     }
@@ -498,6 +505,7 @@ struct MFReader {
         case .program: return readProgram(table, columns)
         case .workouts: return readWorkouts(table, columns)
         case .workoutNotes: return readWorkoutNotes(table, columns)
+        case .bodyMetrics: return readBodyMetrics(table, columns)
         case .leftOut: return 0
         }
     }
@@ -1071,6 +1079,42 @@ struct MFReader {
             workoutNotes.append((date, MFColumns.text(columns.value(.workout, row)).map(MFColumns.key), notes))
             used += 1
         }
+        return used
+    }
+
+    // MARK: Body metrics
+
+    /// A date and a column per site, such as "Waist (cm)" or "Left Bicep
+    /// (in)". Lengths without a unit are read in the person's units.
+    private mutating func readBodyMetrics(_ table: Table, _ columns: Columns) -> Int {
+        var used = 0
+        var assumed = false
+        let sites = table.headers.compactMap { index, header -> (Int, BodySite, MeasurementImport.Length?)? in
+            guard index != columns.fields[.date], let site = MeasurementImport.site(header.text) else { return nil }
+            return (index, site, MeasurementImport.length(header.text))
+        }
+        let unknown = table.headers.filter { index, header in
+            index != columns.fields[.date] && MeasurementImport.site(header.text) == nil && !header.text.isEmpty
+        }.map(\.value.text).sorted()
+        if !unknown.isEmpty { export.report.unknownColumns[table.sheet, default: []] += unknown }
+        for row in table.rows {
+            guard let date = date(row, columns, table) else {
+                skip(table, row, "No readable date")
+                continue
+            }
+            for (index, site, length) in sites {
+                guard let value = MFColumns.number(row[index]), value > 0 else { continue }
+                if site != .bodyFat && length == nil { assumed = true }
+                let measured = site == .bodyFat ? value : MeasurementImport.centimetres(value, length ?? (unit == .kilograms ? .cm : .inches))
+                guard MeasurementImport.plausible(measured, site: site) else {
+                    skip(table, row, "\(site.rawValue) of \(value) isn't a measurement")
+                    continue
+                }
+                export.measurements.append(ImportedMeasurement(site: site, value: measured, date: date, source: .macroFactor))
+                used += 1
+            }
+        }
+        if assumed { assume("Some body measurements have no unit, so they were read in \(unit == .kilograms ? "cm" : "inches").") }
         return used
     }
 

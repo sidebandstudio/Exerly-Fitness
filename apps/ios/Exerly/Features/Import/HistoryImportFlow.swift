@@ -95,7 +95,7 @@ struct HistoryImportFlow: View {
         .navigationTitle(shownSource == .exerly ? "Restore an export" : "Import from \(shownSource.name)")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
-        .fileImporter(isPresented: $choosing, allowedContentTypes: Self.types, allowsMultipleSelection: source == .macroFactor) { result in
+        .fileImporter(isPresented: $choosing, allowedContentTypes: Self.types, allowsMultipleSelection: source != .exerly) { result in
             switch result {
             case .success(let urls): if !urls.isEmpty { load(urls) }
             case .failure(let error): withAnimation(.snappy) { phase = .unreadable(error.localizedDescription) }
@@ -161,7 +161,7 @@ struct HistoryImportFlow: View {
     @ViewBuilder
     private var chooseButtons: some View {
         Button { choosing = true } label: {
-            Label(source == .macroFactor ? "Choose export files" : "Choose export file", systemImage: "doc.badge.plus")
+            Label(source == .exerly ? "Choose export file" : "Choose export files", systemImage: "doc.badge.plus")
         }
         .buttonStyle(ExActionStyle()).accessibilityIdentifier("import.choose")
         #if DEBUG
@@ -256,11 +256,11 @@ struct HistoryImportFlow: View {
             let parsed = await Task.detached(priority: .userInitiated) {
                 Result { try HistoryImportReader.read(files.map { ($0.name, $0.data) }, options: options, library: library) }
             }.value
-            let hosts = workspace.documentHosts
+            let hosts = workspace.documentHosts, log = measurementLog
             let result = parsed.flatMap { parsed in
                 Result {
                     try HistoryImportReader.plan(parsed, files: files.map(\.name), options: options, hosts: hosts,
-                                                 records: (try? workspace.importer.records()) ?? [])
+                                                 records: (try? workspace.importer.records()) ?? [], measurements: log)
                 }
             }
             withAnimation(.snappy) {
@@ -538,7 +538,7 @@ struct HistoryImportFlow: View {
             // Let the progress show before the save holds the main thread.
             try? await Task.sleep(for: .milliseconds(80))
             do {
-                let record = try await workspace.importer.commit(plan, api: api)
+                let record = try await importer.commit(plan, api: api)
                 // Restored older records reach this phone through its account's feed.
                 if record.serverRows?.isEmpty == false { Task { await sync.synchronize() } }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -610,13 +610,17 @@ struct HistoryImportFlow: View {
             + "Undo removes exactly these, now or later from Profile → Import & export."
     }
 
+    /// The importer, with the account's measurement log.
+    private var importer: HistoryImporter { workspace.importer(measurements: measurementLog) }
+    private var measurementLog: ImportedMeasurementLog? { ImportedMeasurementLog(sync: sync, accountID: workspace.accountID) }
+
     /// The signed-in account's API, for imports that restore older tables on the server.
     private var api: AccountAPI? { auth.accountAPI.flatMap { $0.accountID == workspace.accountID ? $0 : nil } }
 
     private func undo(_ record: ImportRecord) {
         Task {
             do {
-                let result = try await workspace.importer.undo(record.id, api: api)
+                let result = try await importer.undo(record.id, api: api)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 withAnimation(.snappy) { phase = .undone(result) }
                 UIAccessibility.post(notification: .announcement, argument: "Import undone. " + ImportCopy.undone(result))

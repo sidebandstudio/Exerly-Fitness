@@ -43,7 +43,12 @@ function readMeasurement(req) {
     entry_date: entryDateFor(req, req.account),
     timezone: timezoneFor(req.account, req),
     note: v.str(req.body.note, 'note', { required: false, max: 1000 }),
-    source: v.oneOf(req.body.source ?? 'manual', 'source', ['manual', 'legacy_device_import']),
+    // `imported`: from another app's export, named in the note.
+    source: v.oneOf(req.body.source ?? 'manual', 'source', [
+      'manual',
+      'legacy_device_import',
+      'imported',
+    ]),
   };
 }
 async function owned(req, includeDeleted = false) {

@@ -14,6 +14,7 @@ struct ImportExportView: View {
     var exportActions: AccountManagementActions?
     @Environment(\.dynamicTypeSize) private var typeSize
     @EnvironmentObject private var auth: AuthViewModel
+    @EnvironmentObject private var sync: SyncEngine
     @State private var records: [ImportRecord] = []
     @State private var undoing: ImportRecord?
     @State private var message: String?
@@ -143,7 +144,8 @@ struct ImportExportView: View {
         let api = auth.accountAPI.flatMap { $0.accountID == workspace.accountID ? $0 : nil }
         Task {
             do {
-                let result = try await workspace.importer.undo(record.id, api: api)
+                let log = ImportedMeasurementLog(sync: sync, accountID: workspace.accountID)
+                let result = try await workspace.importer(measurements: log).undo(record.id, api: api)
                 let text = "Import undone. " + ImportCopy.undone(result)
                 message = text
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -199,10 +201,10 @@ enum ImportCopy {
 
     static func summary(_ source: ImportSource) -> String {
         switch source {
-        case .macroFactor: "Food log, weigh-ins, targets, foods and workouts"
+        case .macroFactor: "Food log, weigh-ins, measurements, targets, foods and workouts"
         case .macroFactorWorkouts: "Your workout log, with myo-reps and RIR"
-        case .hevy: "Workouts, sets, supersets and notes"
-        case .strong: "Workouts, sets and notes"
+        case .hevy: "Workouts, sets, supersets, notes and measurements"
+        case .strong: "Workouts, sets, notes and measurements"
         case .exerly: "Everything from another account or phone"
         }
     }
@@ -220,12 +222,12 @@ enum ImportCopy {
              ("Save the file", "Save it to Files, then choose it here, or share it to Exerly.")]
         case .hevy:
             [("Open Settings", "In Hevy, open your Profile, then Settings."),
-             ("Export workouts", "Tap Export & Import Data, then Export Workouts."),
-             ("Save workout_data.csv", "Save it to Files, then choose it here, or share it straight to Exerly.")]
+             ("Export workouts", "Tap Export & Import Data, then Export Workouts, and Export Measurements for your body measurements."),
+             ("Save the files", "Save workout_data.csv and measurement_data.csv to Files, then choose each here, or share them to Exerly.")]
         case .strong:
             [("Open Settings", "In Strong, open Settings from your Profile."),
-             ("Export your data", "Tap Export Strong Data. Newer versions call it Export Workouts."),
-             ("Save the CSV", "Save it to Files, then choose it here, or share it straight to Exerly.")]
+             ("Export your data", "Tap Export Strong Data (Export Workouts in newer versions), and Export Measurements for your body measurements."),
+             ("Save the files", "Save them to Files, then choose them here, or share them straight to Exerly.")]
         case .exerly:
             [("Export from Exerly", "On the phone or account with your data, open Profile, then Import & export, then Export everything."),
              ("Unzip it", "Open the zip in Files. Inside is exerly-export with its date, ending in .json."),

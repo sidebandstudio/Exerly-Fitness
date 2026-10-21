@@ -304,6 +304,8 @@ public struct WeightEntry: Sendable, Codable, Hashable, Identifiable {
         /// Imported from MacroFactor's export. Its ID comes from the export's
         /// row, so importing the file again adds nothing.
         case macroFactor
+        /// Imported from Hevy's or Strong's measurement export, the same way.
+        case hevy, strong
     }
 
     public var id: UUID

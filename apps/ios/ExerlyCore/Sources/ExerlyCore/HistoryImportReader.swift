@@ -34,15 +34,37 @@ public enum HistoryImportReader {
     public enum Parsed: Sendable {
         case macroFactor(MacroFactorExport, workoutsOnly: Bool)
         case workouts(WorkoutImport.Result)
+        case measurements(MeasurementImport.Result)
         case exerly(ExerlyExportFile)
 
         public var source: ImportSource {
             switch self {
             case .macroFactor(_, let workoutsOnly): workoutsOnly ? .macroFactorWorkouts : .macroFactor
             case .workouts(let result): result.source == .hevy ? .hevy : .strong
+            case .measurements(let result): result.source
             case .exerly: .exerly
             }
         }
+    }
+
+    /// A Hevy or Strong file of body measurements rather than workouts:
+    /// Hevy's has `fat_percent` and `_cm` or `_in` columns, Strong's a
+    /// `Measurement Type` (or `Measurement`) and a `Value`.
+    static func isMeasurements(_ data: Data) -> Bool {
+        let header = headerRow(data).map { $0.lowercased() }
+        if header.contains("exercise_title") || header.contains("exercise name") { return false }
+        if header.contains("date") && (header.contains("fat_percent") || header.contains { $0.hasSuffix("_cm") || $0.hasSuffix("_in") }) {
+            return true
+        }
+        return header.contains("date") && header.contains("value") && (header.contains("measurement type") || header.contains("measurement"))
+    }
+
+    static func headerRow(_ data: Data) -> [String] {
+        guard let text = String(data: data.prefix(64 * 1024), encoding: .utf8) ?? String(data: data.prefix(64 * 1024), encoding: .isoLatin1)
+        else { return [] }
+        let trimmed = text.drop { $0.isWhitespace || $0 == "\u{FEFF}" }
+        return WorkoutImport.csv(String(trimmed.prefix { $0 != "\n" && $0 != "\r" })).first?
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
     }
 
     /// The app a file came from, by its contents rather than its name.
@@ -56,6 +78,10 @@ public enum HistoryImportReader {
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? []
         if header.contains("exercise_title") && header.contains("start_time") { return .hevy }
         if header.contains("Exercise Name") && header.contains("Set Order") { return .strong }
+        if isMeasurements(data) {
+            let lower = header.map { $0.lowercased() }
+            return lower.contains("value") ? .strong : .hevy
+        }
         let keys = Set(header.map(MFColumns.key))
         if keys.contains("exercise") && keys.contains("date") { return .macroFactorWorkouts }
         if keys.contains("date") || keys.contains("food name") { return .macroFactor }
@@ -80,8 +106,17 @@ public enum HistoryImportReader {
             let workoutsOnly = !export.sessions.isEmpty && export.entries.isEmpty && export.dayTotals.isEmpty && export.weights.isEmpty
                 && export.foods.isEmpty && export.plans.isEmpty
             return .macroFactor(export, workoutsOnly: workoutsOnly || (sources.allSatisfy { $0 == .macroFactorWorkouts } && export.isEmpty))
+        case .hevy where files.allSatisfy({ isMeasurements($0.data) }), .strong where files.allSatisfy({ isMeasurements($0.data) }):
+            let texts = files.map { String(data: $0.data, encoding: .utf8) ?? String(data: $0.data, encoding: .isoLatin1) ?? "" }
+            if first == .hevy {
+                guard texts.count == 1 else { throw ReadError.unrecognized("Choose one Hevy measurements file at a time") }
+                return .measurements(MeasurementImport.hevy(texts[0], timeZone: options.timeZone))
+            }
+            return .measurements(MeasurementImport.strong(texts, timeZone: options.timeZone, unit: options.unit))
         case .hevy, .strong:
-            guard files.count == 1 else { throw ReadError.unrecognized("Choose one \(first.name) export at a time") }
+            guard files.count == 1 else {
+                throw ReadError.unrecognized("Choose \(first.name)'s workouts file and its measurements files one at a time. These")
+            }
             let text = String(data: files[0].data, encoding: .utf8) ?? String(data: files[0].data, encoding: .isoLatin1) ?? ""
             return .workouts(try WorkoutImport.parse(text, timeZone: options.timeZone, unit: options.unit, library: library,
                                                      mapping: options.mapping, leftOut: options.leftOut))
@@ -97,7 +132,7 @@ public enum HistoryImportReader {
     /// `records` are this account's earlier imports: a workout an earlier
     /// import saved, unchanged in Exerly since, can be updated from the file.
     public static func plan(_ parsed: Parsed, files: [String], options: Options, hosts: [DocumentHost],
-                            records: [ImportRecord] = []) throws -> HistoryImportPlan {
+                            records: [ImportRecord] = [], measurements: ImportedMeasurementStore? = nil) throws -> HistoryImportPlan {
         let nutrition = hosts.lazy.compactMap { $0 as? NutritionStore }.first
         let training = hosts.lazy.compactMap { $0 as? TrainingStore }.first
         var plan = HistoryImportPlan(source: parsed.source, files: files, timeZone: options.timeZone)
@@ -108,9 +143,13 @@ public enum HistoryImportReader {
         case .workouts(let result):
             guard let training else { throw HistoryImporter.ImportError.noStore("training") }
             try workouts(result, into: &plan, training: training, options: options, records: records)
+        case .measurements(let result):
+            guard let nutrition else { throw HistoryImporter.ImportError.noStore("weigh-ins") }
+            try bodyMeasurements(result, into: &plan, nutrition: nutrition)
         case .exerly(let file):
             try exerly(file, into: &plan, hosts: hosts)
         }
+        try planMeasurements(parsed, into: &plan, store: measurements)
         return plan
     }
 
@@ -197,7 +236,8 @@ public enum HistoryImportReader {
             plan.lost.append("\(result.restTimers) rest \(result.restTimers == 1 ? "timer" : "timers"). Exerly times rest itself during a workout.")
         }
         let name = result.source == .hevy ? "Hevy" : "Strong"
-        plan.lost.append("\(name)'s routines, body measurements and settings aren't in this file.")
+        plan.lost.append("\(name)'s routines and settings aren't in this file. Its body measurements are a separate export, "
+                         + "which you can import here too.")
         // Unitless weights and distances are said under units, where the weight's can be changed.
         plan.approximated = result.assumptions.filter { !$0.hasPrefix("Weights have no unit") && !$0.hasPrefix("Distances have no unit") }
         if result.sessions.contains(where: { $0.exercises.contains { $0.sets.contains { $0.rir != nil } } }) {
@@ -210,6 +250,55 @@ public enum HistoryImportReader {
             plan.approximated.append("Hevy's failure sets become failure sets, drop sets become drop sets, each drop on its own set.")
         }
         plan.skip(result.skipped)
+    }
+
+    // MARK: Body measurements
+
+    @MainActor
+    private static func bodyMeasurements(_ result: MeasurementImport.Result, into plan: inout HistoryImportPlan,
+                                         nutrition: NutritionStore) throws {
+        let ids = Set(nutrition.weights.map(\.id))
+        let byDay = Dictionary(grouping: nutrition.weights, by: \.date)
+        var existing = 0
+        for weight in result.weights {
+            // The same reading from Apple Health or an earlier import is kept.
+            if ids.contains(weight.id) || (byDay[weight.date] ?? []).contains(where: { abs($0.weight.kilograms - weight.weight.kilograms) < 0.1 }) {
+                existing += 1
+                continue
+            }
+            plan.writes.append(PlannedWrite(kind: NutritionStore.weightKind, id: weight.id.uuidString, before: nil,
+                                            after: try ExerlyJSON.canonical(weight)))
+        }
+        if !result.weights.isEmpty {
+            plan.lines.append(ImportLine(key: "weights", title: "Weigh-ins", new: result.weights.count - existing, existing: existing))
+        }
+        let dates = result.weights.map(\.date) + result.measurements.map(\.date)
+        if let first = dates.min(), let last = dates.max() { plan.dateRange = first...last }
+        plan.units = result.units
+        plan.approximated = result.assumptions
+        for (name, count) in result.unknown.sorted(by: { $0.key < $1.key }) {
+            plan.lost.append("\(name): \(count) \(count == 1 ? "value" : "values") of a measurement Exerly doesn't keep")
+        }
+        plan.skip(result.skipped)
+    }
+
+    /// The file's body measurements, less those the account already has.
+    @MainActor
+    private static func planMeasurements(_ parsed: Parsed, into plan: inout HistoryImportPlan, store: ImportedMeasurementStore?) throws {
+        let all: [ImportedMeasurement] = switch parsed {
+        case .macroFactor(let export, _): export.measurements
+        case .measurements(let result): result.measurements
+        default: []
+        }
+        guard !all.isEmpty else { return }
+        guard let store else {
+            plan.lost.append("\(all.count) body \(all.count == 1 ? "measurement" : "measurements"): sign in to import them.")
+            return
+        }
+        let have = store.existing(all.map(\.clientID))
+        plan.measurements = all.filter { !have.contains($0.clientID) }
+        plan.lines.append(ImportLine(key: "measurements", title: "Body measurements", new: plan.measurements.count, existing: have.count))
+        if plan.dateRange == nil, let first = all.map(\.date).min(), let last = all.map(\.date).max() { plan.dateRange = first...last }
     }
 
     // MARK: Exerly

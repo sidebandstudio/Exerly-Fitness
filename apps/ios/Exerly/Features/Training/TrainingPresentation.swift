@@ -133,7 +133,12 @@ final class TrainingWorkspace: ObservableObject {
     }
 
     /// Saves imports as one unit across this account's stores, and undoes them.
-    var importer: HistoryImporter { HistoryImporter(hosts: documentHosts, persistence: persistence) }
+    var importer: HistoryImporter { importer(measurements: nil) }
+
+    /// The importer, saving body measurements to `measurements` alongside.
+    func importer(measurements: ImportedMeasurementStore?) -> HistoryImporter {
+        HistoryImporter(hosts: documentHosts, persistence: persistence, measurements: measurements)
+    }
 
     /// Every store whose records are documents: what imports write and exports hold.
     var documentHosts: [DocumentHost] { [store, programs, nutrition, gyms, agent, provenance] }

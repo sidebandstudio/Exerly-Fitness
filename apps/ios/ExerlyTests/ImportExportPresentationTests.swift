@@ -1,4 +1,5 @@
 import ExerlyCore
+import SwiftData
 import XCTest
 @testable import Exerly
 
@@ -43,9 +44,41 @@ final class ImportExportPresentationTests: XCTestCase {
         XCTAssertEqual(sets.rows.count, 3, "A header and two sets")
 
         let undone = try reopened.importer.undo(record.id)
-        XCTAssertEqual(undone, .init(undone: 2, kept: 0))
+        XCTAssertEqual(undone, .init(undone: 3, kept: 0), "Two workouts and where they came from")
         XCTAssertTrue(reopened.store.history.sessions.isEmpty)
         XCTAssertTrue(try TrainingWorkspace(accountID: "import-mine", root: root).store.history.sessions.isEmpty, "Undone on disk too")
+    }
+
+    func testImportedMeasurementsSaveWithTheirIDsAndUndoKeepsACorrectedOne() throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubURLProtocol.self]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "exerly.tests.\(UUID().uuidString)"))
+        let api = APIClient(baseURL: "https://fixture.exerly.test", session: URLSession(configuration: config),
+                            keychain: MemoryCredentials(), defaults: defaults)
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self),
+                                           configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false, observeClock: false)
+        engine.configure(container: container, accountID: "measurements-a", timeZone: "UTC")
+        XCTAssertNil(ImportedMeasurementLog(sync: engine, accountID: "measurements-b"), "Never another account's log")
+        let log = try XCTUnwrap(ImportedMeasurementLog(sync: engine, accountID: "measurements-a"))
+        let date = try XCTUnwrap(LocalDate("2026-10-01"))
+        let waist = ImportedMeasurement(site: .waist, value: 82.5, date: date, source: .macroFactor)
+        let fat = ImportedMeasurement(site: .bodyFat, value: 18, date: date, source: .macroFactor)
+        try log.add([waist, fat])
+        XCTAssertEqual(log.existing([waist.clientID, fat.clientID, "other"]), [waist.clientID, fat.clientID])
+        let rows = try engine.pendingExportRows().filter { $0.table == "measurements" }
+        XCTAssertEqual(Set(rows.map(\.clientID)), [waist.clientID, fat.clientID])
+        let row = try XCTUnwrap(rows.first { $0.clientID == waist.clientID }?.row)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: row) as? [String: Any])
+        XCTAssertEqual(json["source"] as? String, "imported")
+        XCTAssertEqual(json["note"] as? String, "From MacroFactor")
+
+        var corrected = waist
+        corrected.value = 83
+        let outcome = try log.remove([corrected, fat])
+        XCTAssertEqual(outcome.removed, 1)
+        XCTAssertEqual(outcome.kept, 1, "The waist differs from what's in the log, so it's kept")
+        XCTAssertEqual(log.existing([waist.clientID, fat.clientID]), [waist.clientID])
     }
 
     func testExportFilesAreWrittenForSharingAndRemovedAfter() throws {

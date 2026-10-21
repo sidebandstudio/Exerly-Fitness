@@ -319,6 +319,69 @@ import Testing
         #expect(try second.restore(exported).isEmpty)
     }
 
+    // MARK: Corrected workouts
+
+    /// The same Hevy account exported again after the push day was renamed and
+    /// its end time corrected, with a new legs day.
+    static let hevyCorrected = WorkoutImportTests.hevy
+        .replacingOccurrences(of: #""Push day","5 Oct 2026, 18:00","5 Oct 2026, 19:05""#,
+                              with: #""Push day (heavy)","5 Oct 2026, 18:00","5 Oct 2026, 19:20""#)
+        + #"""
+        "Legs","9 Oct 2026, 07:00","9 Oct 2026, 08:00","","Squat (Barbell)",,"",0,"normal",140,5,,,8
+
+        """#
+
+    @Test func aWorkoutCorrectedInHevyIsUpdatedNotAddedAgain() throws {
+        let (_, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
+        let benchSets = training.history.sets(of: "barbell-bench-press").count
+
+        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 1, updated: 1))
+        let record = try importer.commit(corrected)
+        #expect(training.history.sessions.map(\.name) == ["Push day (heavy)", "Pull day", "Legs"])
+        #expect(training.history.sets(of: "barbell-bench-press").count == benchSets, "No set is added twice")
+        let push = try #require(training.history.sessions.first)
+        #expect(push.endedAt == Date(timeIntervalSince1970: 1_791_237_600 + 80 * 60))
+
+        // Undo puts the first import's version back.
+        try importer.undo(record.id)
+        #expect(training.history.sessions.map(\.name) == ["Push day", "Pull day"])
+    }
+
+    @Test func aStrongWorkoutRenamedWithANewDurationIsUpdated() throws {
+        let (_, nutrition, training, importer) = try stores()
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds, leftOut: ["Synthetic Landmine Twist"])
+        try importer.commit(try plan(Self.strong, options: options, hosts: [training, nutrition]))
+        let renamed = Self.strong.replacingOccurrences(of: "Synthetic Upper,1h 5m", with: "Synthetic Upper Body,1h 20m")
+        let corrected = try plan(renamed, options: options, hosts: [training, nutrition], records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 0, existing: 1, updated: 1))
+        try importer.commit(corrected)
+        let upper = try #require(training.history.sessions.first)
+        #expect(training.history.sessions.count == 2 && upper.name == "Synthetic Upper Body")
+        #expect(upper.endedAt == upper.startedAt.addingTimeInterval(80 * 60))
+    }
+
+    @Test func aWorkoutChangedInExerlyIsKeptWhenTheFileChangesItToo() throws {
+        let (persistence, nutrition, training, importer) = try stores()
+        let hosts: [DocumentHost] = [training, nutrition]
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        try importer.commit(try plan(WorkoutImportTests.hevy, options: options, hosts: hosts))
+        var push = try #require(training.history.sessions.first)
+        push.notes = "Edited in Exerly"
+        try persistence.performAtomically {
+            try training.prepareWrite(kind: "workout_session", id: push.id.uuidString, payload: ExerlyJSON.canonical(push))()
+        }
+        let corrected = try plan(Self.hevyCorrected, options: options, hosts: hosts, records: try importer.records())
+        #expect(corrected.lines.first == ImportLine(key: "workouts", title: "Workouts", new: 1, existing: 2))
+        #expect(corrected.lost.contains("1 workout you changed in Exerly since the last import is kept as it is."))
+        try importer.commit(corrected)
+        #expect(training.history.sessions.map(\.notes).first == "Edited in Exerly")
+        #expect(training.history.sessions.count == 3)
+    }
+
     // MARK: A daily total and the foods that replace it
 
     /// MacroFactor's Quick Export: Oct 1 as one daily total of 2000 kcal.
@@ -378,6 +441,128 @@ import Testing
                 "Oct 1 stays as imported, with the correction, and without its old total")
         #expect(close(nutrition.summary(on: october1).totals.energy, corrected))
         #expect(nutrition.entries.allSatisfy { $0.date == october1 }, "Other days are undone")
+    }
+
+    // MARK: Body measurements
+
+    /// The app's measurement log, as `ImportedMeasurementStore` sees it.
+    @MainActor
+    final class FakeMeasurements: ImportedMeasurementStore {
+        var saved: [String: ImportedMeasurement] = [:]
+        var failing = false
+
+        func existing(_ clientIDs: [String]) -> Set<String> { Set(clientIDs.filter { saved[$0] != nil }) }
+
+        func add(_ measurements: [ImportedMeasurement]) throws {
+            if failing { throw DocumentError(message: "Synthetic: the measurement log can't be written") }
+            for measurement in measurements { saved[measurement.clientID] = measurement }
+        }
+
+        func remove(_ measurements: [ImportedMeasurement]) throws -> (removed: Int, kept: Int) {
+            var removed = 0, kept = 0
+            for measurement in measurements {
+                if saved[measurement.clientID] == measurement {
+                    saved[measurement.clientID] = nil
+                    removed += 1
+                } else if saved[measurement.clientID] != nil {
+                    kept += 1
+                }
+            }
+            return (removed, kept)
+        }
+    }
+
+    /// MacroFactor's Body Metrics sheet, as docs/MACROFACTOR.md records its sites.
+    static let bodyMetrics: [(name: String, rows: [[TestCell]])] = [
+        ("Body Metrics", [[.s("Date"), .s("Waist (cm)"), .s("Left Bicep (in)"), .s("Abdomen (cm)"), .s("Visual Body Fat Assessment (%)")],
+                          [.date(46296), .n(82.5), .n(14), .n(90), .n(18)],
+                          [.date(46303), .n(81.8), .empty, .empty, .empty]]),
+    ]
+
+    /// Hevy's measurement_data.csv: one row a day with `_cm` sites.
+    /// Format: https://github.com/200ok-ch/hevy_measurements_visualizer and
+    /// https://thetaperapp.com/articles/how-to-export-hevy-data/ (Export Measurements).
+    static let hevyMeasurements = #"""
+    "date","weight_kg","fat_percent","neck_cm","shoulder_cm","chest_cm","left_bicep_cm","right_bicep_cm","abdomen_cm","waist_cm"
+    "1 Oct 2026, 07:00",80.2,18.5,38,118,102,35.5,35.0,88,84
+    "8 Oct 2026, 07:00",,17.9,,,,,,,83.2
+
+    """#
+
+    /// Strong's measurement export, one file a measurement. Format:
+    /// https://thetaperapp.com/articles/how-to-export-strong-data/ (Export Measurements).
+    static let strongWaist = "Date,Measurement Type,Value,Unit,Source\n2026-10-01 07:00:00,Waist,33.0,in,Strong\n"
+    static let strongWeight = "Date,Measurement Type,Value,Unit,Source\n2026-10-01 07:00:00,Weight,176.4,lbs,Strong\n"
+    static let strongBodyFat = "Date,Measurement Type,Value,Unit,Source\n2026-10-01 07:00:00,Body Fat,18.0,%,Strong\n"
+
+    @Test func macroFactorBodyMetricsJoinTheMeasurementsAsOneUnitAndUndo() throws {
+        let (persistence, nutrition, training, _) = try stores()
+        let store = FakeMeasurements()
+        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: { Fixture.instant() })
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        let parsed = try HistoryImportReader.read([("MacroFactor.xlsx", try XLSXBuilder(MacroFactorFixture.sheets + Self.bodyMetrics).data())],
+                                                  options: options, library: library, now: Fixture.instant())
+        let preview = try HistoryImportReader.plan(parsed, files: ["MacroFactor.xlsx"], options: options, hosts: [training, nutrition],
+                                                   measurements: store)
+        #expect(preview.lines.first { $0.key == "measurements" } == ImportLine(key: "measurements", title: "Body measurements", new: 4))
+        #expect(preview.lost.contains { $0.contains("Abdomen") }, "\(preview.lost)")
+        let bicep = try #require(preview.measurements.first { $0.site == .leftBicep })
+        #expect(abs(bicep.value - 35.56) < 0.001, "14 in")
+        #expect(preview.measurements.contains { $0.site == .bodyFat && $0.value == 18 })
+
+        // The measurement log fails: nothing is saved anywhere.
+        store.failing = true
+        #expect(throws: DocumentError.self) { try importer.commit(preview) }
+        let records = try importer.records()
+        #expect(nutrition.entries.isEmpty && store.saved.isEmpty && records.isEmpty)
+
+        store.failing = false
+        let record = try importer.commit(preview)
+        #expect(store.saved.count == 4 && record.measurements?.count == 4 && nutrition.weights.count == 4)
+        let again = try HistoryImportReader.plan(parsed, files: ["MacroFactor.xlsx"], options: options, hosts: [training, nutrition],
+                                                 records: try importer.records(), measurements: store)
+        #expect(again.measurements.isEmpty && again.lines.first { $0.key == "measurements" }?.existing == 4)
+
+        // A waist corrected in Exerly is kept by Undo; the rest go.
+        let waist = try #require(store.saved.values.first { $0.site == .waist && $0.date == october1 })
+        store.saved[waist.clientID]?.value = 83
+        let undone = try importer.undo(record.id)
+        #expect(store.saved.map(\.value.value) == [83] && undone.kept == 1)
+        #expect(nutrition.weights.isEmpty)
+    }
+
+    @Test func hevyMeasurementsGiveWeighInsWithBodyFatAndSites() throws {
+        let (persistence, nutrition, training, _) = try stores()
+        let store = FakeMeasurements()
+        let importer = HistoryImporter(hosts: [training, nutrition], persistence: persistence, measurements: store, now: { Fixture.instant() })
+        #expect(HistoryImportReader.detect(Data(Self.hevyMeasurements.utf8)) == .hevy)
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .pounds)
+        let parsed = try HistoryImportReader.read([("measurement_data.csv", Data(Self.hevyMeasurements.utf8))], options: options, library: library)
+        let preview = try HistoryImportReader.plan(parsed, files: ["measurement_data.csv"], options: options, hosts: [training, nutrition],
+                                                   measurements: store)
+        #expect(preview.source == .hevy)
+        #expect(preview.lines.map(\.key) == ["weights", "measurements"])
+        #expect(preview.measurements.map(\.site).sorted { $0.rawValue < $1.rawValue }
+                == [.bodyFat, .chest, .leftBicep, .neck, .rightBicep, .shoulders, .waist, .waist], "Body fat alone on Oct 8")
+        #expect(preview.lost == ["abdomen_cm: 1 value of a measurement Exerly doesn't keep"])
+        try importer.commit(preview)
+        let weight = try #require(nutrition.weights.first)
+        #expect(weight.weight == .kg(80.2) && weight.bodyFat == 18.5 && weight.source == .hevy && weight.date == october1)
+    }
+
+    @Test func strongMeasurementFilesReadTheirOwnUnits() throws {
+        let (_, nutrition, training, _) = try stores()
+        let store = FakeMeasurements()
+        let files = [Self.strongWaist, Self.strongWeight, Self.strongBodyFat].enumerated().map { ("strong_\($0.offset).csv", Data($0.element.utf8)) }
+        #expect(files.allSatisfy { HistoryImportReader.detect($0.1) == .strong })
+        let options = HistoryImportReader.Options(timeZone: Fixture.newYork, unit: .kilograms)
+        let parsed = try HistoryImportReader.read(files, options: options, library: library)
+        let preview = try HistoryImportReader.plan(parsed, files: files.map(\.0), options: options, hosts: [training, nutrition],
+                                                   measurements: store)
+        let waist = try #require(preview.measurements.first { $0.site == .waist })
+        #expect(abs(waist.value - 83.82) < 0.001 && preview.measurements.contains { $0.site == .bodyFat && $0.value == 18 })
+        let weight = try ExerlyJSON.decoder.decode(WeightEntry.self, from: try #require(preview.writes.first?.after))
+        #expect(weight.weight == .lb(176.4) && weight.source == .strong)
     }
 
     /// Every store an account has, sharing one database, as the app's workspace does.

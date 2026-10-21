@@ -111,9 +111,11 @@ public struct HistoryImportPlan: Sendable {
     public var writes: [PlannedWrite]
     /// The server's older tables an Exerly export restores, through the account.
     public var serverTables: Data?
+    /// Body measurements the account doesn't have yet, for its measurement log.
+    public var measurements: [ImportedMeasurement] = []
 
     /// Nothing to save: the file is empty or already in Exerly.
-    public var isEmpty: Bool { writes.isEmpty && serverTables == nil }
+    public var isEmpty: Bool { writes.isEmpty && serverTables == nil && measurements.isEmpty }
     /// What the import adds or updates, counting workouts rather than the
     /// exercises and sets inside them.
     public var additions: Int { lines.filter { !ImportLine.breakdowns.contains($0.key) }.reduce(0) { $0 + $1.new + $1.updated } }
@@ -162,6 +164,8 @@ public struct ImportRecord: Sendable, Codable, Hashable, Identifiable {
     public var changes: [Change]
     /// Rows of the server's older tables the import restored, undone through the account.
     public var serverRows: [RestoredRow]?
+    /// Body measurements the import added to the measurement log.
+    public var measurements: [ImportedMeasurement]?
     public var undoneAt: Date?
 
     /// Documents the import added, rather than changed or removed.
@@ -202,13 +206,17 @@ public struct HistoryImporter {
 
     let hosts: [DocumentHost]
     let persistence: TrainingPersistence & DocumentPersistence
+    let measurementStore: ImportedMeasurementStore?
     let now: () -> Date
 
     /// `hosts` must all keep their documents in `persistence`, so a plan
-    /// saves in one transaction.
-    public init(hosts: [DocumentHost], persistence: TrainingPersistence & DocumentPersistence, now: @escaping () -> Date = Date.init) {
+    /// saves in one transaction. `measurements` is the account's measurement
+    /// log, saved alongside it.
+    public init(hosts: [DocumentHost], persistence: TrainingPersistence & DocumentPersistence,
+                measurements: ImportedMeasurementStore? = nil, now: @escaping () -> Date = Date.init) {
         self.hosts = hosts
         self.persistence = persistence
+        measurementStore = measurements
         self.now = { now().roundedToMilliseconds }
     }
 
@@ -248,12 +256,16 @@ public struct HistoryImporter {
         }
         var record = ImportRecord(id: UUID(), source: plan.source, files: plan.files, importedAt: now(), timeZoneID: plan.timeZone.identifier,
                                   lines: plan.lines, dateRange: plan.dateRange, changes: changes)
+        let have = measurementStore?.existing(plan.measurements.map(\.clientID)) ?? []
+        let measurements = plan.measurements.filter { !have.contains($0.clientID) }
+        if !measurements.isEmpty, measurementStore == nil { throw ImportError.noStore("measurement") }
         // Nothing new, as when a file is imported again: nothing to save or undo.
-        guard !changes.isEmpty else { return record }
+        guard !changes.isEmpty || !measurements.isEmpty else { return record }
+        if !measurements.isEmpty { record.measurements = measurements }
         // Where the documents came from, saved and undone with them. A restored
         // export brings its own provenance, so it adds none.
         if plan.source != .exerly, let store = hosts.lazy.compactMap({ $0 as? ProvenanceStore }).first {
-            let saved = changes.filter { $0.after != nil }.map { "\($0.kind)/\($0.id)" }
+            let saved = changes.filter { $0.after != nil }.map { "\($0.kind)/\($0.id)" } + measurements.map { "measurement/\($0.clientID)" }
             let parts = try ImportProvenance.parts(for: record, documents: saved).map { part in
                 DocumentWrite(kind: ProvenanceStore.kind, id: part.id, payload: try ExerlyJSON.canonical(part))
             }
@@ -261,7 +273,15 @@ public struct HistoryImporter {
             record.changes += parts.map { .init(kind: $0.kind, id: $0.id, before: nil, after: $0.payload.map(Self.fingerprint)) }
         }
         try validate(batches)
-        try apply(batches, saving: record)
+        // The measurement log isn't in this database: saved first, and taken out
+        // again if the documents can't be, so it's all or nothing.
+        if !measurements.isEmpty { try measurementStore?.add(measurements) }
+        do {
+            try apply(batches, saving: record)
+        } catch {
+            if !measurements.isEmpty { _ = try? measurementStore?.remove(measurements) }
+            throw error
+        }
         return record
     }
 
@@ -356,7 +376,21 @@ public struct HistoryImporter {
         }
         try validate(batches)
         record.undoneAt = now()
-        try apply(batches, saving: record)
+        var removed: [ImportedMeasurement] = []
+        if let measurements = record.measurements, !measurements.isEmpty {
+            guard let measurementStore else { throw ImportError.noStore("measurement") }
+            let outcome = try measurementStore.remove(measurements)
+            result.undone += outcome.removed
+            result.kept += outcome.kept
+            removed = measurements
+        }
+        do {
+            try apply(batches, saving: record)
+        } catch {
+            // Put the measurements back, so nothing is half undone.
+            if !removed.isEmpty { try? measurementStore?.add(removed.filter { !(measurementStore?.existing([$0.clientID]).isEmpty == false) }) }
+            throw error
+        }
         return result
     }
 

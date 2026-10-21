@@ -112,6 +112,9 @@ final class SyncEngine: ObservableObject {
     }
     private func serverAccountID(_ owner: String) -> String { String(owner.dropFirst(api.storageNamespace.count + 1)) }
 
+    /// Whether this engine holds `accountID`'s records.
+    func isConfigured(for accountID: String) -> Bool { self.accountID == "\(api.storageNamespace):\(accountID)" }
+
     func configure(container: ModelContainer, accountID: String?, timeZone: String? = nil) {
         let calendar = AccountCalendar(timeZoneIdentifier: timeZone)
         if self.calendar != calendar { self.calendar = calendar }
@@ -245,7 +248,8 @@ final class SyncEngine: ObservableObject {
     }
 
     @discardableResult
-    func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, commit: Bool = true) throws -> String {
+    func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, clientID: String? = nil,
+                         commit: Bool = true) throws -> String {
         guard let accountID, let context else { throw APIError.unauthorized }
         guard BodySite(rawValue: request.type) != nil,
               request.value.isFinite, request.value > 0, request.value <= (request.type == "body_fat" ? 100 : 1000),
@@ -253,7 +257,7 @@ final class SyncEngine: ObservableObject {
             throw APIError.serverError(400, "Enter a valid measurement.")
         }
         let old = try ownedResources().first { $0.kind == "measurement" && $0.entityID == editing?.client_id }
-        let entityID = old?.entityID ?? editing?.client_id ?? UUID().uuidString.lowercased()
+        let entityID = old?.entityID ?? editing?.client_id ?? clientID ?? UUID().uuidString.lowercased()
         var body = try object(JSONEncoder().encode(request))
         body["client_id"] = entityID
         let payload = try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
@@ -295,6 +299,56 @@ final class SyncEngine: ObservableObject {
         changeToken += 1
         refreshCounts()
         if automaticallySync { Task { await synchronize() } }
+    }
+
+    // MARK: Imported measurements
+
+    /// Which of these client IDs are measurements the account has, deleted ones aside.
+    func measurementClientIDs(_ clientIDs: [String]) throws -> Set<String> {
+        let wanted = Set(clientIDs)
+        return Set(try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned && wanted.contains($0.entityID) }.map(\.entityID))
+    }
+
+    /// Saves measurements with the client IDs an import chose: all or none.
+    func saveImportedMeasurements(_ measurements: [(clientID: String, request: BodyMeasurementRequest)]) throws {
+        guard let context else { throw APIError.unauthorized }
+        do {
+            for measurement in measurements { try saveMeasurement(measurement.request, clientID: measurement.clientID, commit: false) }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+    }
+
+    /// Deletes the measurements an import saved, all or none, keeping any whose
+    /// value changed since.
+    func removeImportedMeasurements(_ measurements: [(clientID: String, value: Double)]) throws -> (removed: Int, kept: Int) {
+        guard let accountID, let context else { throw APIError.unauthorized }
+        var removed = 0, kept = 0
+        let resources = try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned }
+        do {
+            for measurement in measurements {
+                guard let resource = resources.first(where: { $0.entityID == measurement.clientID }) else { continue }
+                let value = (try? object(resource.payload))?["value"] as? Double
+                guard let value, abs(value - measurement.value) < 0.000_001 else {
+                    kept += 1
+                    continue
+                }
+                let pending = try operations().contains { $0.entityID == resource.entityID && $0.kind == "measurement" }
+                context.insert(PendingMutation(accountID: accountID, entityID: resource.entityID, kind: "measurement", method: "DELETE",
+                                               endpoint: "/api/measurements/{id}", payload: Data("{}".utf8),
+                                               baseRevision: pending ? nil : resource.revision))
+                resource.tombstoned = true
+                resource.syncState = "pending"
+                removed += 1
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+        return (removed, kept)
     }
 
     func importLegacyMeasurements(_ reviewed: [LegacyMeasurementImport]) throws {

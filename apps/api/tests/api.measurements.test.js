@@ -133,3 +133,28 @@ test('measurements accept every body site, both sides of each limb, and filter b
     400
   );
 });
+
+test('a measurement imported from another app keeps that as its source', async () => {
+  const { token } = await signUp(api);
+  const body = {
+    client_id: randomUUID(),
+    type: 'left_bicep',
+    value: 35.56,
+    unit: 'cm',
+    entry_date: '2026-10-01',
+    source: 'imported',
+    note: 'From MacroFactor',
+  };
+  const created = await api.post('/api/measurements', body, {
+    token,
+    headers: { 'Idempotency-Key': randomUUID() },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.source, 'imported');
+  const other = await api.post(
+    '/api/measurements',
+    { ...body, client_id: randomUUID(), source: 'somewhere' },
+    { token, headers: { 'Idempotency-Key': randomUUID() } }
+  );
+  assert.equal(other.status, 400);
+});
