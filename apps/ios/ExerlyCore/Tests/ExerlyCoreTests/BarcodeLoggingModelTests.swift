@@ -71,6 +71,7 @@ private struct ModelRandom {
     struct Row {
         var food: Food
         var pending: Set<UUID>
+        var grams = 40.0
     }
 
     /// Two offline scans of one product: the plate's row came from one, so
@@ -212,12 +213,14 @@ private struct ModelRandom {
         #expect(store.entries.isEmpty)
     }
 
-    /// 1,000 seeded random runs of what the app does with offline scans:
-    /// scan offline, resolve, put a scan on the scanner's plate or a meal being
-    /// built, cancel its portion, remove its row, log or discard either plate,
-    /// log one alone, quit and relaunch, and fail a commit then retry. Every
-    /// offline scan ends either still pending with its meal, day and time, or
-    /// logged exactly once: never both, never neither.
+    /// 1,000 seeded random runs of 40 steps of what the app does with offline
+    /// scans: scan offline, resolve, put a scan on the scanner's plate or a
+    /// meal being built (each offers what isn't on itself, so one scan can
+    /// reach both), cancel its portion, remove its row, log or discard either
+    /// plate, log one alone, fail a commit then edit and retry, undo all or
+    /// one food of a log, say Not needed, remove history, quit and relaunch.
+    /// Every offline scan ends exactly one way: still pending with its meal,
+    /// day and time, logged exactly once, or dismissed.
     @Test func everyOfflineScanEndsPendingOrLoggedExactlyOnce() async throws {
         for seed in 0..<1_000 {
             try await run(seed: UInt64(seed))
@@ -232,13 +235,20 @@ private struct ModelRandom {
         var store = try NutritionStore(persistence: disk, now: { clock.now })
         var intents: [UUID: (meal: String, date: LocalDate, scannedAt: Date)] = [:]
         var logged: [UUID: Int] = [:]
+        var dismissed: Set<UUID> = []
         var entries = 0
         var plates: [[Row]] = [[], []]
+        /// The last log, and the scans each of its foods came from, for Undo.
+        var last: (logged: BarcodeLibrary.Logged, scans: [String: Set<UUID>])?
         var offline = true
         let missing = Self.codes[5]
 
         func onAPlate() -> Set<UUID> { Set(plates.flatMap { $0.flatMap(\.pending) }) }
-        func readyToAdd() -> [BarcodeLibrary.Pending] { library.ready.filter { !onAPlate().contains($0.id) } }
+        /// What a plate's scanner offers: ready scans not already on it.
+        func offered(to plate: Int) -> [BarcodeLibrary.Pending] {
+            let on = Set(plates[plate].flatMap(\.pending))
+            return library.ready.filter { !on.contains($0.id) }
+        }
         func fetch(_ gtin: GTIN) -> BarcodeLibrary.Fetched {
             offline ? .unavailable : gtin == missing ? .missing : .found(Self.food(gtin), attribution: "OFF")
         }
@@ -246,31 +256,47 @@ private struct ModelRandom {
             library = BarcodeLibrary(persistence: disk, now: { clock.now })
             store = try NutritionStore(persistence: disk, now: { clock.now })
             plates = [[], []]
+            last = nil
         }
         /// Logs, sometimes failing the commit first; after a failure the app may
-        /// retry, or be killed before it can.
-        func log(_ rows: [Row], date: LocalDate, meal: String) throws -> Bool {
-            let items = rows.map { NutritionStore.PlateItem($0.food, grams: 40) }
+        /// retry, with an amount edited, or be killed before it can. A scan
+        /// logged elsewhere is refused, and its row stays as a plain food.
+        /// Returns the rows left on the plate, nil when the app was killed.
+        func log(_ rows: [Row], date: LocalDate, meal: String) throws -> [Row]? {
+            var rows = rows
             let ids = Set(rows.flatMap(\.pending))
+            let gone = ids.subtracting(library.pending.map(\.id))
+            guard gone.isEmpty else {
+                #expect(throws: BarcodeLibrary.LogError.alreadyLogged(gone)) {
+                    try library.log(rows.map { NutritionStore.PlateItem($0.food, grams: $0.grams) }, consuming: ids, to: store,
+                                    on: date, meal: meal)
+                }
+                for index in rows.indices { rows[index].pending.subtract(gone) }
+                return rows
+            }
             if random.next(4) == 0 {
                 let before = (library.pending, store.entries.count)
                 disk.failNextCommit = true
                 #expect(throws: CommitFailingPersistence.CommitFailed.self) {
-                    try library.log(items, consuming: ids, to: store, on: date, meal: meal)
+                    try library.log(rows.map { NutritionStore.PlateItem($0.food, grams: $0.grams) }, consuming: ids, to: store,
+                                    on: date, meal: meal)
                 }
                 #expect(library.pending == before.0 && store.entries.count == before.1, "seed \(seed): a failed commit changed memory")
-                if random.next(3) == 0 { try relaunch(); return false }
+                if random.next(3) == 0 { return nil }
+                if let index = random.pick(Array(rows.indices)) { rows[index].grams = 80 }
             }
-            try library.log(items, consuming: ids, to: store, on: date, meal: meal)
+            let written = try library.log(rows.map { NutritionStore.PlateItem($0.food, grams: $0.grams) }, consuming: ids, to: store,
+                                          on: date, meal: meal)
             for id in ids { logged[id, default: 0] += 1 }
-            entries += items.count
-            return true
+            entries += rows.count
+            last = (written, rows.reduce(into: [:]) { $0[$1.food.id, default: []].formUnion($1.pending) })
+            return []
         }
 
         for _ in 0..<40 {
             clock.now += 61
             let plate = random.next(2)
-            switch random.next(12) {
+            switch random.next(15) {
             case 0, 1:
                 // Scan a code; offline and uncached, it's kept with its intent.
                 guard let code = random.pick(Self.codes), let meal = random.pick(Self.meals), let day = random.pick(Self.days) else { continue }
@@ -284,7 +310,7 @@ private struct ModelRandom {
                 await library.resolveWaiting { fetch($0) }
             case 4, 5:
                 // Put a ready scan on a plate, joining its food's row or a new one.
-                guard let scan = random.pick(readyToAdd()), let product = library.usable(scan.gtin) else { continue }
+                guard let scan = random.pick(offered(to: plate)), let product = library.usable(scan.gtin) else { continue }
                 if let index = plates[plate].firstIndex(where: { $0.food.id == product.food.id }), random.next(2) == 0 {
                     plates[plate][index].pending.insert(scan.id)
                 } else {
@@ -292,7 +318,7 @@ private struct ModelRandom {
                 }
             case 6:
                 // Picked, then cancelled at its portion: nothing joins.
-                _ = random.pick(readyToAdd())
+                _ = random.pick(offered(to: plate))
             case 7:
                 // A food that isn't a scan.
                 plates[plate].append(Row(food: Self.food(Self.codes[random.next(5)]), pending: []))
@@ -301,14 +327,40 @@ private struct ModelRandom {
                 plates[plate].remove(at: random.next(plates[plate].count))
             case 9:
                 guard !plates[plate].isEmpty, let meal = random.pick(Self.meals) else { continue }
-                if try log(plates[plate], date: Self.days[0], meal: meal) { plates[plate] = [] }
+                if let left = try log(plates[plate], date: Self.days[0], meal: meal) { plates[plate] = left } else { try relaunch() }
             case 10:
                 if random.next(2) == 0 {
                     plates[plate] = []
-                } else if let scan = random.pick(readyToAdd()), let product = library.usable(scan.gtin) {
+                } else if let scan = random.pick(offered(to: plate)), let product = library.usable(scan.gtin) {
                     // Logged alone, to the meal and time it was scanned for.
-                    _ = try log([Row(food: product.food, pending: [scan.id])], date: scan.date, meal: scan.meal)
+                    if try log([Row(food: product.food, pending: [scan.id])], date: scan.date, meal: scan.meal) == nil { try relaunch() }
                 }
+            case 11:
+                // Undo all of the last log, or one food of it; sometimes the commit fails.
+                guard let undo = last else { continue }
+                let foods = Set(undo.logged.entries.map(\.food.foodID))
+                let one = random.pick(foods.sorted())
+                let only = random.next(2) == 0 ? foods : [try #require(one)]
+                let ids = Set(undo.logged.entries.filter { only.contains($0.food.foodID) }.map(\.id))
+                if random.next(4) == 0 {
+                    disk.failNextCommit = true
+                    #expect(throws: CommitFailingPersistence.CommitFailed.self) { try library.undo(undo.logged, only: ids, from: store) }
+                    continue
+                }
+                try library.undo(undo.logged, only: ids, from: store)
+                for food in only { for id in undo.scans[food] ?? [] { logged[id, default: 0] -= 1 } }
+                entries -= ids.count
+                last = library.recentLog(writing: Set(undo.logged.entries.map(\.id)).subtracting(ids)).map { rest in
+                    (rest, undo.scans.filter { !only.contains($0.key) })
+                }
+            case 12:
+                // Not needed: resolved scans go, except those on a plate.
+                let keeping = onAPlate()
+                for scan in library.pending where scan.state != .waiting && !keeping.contains(scan.id) { dismissed.insert(scan.id) }
+                library.dismissResolved(keeping: keeping)
+            case 13:
+                // Removed from the history; offline scans of it stay.
+                if let scan = random.pick(library.history) { library.remove(scan.gtin) }
             default:
                 try relaunch()
             }
@@ -318,8 +370,9 @@ private struct ModelRandom {
         for (id, intent) in intents {
             let times = logged[id] ?? 0
             let record = library.pending.first { $0.id == id }
-            #expect(times <= 1, "seed \(seed): \(id) logged \(times) times")
-            #expect((record != nil) != (times == 1), "seed \(seed): \(id) is pending \(record != nil), logged \(times)")
+            #expect(times == 0 || times == 1, "seed \(seed): \(id) logged \(times) times")
+            #expect([record != nil, times == 1, dismissed.contains(id)].filter { $0 }.count == 1,
+                    "seed \(seed): \(id) is pending \(record != nil), logged \(times), dismissed \(dismissed.contains(id))")
             if let record {
                 #expect(record.meal == intent.meal && record.date == intent.date && record.scannedAt == intent.scannedAt,
                         "seed \(seed): \(id) lost its intent")
