@@ -254,3 +254,27 @@ test('a new password revokes agent tokens and pauses webhooks made from a sessio
   await webhooks.deliverDue({ send: async () => 200 });
   assert.ok((await api.store.findOne('webhooks', { id: fromAgent.body.id })).disabled_at);
 });
+
+test('a delivery that fails while the password changes leaves the webhook paused', async () => {
+  const user = await signUp(api);
+  const hook = await api.post('/v1/webhooks', { url: url() }, { token: user.token });
+  assert.equal(hook.status, 201);
+  await writeDocument(user);
+  let changed;
+  const delivered = await webhooks.deliverDue({
+    send: async () => {
+      // The owner changes the password while this delivery is in flight.
+      changed = await api.post(
+        '/api/change-password',
+        { currentPassword: user.password, newPassword: 'a-brand-new-passphrase' },
+        { token: user.token }
+      );
+      return 503;
+    },
+  });
+  assert.ok(delivered >= 1);
+  assert.equal(changed.status, 200);
+  const row = await api.store.findOne('webhooks', { id: hook.body.id });
+  assert.ok(row.disabled_at, 'still paused');
+  assert.match(row.last_error, /password changed/);
+});
