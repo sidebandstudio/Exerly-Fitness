@@ -275,6 +275,36 @@ final class BarcodeScanSessionTests: XCTestCase {
         XCTAssertTrue(workspace.barcodes.pending.isEmpty)
     }
 
+    /// Undo after a log made from offline scans, alone from Recent scans or
+    /// as a meal, deletes what it logged and puts each scan back with the
+    /// meal, day and time it was scanned for, across a relaunch.
+    func testUndoPutsBackTheOfflineScansALogConsumed() async throws {
+        let transport = BarcodeTransport(foods: [bar: food(bar, "Synthetic oat bar"), juice: food(juice, "Synthetic apple juice")])
+        let (scanner, workspace) = try session(transport)
+        let alone = try await readyScan(bar, scanner, transport)
+        guard case .logged(let entry) = scanner.use(.pending(alone)) else { return XCTFail("Logs alone on an empty plate") }
+        XCTAssertTrue(workspace.barcodes.pending.isEmpty)
+        XCTAssertEqual(try workspace.barcodes.unlog([entry], from: workspace.nutrition), [entry])
+        XCTAssertEqual(workspace.barcodes.pending, [alone], "Back as it was scanned")
+        XCTAssertTrue(workspace.nutrition.entries.isEmpty)
+
+        let other = try await readyScan(juice, scanner, transport)
+        let meal = NutritionPlateDraft(store: workspace.nutrition, date: try XCTUnwrap(LocalDate("2026-10-21")), meal: "Snacks")
+        let portion = try NutritionStore.preview(food(bar, ""), grams: 40)
+        XCTAssertTrue(meal.stage(food(bar, "Synthetic oat bar"), amount: portion, pending: alone.id))
+        XCTAssertTrue(meal.stage(food(juice, "Synthetic apple juice"), amount: portion, pending: other.id))
+        let entries = try XCTUnwrap(meal.save(consuming: workspace.barcodes))
+        XCTAssertTrue(workspace.barcodes.pending.isEmpty)
+        try workspace.barcodes.unlog(entries, from: workspace.nutrition)
+        XCTAssertEqual(Set(workspace.barcodes.pending), [alone, other])
+        XCTAssertTrue(workspace.nutrition.entries.isEmpty)
+        let relaunched = try openWorkspace()
+        // Saved times keep milliseconds, so compare what was meant.
+        XCTAssertEqual(Set(relaunched.barcodes.pending.map { [$0.id.uuidString, $0.meal, "\($0.date)"] }),
+                       Set([alone, other].map { [$0.id.uuidString, $0.meal, "\($0.date)"] }))
+        XCTAssertTrue(relaunched.nutrition.entries.isEmpty)
+    }
+
     /// The commit fails: the draft isn't marked logged and nothing changed, so
     /// trying again writes the entry and consumes the scan, once.
     func testAFailedCommitCanBeRetriedWithoutLosingTheScan() async throws {

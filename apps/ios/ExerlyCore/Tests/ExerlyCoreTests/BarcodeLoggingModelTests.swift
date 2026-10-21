@@ -181,6 +181,27 @@ private struct ModelRandom {
         #expect(try NutritionStore(persistence: disk).entries.isEmpty)
     }
 
+    /// Undoing one food of a plate puts back only that food's scans; the
+    /// rest of the log can still be undone later.
+    @Test func undoingOneFoodPutsBackOnlyItsScans() async throws {
+        let disk = CommitFailingPersistence()
+        let library = BarcodeLibrary(persistence: disk)
+        let store = try NutritionStore(persistence: disk)
+        let (a, b) = (Self.codes[0], Self.codes[1])
+        for code in [a, b] { _ = await library.resolve(code, meal: "Dinner", date: Self.days[1]) { _ in .unavailable } }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scans = library.ready
+        let logged = try library.log([a, b].map { NutritionStore.PlateItem(Self.food($0), grams: 40) }, consuming: Set(scans.map(\.id)),
+                                     to: store, on: Self.days[0], meal: "Lunch")
+        let entryA = try #require(logged.entries.first { $0.food.foodID == Self.food(a).id })
+        try library.undo(logged, only: [entryA.id], from: store)
+        #expect(library.pending.map(\.gtin) == [a] && store.entries.map(\.food.foodID) == [Self.food(b).id])
+        let rest = try #require(library.recentLog(writing: Set(store.entries.map(\.id))))
+        #expect(rest.consumed.map(\.gtin) == [b])
+        try library.undo(rest, from: store)
+        #expect(library.pending == scans && store.entries.isEmpty)
+    }
+
     @Test func oneTransactionNeedsOneStore() async throws {
         let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence())
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())

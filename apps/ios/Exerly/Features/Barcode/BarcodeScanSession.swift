@@ -17,6 +17,21 @@ extension BarcodeLibrary {
             }
         }
     }
+
+    /// Deletes entries as they were logged, leaving alone any changed since,
+    /// and puts the offline scans they came from back where they were meant
+    /// to be logged. Returns those it deleted.
+    @discardableResult
+    func unlog(_ entries: [FoodEntry], from store: NutritionStore) throws -> [FoodEntry] {
+        let current = entries.filter { entry in store.entries.first { $0.id == entry.id } == entry }
+        let ids = Set(current.map(\.id))
+        if let scans = recentLog(writing: ids) {
+            try undo(scans, only: ids, from: store)
+        } else {
+            for entry in current { try store.deleteEntry(entry.id) }
+        }
+        return current
+    }
 }
 
 /// One visit to the scanner: codes it accepts, what each turned out to be,

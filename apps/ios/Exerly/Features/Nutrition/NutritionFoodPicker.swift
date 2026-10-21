@@ -628,9 +628,8 @@ struct NutritionFoodPicker: View {
 
     /// Deletes entries as they were logged; one changed since is left alone.
     @discardableResult private func remove(_ entries: [FoodEntry]) -> Bool {
-        let current = entries.filter { entry in store.entries.first { $0.id == entry.id } == entry }
         do {
-            for entry in current { try store.deleteEntry(entry.id) }
+            let current = try workspace.barcodes.unlog(entries, from: store)
             if current.count < entries.count {
                 logError = "Some of these entries changed after logging. Review them in today's log."
             }

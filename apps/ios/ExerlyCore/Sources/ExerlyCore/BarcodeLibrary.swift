@@ -280,20 +280,26 @@ public final class BarcodeLibrary {
         recent.last { log in !entryIDs.isEmpty && entryIDs.isSubset(of: Set(log.entries.map(\.id))) }
     }
 
-    /// Undoes a log: deletes its entries and puts back the offline scans it
-    /// consumed, with their meal, day and time, in one transaction.
-    public func undo(_ logged: Logged, from store: NutritionStore) throws {
+    /// Undoes a log, or only its entries in `only`: deletes them and puts
+    /// back the offline scans of their foods, with their meal, day and time,
+    /// in one transaction.
+    public func undo(_ logged: Logged, only ids: Set<UUID>? = nil, from store: NutritionStore) throws {
         guard (store.persistence as AnyObject) === (persistence as AnyObject) else { throw LogError.separateStores }
-        let restored = logged.consumed.filter { scan in !pending.contains { $0.id == scan.id } }
+        let removed = logged.entries.filter { ids?.contains($0.id) ?? true }
+        let foods = Set(removed.map(\.food.foodID))
+        let undone = ids == nil ? logged.consumed : logged.consumed.filter { scan in products[scan.gtin].map { foods.contains($0.food.id) } ?? false }
+        let restored = undone.filter { scan in !pending.contains { $0.id == scan.id } }
+        let order = { (a: Pending, b: Pending) in (a.scannedAt, a.id.uuidString) < (b.scannedAt, b.id.uuidString) }
         try persistence.performAtomically {
-            let all = (pending + restored).sorted { ($0.scannedAt, $0.id.uuidString) < ($1.scannedAt, $1.id.uuidString) }
-            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: all)), forKey: Self.key)
-            let publish = try store.writeDeletes(logged.entries.map(\.id))
+            try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: (pending + restored).sorted(by: order))), forKey: Self.key)
+            let publish = try store.writeDeletes(removed.map(\.id))
             persistence.afterCommit { [self] in
                 publish()
-                pending = (pending + restored.filter { scan in !pending.contains { $0.id == scan.id } })
-                    .sorted { ($0.scannedAt, $0.id.uuidString) < ($1.scannedAt, $1.id.uuidString) }
-                recent.removeAll { $0 == logged }
+                pending = (pending + restored.filter { scan in !pending.contains { $0.id == scan.id } }).sorted(by: order)
+                var rest = logged
+                rest.entries.removeAll { entry in removed.contains { $0.id == entry.id } }
+                rest.consumed.removeAll { scan in undone.contains { $0.id == scan.id } }
+                recent = recent.compactMap { $0 != logged ? $0 : rest.entries.isEmpty ? nil : rest }
             }
         }
     }
