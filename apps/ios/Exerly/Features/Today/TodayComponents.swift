@@ -279,7 +279,8 @@ struct TodayQuickAction: View {
                     .minimumScaleFactor(0.8)
             }
             .foregroundStyle(Color.exPrimaryText)
-            .frame(maxWidth: .infinity, minHeight: typeSize.isAccessibilitySize ? 52 : 68)
+            // Fills its row of the shortcuts' grid at the largest sizes.
+            .frame(maxWidth: .infinity, minHeight: typeSize.isAccessibilitySize ? 52 : 68, maxHeight: .infinity)
             .padding(.horizontal, 4)
             .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.exBorder.opacity(0.5), lineWidth: 0.5) }
@@ -380,6 +381,9 @@ struct TodayToast: View {
     var inline = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// "Repeated yesterday's breakfast" of "Repeated yesterday's breakfast: 2 foods, 170 kcal".
+    private var headline: String { String(message.split(separator: ":", maxSplits: 1).first ?? Substring(message)) }
+
     var body: some View {
         // At the largest sizes Undo goes under the message, as in Add food's toast.
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
@@ -388,7 +392,12 @@ struct TodayToast: View {
             HStack(spacing: ExSpacing.item) {
                 Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .foregroundStyle(failed ? Color.exWarning : Color.exSuccess).accessibilityHidden(true)
-                Text(message).font(.exLabel).foregroundStyle(Color.exTextPrimary).lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+                // At the largest sizes only the headline, two lines at most, so
+                // the confirmation doesn't cover the controls under it; the whole
+                // sentence is announced to VoiceOver and kept as its label.
+                Text(typeSize.isAccessibilitySize ? headline : message).font(.exLabel).foregroundStyle(Color.exTextPrimary)
+                    .lineLimit(2).minimumScaleFactor(typeSize.isAccessibilitySize ? 0.7 : 1)
+                    .accessibilityLabel(message)
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
             if let undo {

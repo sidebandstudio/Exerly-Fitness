@@ -15,7 +15,9 @@ final class TodayUITests: ExerlyUITestCase {
         app.swipeUp()
         capture(app, "today-03-footer")
         app.swipeDown(); app.swipeDown()
-        tap(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch, in: app)
+        // The meal chip leads Log again; at the largest sizes the food chips start off screen.
+        let meal = app.buttons["today.repeatMeal"]
+        tap(meal.exists ? meal : app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "today.suggestion.log.")).firstMatch, in: app)
         capture(app, "today-04-logged")
         tap(app.buttons["Train"], in: app)
         capture(app, "today-05-train-tab")
