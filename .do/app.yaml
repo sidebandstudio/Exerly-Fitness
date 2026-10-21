@@ -16,12 +16,15 @@ services:
       - key: NODE_ENV
         scope: RUN_TIME
         value: production
-      # Client addresses for rate limits come from do-connecting-ip, which
-      # App Platform sets; X-Forwarded-For names its ingress. Never set this
-      # anywhere else, or clients could choose their own address.
-      - key: EXERLY_APP_PLATFORM
-        scope: RUN_TIME
-        value: '1'
+      # Off until verified. On App Platform, X-Forwarded-For names
+      # DigitalOcean's ingress, so every client shares one rate-limit address.
+      # Setting EXERLY_APP_PLATFORM to 1 makes limits read the client from
+      # do-connecting-ip instead, but DigitalOcean doesn't document that it
+      # replaces a value the client sent, and trusting a forged one would let
+      # an attacker rotate addresses past the per-network limits. Before
+      # enabling it: send a request with a forged do-connecting-ip through the
+      # live app and confirm the server sees the real address. See
+      # DECISIONS.md, 2026-10-20. Never set it on a self-hosted server.
       - key: DATABASE_URL
         scope: RUN_TIME
         type: SECRET

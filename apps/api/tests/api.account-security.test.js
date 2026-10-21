@@ -259,6 +259,21 @@ test('on App Platform, limits follow the client in do-connecting-ip, not the sha
   }
 });
 
+test('the shipped app spec leaves the App Platform client-address flag off', () => {
+  // Until it's verified that App Platform replaces a client's own
+  // do-connecting-ip (DECISIONS.md, 2026-10-20), trusting it could let anyone
+  // pick their address. Turn it on only after that check.
+  const spec = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../../../.do/app.yaml'),
+    'utf8'
+  );
+  const active = spec
+    .split('\n')
+    .map((line) => line.replace(/#.*/, ''))
+    .join('\n');
+  assert.doesNotMatch(active, /EXERLY_APP_PLATFORM/);
+});
+
 test('without the App Platform flag, a do-connecting-ip header is ignored', async () => {
   delete process.env.EXERLY_APP_PLATFORM;
   const user = await signUp(api);

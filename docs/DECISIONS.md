@@ -1546,3 +1546,21 @@ checked when it happened no longer charge the fresh one.
 A webhook paused while a successful delivery is in flight doesn't record that
 delivery, so turning it back on can send that notice again. Notices carry no
 data and receivers already handle repeats, so this stays.
+
+## 2026-10-20: ship with do-connecting-ip trust off until it's verified on the live app
+
+Security review round 5. DigitalOcean documents that App Platform adds
+`do-connecting-ip` with the client's address, but not that it replaces or
+strips one the client sent. If it doesn't, `EXERLY_APP_PLATFORM=1` would let
+anyone send a different fake address with each request and slip past the
+per-address and per-network limits. That is worse than leaving the flag off,
+where every client shares the ingress's address: limits then over-count and
+can throttle legitimate people together, but nobody can get around them.
+
+So the flag is off in `.do/app.yaml`, and a test fails if it's switched on
+there. `clientIP()` and its tests stay, ready for when Ali has checked the
+deployed ingress: send a request with a forged `do-connecting-ip` through the
+live app and confirm the server records the real address. The per-account
+confirmation budget, the per-email sign-in backoff and the per-email signup
+and reset limits don't depend on the address, so they work the same either
+way.

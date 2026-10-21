@@ -291,7 +291,7 @@ because there is no way back in short of editing the database.
 
 ## Rate limits
 
-Per-address and per-network limits use the client's address: `do-connecting-ip` on DigitalOcean App Platform, trusted only when `EXERLY_APP_PLATFORM=1` (set in `.do/app.yaml`), and otherwise `req.ip` with Express trusting one proxy, as behind docker-compose's reverse proxy. Self-hosted servers must not set the flag, or clients could pick their own address.
+Per-address and per-network limits use the client's address: `req.ip`, with Express trusting one proxy, as behind docker-compose's reverse proxy. On DigitalOcean App Platform that is the ingress, which every client shares, until `EXERLY_APP_PLATFORM=1` makes them read `do-connecting-ip`. The flag is off in `.do/app.yaml` until it's verified that App Platform replaces a forged `do-connecting-ip` (DECISIONS.md). Self-hosted servers must never set it. Per-account and per-email limits don't depend on the address.
 
 | Scope          | Limit                                                                                                                      |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------- |
