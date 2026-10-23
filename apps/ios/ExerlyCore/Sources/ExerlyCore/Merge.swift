@@ -180,4 +180,66 @@ public enum Merge {
         }
         return (.object(merged), conflicts)
     }
+
+    // MARK: Applying a choice
+
+    /// `current` with the fields at `paths` taken from `chosen`, and nothing
+    /// else changed: a resolution sets only what conflicted, so a change
+    /// made since stays. Paths are those the merges report: a top-level
+    /// field (with the rest of its group), `exercises[ID].sets[ID].rir`
+    /// for a field of an item in a list, `exercises[ID]` for a whole item,
+    /// added, replaced or removed, `exercises[]` for a list's order, and
+    /// "*" for the whole record. A path into an item one side no longer
+    /// has changes nothing.
+    public static func apply(_ paths: [String], from chosen: JSONValue, to current: JSONValue, groups: [[String]] = []) -> JSONValue {
+        var result = current
+        for path in paths {
+            if path == "*" { return chosen }
+            let steps = path.split(separator: ".").map(String.init)
+            let fields = steps.count == 1 ? groups.first { $0.first == path } ?? [path] : [path]
+            for field in fields {
+                result = transplant(field == path ? steps : [field], from: chosen, to: result)
+            }
+        }
+        return result
+    }
+
+    private static func transplant(_ steps: [String], from chosen: JSONValue?, to current: JSONValue) -> JSONValue {
+        guard let step = steps.first, case .object(var fields) = current else { return current }
+        let rest = Array(steps.dropFirst())
+        let mine = chosen.flatMap { if case .object(let fields) = $0 { fields } else { nil } }
+        guard let open = step.firstIndex(of: "["), step.hasSuffix("]") else {
+            if rest.isEmpty {
+                fields[step] = mine?[step]
+            } else if let inner = fields[step] {
+                fields[step] = transplant(rest, from: mine?[step], to: inner)
+            }
+            return .object(fields)
+        }
+        let name = String(step[..<open]), id = String(step[step.index(after: open)..<step.index(before: step.endIndex)])
+        guard case .array(var items)? = fields[name] else { return current }
+        let theirs: [JSONValue] = if case .array(let items)? = mine?[name] { items } else { [] }
+        func key(_ item: JSONValue) -> String? { if case .object(let f) = item, case .string(let id)? = f["id"] { id } else { nil } }
+        if id.isEmpty {
+            // The order: items both have follow the chosen order; the rest keep their place at the end.
+            let order = theirs.compactMap(key)
+            let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+            let known = items.filter { key($0).flatMap { rank[$0] } != nil }.sorted { rank[key($0)!]! < rank[key($1)!]! }
+            items = known + items.filter { key($0).flatMap { rank[$0] } == nil }
+        } else {
+            let here = items.firstIndex { key($0) == id }, there = theirs.firstIndex { key($0) == id }
+            switch (here, there, rest.isEmpty) {
+            case (let here?, let there?, true): items[here] = theirs[there]
+            case (let here?, let there?, false): items[here] = transplant(rest, from: theirs[there], to: items[here])
+            case (let here?, nil, true): items.remove(at: here)
+            case (nil, let there?, true):
+                // Back after the item before it in the chosen version, or first.
+                let before = theirs[..<there].reversed().compactMap(key).lazy.compactMap { id in items.firstIndex { key($0) == id } }.first
+                items.insert(theirs[there], at: before.map { $0 + 1 } ?? 0)
+            default: break
+            }
+        }
+        fields[name] = .array(items)
+        return .object(fields)
+    }
 }

@@ -186,42 +186,46 @@ public final class SyncConflictStore {
     }
 
     /// Applies the person's choice and marks the conflict resolved, in one
-    /// transaction. A field conflict sets the conflicting fields to the
-    /// chosen version's, keeping every other change; keeping both adds the
-    /// other device's version as a second record. A deletion conflict keeps
-    /// the record deleted or brings the chosen version back, through
-    /// `effects` when another store keeps records about it.
+    /// transaction. A field conflict sets only the conflicting fields to the
+    /// chosen version's, so every other change, including one made since,
+    /// stays; keeping both adds the other device's version as a second
+    /// record. A deletion conflict keeps the record deleted or brings the
+    /// chosen version back, through `effects` when another store keeps
+    /// records about it.
     public func resolve(_ id: SyncConflict.ID, _ choice: SyncConflict.Choice) throws {
         guard let conflict = conflict(id), !conflict.isResolved else { throw ResolveError.notOpen }
         guard conflict.choices.contains(choice) else { throw ResolveError.notOffered(choice) }
         guard let host = host(for: conflict.kind) else { throw DocumentError(message: "Unknown kind \(conflict.kind)") }
-        let documentID = conflict.documentID
-        let current = try host.payload(kind: conflict.kind, id: documentID)
+        let kind = conflict.kind, documentID = conflict.documentID
+        let current = try host.payload(kind: kind, id: documentID)
         var writes: [DocumentWrite] = []
         var undoEffect: (() throws -> Void)?
         var before: [DocumentWrite] = []
+        var after: [Data?] = []
         var publishes: [() -> Void] = []
         var resolved = conflict
         resolved.resolution = SyncConflict.Resolution(choice: choice, at: now(), device: device)
         resolved.changedAt = now()
         try state.performAtomically {
             if conflict.isDeletion {
-                if let kept = conflict.version(choice)?.canonicalData {
-                    undoEffect = try effects?.bringBack(kind: conflict.kind, id: documentID, payload: kept,
-                                                        base: conflict.base?.canonicalData)
-                    if undoEffect == nil { writes = [DocumentWrite(kind: conflict.kind, id: documentID, payload: kept)] }
+                if current != nil, conflict.version(choice) != nil {
+                    // Already back, perhaps changed since: it stays as it is.
+                } else if let kept = conflict.version(choice)?.canonicalData {
+                    undoEffect = try effects?.bringBack(kind: kind, id: documentID, payload: kept, base: conflict.base?.canonicalData)
+                    if undoEffect == nil { writes = [DocumentWrite(kind: kind, id: documentID, payload: kept)] }
                 } else if current != nil {
-                    writes = [DocumentWrite(kind: conflict.kind, id: documentID, payload: nil)]
+                    writes = [DocumentWrite(kind: kind, id: documentID, payload: nil)]
                 }
             } else if let current, let chosen = conflict.version(choice) {
-                let merged = try host.merge(kind: conflict.kind, base: conflict.base?.canonicalData, local: current,
-                                            remote: chosen.canonicalData, preferring: .remote).merged
-                if merged != current { writes.append(DocumentWrite(kind: conflict.kind, id: documentID, payload: merged)) }
+                let merged = try host.canonicalize(kind: kind, payload: Merge.apply(
+                    conflict.fields, from: chosen, to: JSONValue(data: current), groups: host.fieldGroups(kind: kind)).canonicalData)
+                if merged != current { writes.append(DocumentWrite(kind: kind, id: documentID, payload: merged)) }
                 if choice == .both, let copy = conflict.copyOfRemote(id: UUID()) { writes.append(copy) }
             }
             for write in writes {
                 if let payload = write.payload { try host.validate(kind: write.kind, id: write.id, payload: payload) }
                 before.append(DocumentWrite(kind: write.kind, id: write.id, payload: try host.payload(kind: write.kind, id: write.id)))
+                after.append(try write.payload.map { try host.canonicalize(kind: write.kind, payload: $0) })
                 publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload))
             }
             publishes.append(try stage(resolved))
@@ -234,8 +238,19 @@ public final class SyncConflictStore {
             var publishes: [() -> Void] = []
             try state.performAtomically {
                 try undoEffect?()
-                for write in before.reversed() {
-                    publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload))
+                for (write, written) in zip(before, after).reversed() {
+                    let now = try host.payload(kind: write.kind, id: write.id)
+                    var payload = write.payload
+                    if now != written {
+                        // Changed since: of a field conflict's record, only
+                        // the fields the choice set and nobody changed since
+                        // go back; anything else changed since stays.
+                        guard !conflict.isDeletion, write.id == documentID, let earlier = write.payload, let now, let written else { continue }
+                        let undone = Merge.apply(conflict.fields, from: try JSONValue(data: earlier), to: try JSONValue(data: written),
+                                                 groups: host.fieldGroups(kind: kind))
+                        payload = try host.merge(kind: kind, base: written, local: now, remote: undone.canonicalData, preferring: .local).merged
+                    }
+                    publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: payload))
                 }
                 publishes.append(try stage(reopened))
             }

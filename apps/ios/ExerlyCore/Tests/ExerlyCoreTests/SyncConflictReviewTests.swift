@@ -85,4 +85,61 @@ final class TrainingDevice {
             #expect(merged == resolved)
         }
     }
+
+    // MARK: 2. A later edit
+
+    /// The tablet's meal change to Lunch merged while the amount clashed.
+    /// The phone then moves the entry to Dinner and keeps the tablet's
+    /// amount: it stays at Dinner. Undo after another move keeps that move.
+    @Test func resolvingSetsOnlyTheConflictingFieldsAndUndoKeepsLaterChanges() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try await clash(phone, tablet, logged.id, phone: 60, tablet: 90, meal: "Lunch")
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        #expect(phone.entry(logged.id)?.meal == "Lunch" && conflict.fields == ["grams"])
+        var moved = try #require(phone.entry(logged.id))
+        moved.meal = "Dinner"
+        try phone.nutrition.saveEntry(moved)
+        let tablets = try #require(conflict.choices.first { grams(conflict.version($0)) == 90 })
+        try phone.conflicts.resolve(conflict.id, tablets)
+        #expect(phone.entry(logged.id)?.grams == 90 && phone.entry(logged.id)?.meal == "Dinner")
+        try phone.conflicts.undo()
+        try phone.conflicts.resolve(conflict.id, tablets == .local ? .remote : .local)
+        #expect(phone.entry(logged.id)?.grams == 60 && phone.entry(logged.id)?.meal == "Dinner")
+        var again = try #require(phone.entry(logged.id))
+        again.meal = "Snacks"
+        try phone.nutrition.saveEntry(again)
+        try phone.conflicts.undo()
+        #expect(phone.entry(logged.id)?.grams == 90 && phone.entry(logged.id)?.meal == "Snacks")
+    }
+
+    /// A set's reps clash while the tablet renamed the workout; the phone
+    /// renames it again, then keeps the tablet's reps: only the reps change.
+    @Test func resolvingAWorkoutSetChangesOnlyThatSet() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100), Fixture.set(5, 100)])])
+        try phone.store.importSessions([session])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var mine = try #require(phone.session(session.id)), theirs = try #require(tablet.session(session.id))
+        mine.exercises[0].sets[1].efforts[0].reps = 6
+        theirs.exercises[0].sets[1].efforts[0].reps = 4
+        theirs.name = "Push"
+        try phone.store.saveSession(mine)
+        try tablet.store.saveSession(theirs)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        #expect(phone.session(session.id)?.name == "Push" && phone.session(session.id)?.exercises[0].sets[1].primary.reps == 6)
+        let setID = session.exercises[0].sets[1].id.uuidString
+        #expect(conflict.fields == ["exercises[\(session.exercises[0].id.uuidString)].sets[\(setID)].efforts"])
+        var renamed = try #require(phone.session(session.id))
+        renamed.name = "Push day"
+        try phone.store.saveSession(renamed)
+        let four = try #require(conflict.choices.first { choice in
+            conflict.version(choice).map { (try? $0.decode(WorkoutSession.self))?.exercises[0].sets[1].primary.reps } == 4
+        })
+        try phone.conflicts.resolve(conflict.id, four)
+        #expect(phone.session(session.id)?.name == "Push day" && phone.session(session.id)?.exercises[0].sets[1].primary.reps == 4)
+    }
 }

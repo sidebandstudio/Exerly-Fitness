@@ -659,6 +659,14 @@ extension NutritionStore: DocumentHost {
         }
     }
 
+    public func fieldGroups(kind: String) -> [[String]] {
+        switch kind {
+        case Self.entryKind: [["grams", "serving", "quantity", "amountChanged"]]
+        case Self.weightKind: [["at", "date"]]
+        default: []
+        }
+    }
+
     /// Hiding a food again elsewhere needs no review.
     public func reviewsConflicts(kind: String) -> Bool { kind != Self.hiddenKind }
 
@@ -667,11 +675,8 @@ extension NutritionStore: DocumentHost {
     /// version starts from an empty one. Hidden suggestions never conflict.
     public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
         switch kind {
-        case Self.entryKind:
-            return try fieldMerge(kind: kind, base: base, local: local, remote: remote,
-                                  groups: [["grams", "serving", "quantity", "amountChanged"]], preferring: prefer)
-        case Self.weightKind:
-            return try fieldMerge(kind: kind, base: base, local: local, remote: remote, groups: [["at", "date"]], preferring: prefer)
+        case Self.entryKind, Self.weightKind:
+            return try fieldMerge(kind: kind, base: base, local: local, remote: remote, groups: fieldGroups(kind: kind), preferring: prefer)
         case Self.hiddenKind:
             return MergeOutcome(merged: try merge(kind: kind, base: base, local: local, remote: remote), conflicts: [])
         case Self.dayKind:

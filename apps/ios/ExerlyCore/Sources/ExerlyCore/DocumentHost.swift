@@ -21,6 +21,10 @@ public protocol DocumentHost: AnyObject {
     /// which take `prefer`'s value. By default top-level fields merge; hosts
     /// whose documents have structure, or whose kinds never conflict, say so.
     func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome
+    /// Top-level fields that change together, such as an entry's grams,
+    /// serving and quantity, named by their first: merges report a group as
+    /// one field, and a resolution sets all of it.
+    func fieldGroups(kind: String) -> [[String]]
     /// Whether a document this device changed stays when another device
     /// deleted it, such as the workout in progress. The conflict is still kept.
     func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool
@@ -96,6 +100,8 @@ extension DocumentHost {
     }
 
     public func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool { false }
+
+    public func fieldGroups(kind: String) -> [[String]] { [] }
 
     public func reviewsConflicts(kind: String) -> Bool { true }
 

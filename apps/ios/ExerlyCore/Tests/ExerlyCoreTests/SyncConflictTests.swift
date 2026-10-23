@@ -338,10 +338,10 @@ final class AccountDevice {
     // MARK: Randomized
 
     /// Two devices edit amounts and meals, delete, log, sync, resolve and
-    /// undo at random. Every sync keeps every edit either applied or in a
-    /// conflict, and once both have synced they agree. An edit that matches
-    /// a version the other device wrote and then changed again isn't a
-    /// conflict: that device saw it and moved on.
+    /// undo at random. Every edit a sync carries stays an obligation until
+    /// the person sees it and changes it, deletes it, or decides on a
+    /// conflict holding it: after every later step some device shows it or
+    /// some conflict holds it. Once both have synced they agree.
     @Test func twoDevicesNeverLoseAnEditSilently() async throws {
         for seed in 0..<120 { try await run(seed: UInt64(seed)) }
     }
@@ -360,6 +360,13 @@ final class AccountDevice {
 
     private static let amount = ["grams", "serving", "quantity", "amountChanged"]
 
+    private struct Obligation: Hashable {
+        var id: String
+        var keys: [String]
+        /// Nil for a deletion.
+        var value: [String: JSONValue]?
+    }
+
     private func run(seed: UInt64) async throws {
         var random = Random(state: seed &+ 0xC0FF1C7)
         let server = FakeDocumentServer(), clock = TickingClock()
@@ -368,6 +375,9 @@ final class AccountDevice {
         for device in devices { try await device.sync.sync() }
         let kind = NutritionStore.entryKind
         var steps: [String] = []
+        var obligations = Set<Obligation>()
+        /// Seen and replaced: the same value typed again elsewhere was already seen.
+        var settled = Set<Obligation>()
         func name(_ device: AccountDevice) -> String { device === devices[0] ? "phone" : "tablet" }
 
         func fields(_ value: JSONValue?, _ keys: [String]) -> [String: JSONValue]? {
@@ -377,49 +387,54 @@ final class AccountDevice {
         func current(_ device: AccountDevice, _ id: String) throws -> JSONValue? {
             try device.nutrition.payload(kind: kind, id: id).map(JSONValue.init(data:))
         }
-        /// An edit is kept when the device shows it or one of its conflicts
-        /// holds it, or the other device wrote it too before changing it again.
-        func kept(_ device: AccountDevice, _ id: String, _ keys: [String], _ value: [String: JSONValue]?,
-                  superseded: [JSONValue?]) throws -> Bool {
-            if superseded.contains(where: { fields($0, keys) == value }) { return true }
+        /// Some device shows it, or some conflict, open or decided, holds it.
+        func kept(_ duty: Obligation) throws -> Bool {
+            for device in devices {
+                let shown = try current(device, duty.id)
+                if duty.value == nil ? shown == nil : fields(shown, duty.keys) == duty.value { return true }
+                let held = device.conflicts.conflicts.contains { conflict in
+                    guard conflict.documentID == duty.id else { return false }
+                    if duty.value == nil { return conflict.isDeletion }
+                    return fields(conflict.local, duty.keys) == duty.value || fields(conflict.remote, duty.keys) == duty.value
+                }
+                if held { return true }
+            }
+            return false
+        }
+        /// The person saw these values on `device` and replaced them.
+        func seen(_ device: AccountDevice, _ id: String, _ groups: [[String]]) throws {
             let shown = try current(device, id)
-            if value == nil { return shown == nil || device.conflicts.conflicts.contains { $0.documentID == id && $0.isDeletion } }
-            if fields(shown, keys) == value { return true }
-            return device.conflicts.conflicts.contains { conflict in
-                conflict.documentID == id && (fields(conflict.local, keys) == value || fields(conflict.remote, keys) == value)
+            let seen = obligations.filter { duty in duty.id == id && groups.contains(duty.keys) && fields(shown, duty.keys) == duty.value }
+            obligations.subtract(seen)
+            settled.formUnion(seen)
+        }
+        func check() throws {
+            for duty in obligations {
+                func show(_ value: [String: JSONValue]?) -> String { value.map { String(describing: $0[duty.keys[0]] ?? .null) } ?? "deleted" }
+                let shown = try devices.map { "\(name($0)) \(show(fields(try current($0, duty.id), duty.keys)))" }
+                let held = devices.flatMap { $0.conflicts.conflicts.filter { $0.documentID == duty.id } }
+                    .map { "\(show(fields($0.local, duty.keys)))/\(show(fields($0.remote, duty.keys)))\($0.isResolved ? " decided" : "")" }
+                #expect(try kept(duty), """
+                    seed \(seed): \(duty.keys[0]) \(show(duty.value)) of \(duty.id.prefix(4)) was lost after \(steps); \
+                    shows \(shown), conflicts \(held)
+                    """)
             }
         }
         func sync(_ device: AccountDevice) async throws {
             let bases = Dictionary(try device.disk.syncBases().filter { $0.kind == kind }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            var edits: [(id: String, keys: [String], value: [String: JSONValue]?)] = []
-            var superseded: [String: [JSONValue?]] = [:]
             let ids = Set(bases.keys).union(device.nutrition.entries.map(\.id.uuidString))
+            // What this device changed since the server last had it. Every
+            // version on the server was some device's change, or a merge of them.
             for id in ids {
                 let base = try bases[id]?.payload.map(JSONValue.init(data:))
                 let mine = try current(device, id)
-                let newer = server.history(kind, id).filter { $0.revision > (bases[id]?.revision ?? 0) }
-                superseded[id] = try newer.dropLast().map { try $0.payload.map(JSONValue.init(data:)) }
-                let theirs = try server.stored(kind, id).flatMap { stored in
-                    stored.revision > (bases[id]?.revision ?? 0) ? .some(try stored.payload.map(JSONValue.init(data:))) : nil
-                }
-                for keys in [Self.amount, ["meal"]] {
-                    if base != nil || mine != nil, fields(mine, keys) != fields(base, keys) { edits.append((id, keys, fields(mine, keys))) }
-                    if let theirs, fields(theirs, keys) != fields(base, keys) { edits.append((id, keys, fields(theirs, keys))) }
+                for keys in [Self.amount, ["meal"]] where base != nil || mine != nil {
+                    let duty = Obligation(id: id, keys: keys, value: fields(mine, keys))
+                    if fields(mine, keys) != fields(base, keys), !settled.contains(duty) { obligations.insert(duty) }
                 }
             }
             try await device.sync.sync()
             steps.append("sync \(name(device))")
-            for edit in edits {
-                func show(_ value: [String: JSONValue]?) -> String { value.map { String(describing: $0[edit.keys[0]] ?? .null) } ?? "deleted" }
-                let held = device.conflicts.conflicts.filter { $0.documentID == edit.id }
-                    .map { "\(show(fields($0.local, edit.keys)))/\(show(fields($0.remote, edit.keys)))" }
-                let shown = show(fields(try current(device, edit.id), edit.keys))
-                #expect(try kept(device, edit.id, edit.keys, edit.value, superseded: superseded[edit.id] ?? []),
-                        """
-                        seed \(seed): \(edit.keys[0]) \(show(edit.value)) of \(edit.id.prefix(4)) was lost after \(steps); \
-                        shows \(shown), conflicts \(held)
-                        """)
-            }
         }
 
         for _ in 0..<30 {
@@ -427,16 +442,19 @@ final class AccountDevice {
             switch random.next(9) {
             case 0, 1:
                 guard var entry = random.pick(device.nutrition.entries) else { continue }
+                try seen(device, entry.id.uuidString, [Self.amount])
                 entry.grams = Double([30, 45, 60, 75, 90][random.next(5)])
                 try device.nutrition.saveEntry(entry)
                 steps.append("\(name(device)) \(entry.id.uuidString.prefix(4)) \(entry.grams) g")
             case 2:
                 guard var entry = random.pick(device.nutrition.entries) else { continue }
+                try seen(device, entry.id.uuidString, [["meal"]])
                 entry.meal = ["Breakfast", "Lunch", "Dinner"][random.next(3)]
                 try device.nutrition.saveEntry(entry)
                 steps.append("\(name(device)) \(entry.id.uuidString.prefix(4)) \(entry.meal)")
             case 3:
                 guard let entry = random.pick(device.nutrition.entries) else { continue }
+                try seen(device, entry.id.uuidString, [Self.amount, ["meal"]])
                 try device.nutrition.deleteEntry(entry.id)
                 steps.append("\(name(device)) deletes \(entry.id.uuidString.prefix(4))")
             case 4:
@@ -445,14 +463,27 @@ final class AccountDevice {
                 try await sync(device)
             case 7:
                 guard let conflict = random.pick(device.conflicts.unresolved), let choice = random.pick(conflict.choices) else { continue }
+                let decided = obligations.filter { duty in
+                    duty.id == conflict.documentID
+                        && (duty.value == nil ? conflict.isDeletion
+                            : fields(conflict.local, duty.keys) == duty.value || fields(conflict.remote, duty.keys) == duty.value)
+                }
+                obligations.subtract(decided)
+                settled.formUnion(decided)
                 try device.conflicts.resolve(conflict.id, choice)
                 steps.append("\(name(device)) resolves \(conflict.documentID.prefix(4)) \(choice)")
             default:
                 if device.conflicts.undoable != nil { steps.append("\(name(device)) undoes") }
                 try device.conflicts.undo()
             }
+            try check()
         }
-        for _ in 0..<3 { for device in devices { try await sync(device) } }
+        for _ in 0..<3 {
+            for device in devices {
+                try await sync(device)
+                try check()
+            }
+        }
         let (a, b) = (devices[0], devices[1])
         #expect(a.nutrition.entries == b.nutrition.entries, "seed \(seed): the devices disagree")
         #expect(a.conflicts.conflicts == b.conflicts.conflicts, "seed \(seed): the conflicts disagree")

@@ -2278,3 +2278,15 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   decision. A conflict's base, versions and fields now never change once found; a later clash
   is a conflict of its own. Merging two copies of one conflict takes only the later resolution
   (`changedAt`), so a resolution or an Undo on one device can't take another's versions away.
+- Resolving merged the whole chosen version against the original base, so a change made
+  since, such as moving the entry to Dinner after the other device's Lunch merged in, could
+  be put back. A choice now sets only the conflict's recorded fields (`Merge.apply`, with an
+  amount's grams, serving and quantity as one group from `DocumentHost.fieldGroups`, and a
+  workout's paths down to one set's field, one item, or a list's order), and everything else
+  stays. Undo takes back only what the choice set and nobody changed since, merging three
+  ways against what the choice wrote; a record changed since it was brought back, or a copy
+  edited since Keep both, stays. Bringing back a record that is already back leaves it as it
+  is. The randomized two-device check now keeps every edit a sync carries as an obligation
+  until the person sees it and changes it, deletes it, or decides on a conflict holding it,
+  and checks after every later step that some device shows it or some conflict holds it; it
+  found the two Undo cases.
