@@ -558,6 +558,9 @@ struct TodayView: View {
             }
         } else if let day {
             TodayRepeatDayButton(source: dayName(day.source), repeated: day, rest: rest, logged: dayLogged, row: true) { repeatDay(day) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                    LaunchTiming.loggingLaidOut("logAgain", at: $0, entries: store.entries.count)
+                }
         }
     }
 

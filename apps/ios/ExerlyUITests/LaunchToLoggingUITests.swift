@@ -147,6 +147,23 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
             XCTAssertEqual(timings.count, 5, "Each launch reported the frame with Log again (\(order))")
             XCTAssertEqual(placed, 5, "Each launch reported Log again where it was drawn, not a frame early (\(order))")
         }
+
+        // With the meal being eaten now logged and the shortcuts hidden, Log
+        // again is the rest of yesterday on its own row, and launch ends there.
+        let toast = SeedFood(name: "Wholegrain toast", per100g: ["energy": 250, "protein": 10, "carbohydrate": 43, "fat": 3.5])
+        try await seedEntry(toast, grams: 60, daysAgo: 0, meal: "Breakfast", minutes: 1, token: person.token)
+        let at = try XCTUnwrap(app.launchArguments.firstIndex(of: key))
+        app.launchArguments[at + 1] = "-quickActions"
+        let rest = app.buttons["today.repeatDay"]
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(rest.waitForExistence(timeout: 20), "The rest of yesterday stands alone once breakfast has food")
+        let (timings, hittable, placed) = try await coldLaunches(app, chip: rest, count: 5)
+        let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
+        print("Today without shortcuts, the rest of the day alone: \(endToEnd.text) over \(timings.count) cold launches; "
+              + "hittable as the launch returned: \(hittable), where the launch reported it: \(placed).")
+        XCTAssertEqual(timings.count, 5, "Each launch reported the frame with the rest of the day")
+        XCTAssertEqual(placed, 5, "Each launch reported the rest of the day where it was drawn")
     }
 
     private func logAgain(_ app: XCUIApplication) -> XCUIElement {
