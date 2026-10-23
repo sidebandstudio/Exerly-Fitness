@@ -2366,6 +2366,53 @@ final class ProductionTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(QuickPreferences.Queue.self, from: stored), QuickPreferences.Queue(), "Nothing rewrote the account's queue")
     }
 
+    /// Confirming review, P2: a lost response's replay answers with the
+    /// revision it made, so Today showed the goal another device had
+    /// replaced since. The queue adopts the account as it is now, and a
+    /// change made meanwhile still goes.
+    func testAQuickPreferenceReplayShowsTheAccountAsItIsNowAndKeepsANewerChange() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var receipt: PreferencesSnapshot?
+        var writes: [(key: String, body: Data)] = []
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            let raw = Self.requestBody(request)
+            writes.append((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", raw))
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: raw)
+            if writes.count == 1 {
+                // Committed as revision 2, the response lost; another device then saves revision 3.
+                receipt = self.preferencesDocument(revision: 2, values: body.changes)
+                remote = self.preferencesDocument(revision: 3, values: ["waterGoalMl": .number(3500)])
+                throw URLError(.networkConnectionLost)
+            }
+            if writes[writes.count - 1].key == writes[0].key { return (200, try JSONEncoder().encode(XCTUnwrap(receipt))) }
+            guard body.baseRevision == remote.revision else { return (409, Data(#"{"message":"Preferences changed"}"#.utf8)) }
+            remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+            return (200, try JSONEncoder().encode(remote))
+        }
+        let later: [Duration] = [.seconds(3600)]
+        let first = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later)
+        first.set("waterGoalMl", .number(2000))
+        await first.waitForSend()
+        XCTAssertTrue(first.isWaitingForConnection)
+
+        var accepted: [PreferencesSnapshot] = []
+        let reopened = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later) { accepted.append($0) }
+        reopened.set("nutritionDisplay", .string("consumed"))
+        await reopened.waitForSend()
+        XCTAssertEqual(writes.count, 3)
+        XCTAssertEqual(writes[0].key, writes[1].key, "The lost write is replayed")
+        XCTAssertEqual(writes[0].body, writes[1].body)
+        XCTAssertFalse(accepted.contains { $0.revision == 2 }, "The replay's older revision is never shown")
+        XCTAssertEqual(accepted.first?.revision, 3)
+        XCTAssertFalse(reopened.hasUnsent)
+        XCTAssertEqual(reopened.waterGoal(accepted.last?.user), 3500, "The other device's goal")
+        XCTAssertTrue(reopened.leadsWithEaten(accepted.last?.user), "The change made meanwhile went")
+        XCTAssertEqual(remote.values["nutritionDisplay"], .string("consumed"))
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3500))
+    }
+
     func testPreferencesLostAcknowledgementReplaysAfterReopeningAndDoesNotUndoLaterDeviceChanges() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         var remote = preferencesDocument()

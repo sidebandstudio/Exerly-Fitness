@@ -160,13 +160,17 @@ final class QuickPreferences: ObservableObject {
             guard let sending = queue.sending else { return }
             do {
                 let result = try await deliver(sending)
+                // A replay after a lost response answers with the revision it made,
+                // which another device may have passed since: read the account as it
+                // is now. Until that succeeds the send stays queued; sent again, it replays.
+                let current = try await latest()
                 // Accepted: anything changed meanwhile is still waiting, and goes next.
                 queue.sending = nil
                 persist()
                 failures = 0
                 isWaitingForConnection = false
                 error = nil
-                onAccepted(result)
+                onAccepted(current.revision >= result.revision ? current : result)
             } catch APIError.serverError(400, let message) {
                 guard isActive else { return }
                 // The server refuses these values: nothing to retry.
