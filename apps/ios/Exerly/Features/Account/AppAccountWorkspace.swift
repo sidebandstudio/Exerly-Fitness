@@ -20,8 +20,10 @@ final class AppAccountWorkspace: ObservableObject {
     /// The account whose data failed to open: asked for again, it isn't
     /// opened again until someone chooses Try again (`retrying`).
     private var failedAccountID: String?
-    /// The account being opened, so a second request waits for that one.
-    private var openingAccountID: String?
+    /// The request opening an account, and which, so a second request for
+    /// it waits for that one. A transition (a new `generation`) ends that
+    /// wait, and only the request itself clears it.
+    private var opening: (request: UUID, accountID: String)?
 
     init(open: @escaping @MainActor (AccountAPI) async throws -> TrainingWorkspace = {
              try await TrainingWorkspace.open(accountID: $0.accountID, api: $0)
@@ -48,7 +50,8 @@ final class AppAccountWorkspace: ObservableObject {
     func configure(_ account: AccountAPI?, retrying: Bool = false) async {
         guard !isChangingAccount else { return }
         if let account {
-            if training?.accountID == account.accountID || openingAccountID == account.accountID { return }
+            if training?.accountID == account.accountID { return }
+            if let opening, opening.accountID == account.accountID, opening.request == generation { return }
             if failedAccountID == account.accountID, !retrying { return }
         }
         let request = UUID()
@@ -60,8 +63,8 @@ final class AppAccountWorkspace: ObservableObject {
             failedAccountID = nil
             return
         }
-        openingAccountID = account.accountID
-        defer { if openingAccountID == account.accountID { openingAccountID = nil } }
+        opening = (request, account.accountID)
+        defer { if opening?.request == request { opening = nil } }
         do {
             let opened = try await open(account)
             // Signed out or switched while it opened: it isn't this request's to show.

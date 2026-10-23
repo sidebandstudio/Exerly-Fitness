@@ -58,6 +58,33 @@ final class AccountWorkspaceTests: XCTestCase {
         XCTAssertEqual(attempts, 2, "Try again opens it again")
     }
 
+    /// Signing out while an account opens and back in before that read
+    /// returns opens the account again, instead of waiting for a request
+    /// that no longer counts.
+    func testReopeningWhileAnInterruptedOpenIsStillReadingOpensTheAccount() async throws {
+        struct Abandoned: Error {}
+        let directory = root!
+        var held: CheckedContinuation<Void, Never>?
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { api in
+            attempts += 1
+            if attempts == 1 {
+                await withCheckedContinuation { held = $0 }
+                throw Abandoned()
+            }
+            return try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+        }, deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        let first = Task { @MainActor in await owner.configure(self.auth.accountAPI) }
+        while held == nil { await Task.yield() }
+        await owner.configure(nil)
+        await owner.configure(auth.accountAPI)
+        held?.resume()
+        await first.value
+        XCTAssertEqual(attempts, 2, "Signing back in opens the account again")
+        XCTAssertEqual(owner.training?.accountID, "account-a")
+        XCTAssertNil(owner.openingError)
+    }
+
     /// An account's history is read off the main thread, so a long one
     /// never holds up the screen while it opens.
     func testHistoryIsReadOffTheMainThread() async throws {
