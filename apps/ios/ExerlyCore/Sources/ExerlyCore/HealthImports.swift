@@ -62,10 +62,12 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
         digest((try? ExerlyJSON.canonical(entry)) ?? Data())
     }
 
-    /// An activity's fingerprint, from what it's saved with. Numbers compare
-    /// by value, as the server may send 30 back as "30.0".
+    /// An activity's fingerprint, from the fields it's saved and synced with
+    /// (`ActivityRequest`, the API's routes/activities.js): any edit to its
+    /// name, minutes, calories, intensity, day or type changes this. Numbers
+    /// compare by value, as the server may send 30.0 back as 30.
     public static func fingerprint(activity fields: [String: Any]) -> String {
-        let keys = ["activity", "duration", "calories", "intensity", "entry_date", "category", "notes"]
+        let keys = ["activity", "duration_min", "calories", "intensity", "entry_date", "type"]
         let text = keys.map { key -> String in
             switch fields[key] {
             case let number as NSNumber: String(format: "%.3f", number.doubleValue)

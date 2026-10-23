@@ -1958,6 +1958,53 @@ final class ProductionTests: XCTestCase {
         XCTAssertTrue(other.sleepEntries?.isEmpty == true)
     }
 
+    /// An activity imported from Health is recognised as changed when its
+    /// minutes or its type change, and as unchanged after the server's copy
+    /// of it comes back: whole numbers without a point, nulls for what wasn't
+    /// given, and the server's own columns beside them.
+    func testAnImportedActivitysFingerprintFollowsItsMinutesAndTypeThroughTheServer() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        let day = testToday.rawValue
+        var rows: [String: [String: Any]] = [:]
+        StubURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync" { return (200, Data(#"{"changes":[],"cursor":0,"has_more":false}"#.utf8)) }
+            if request.httpMethod == "GET" { return (200, try JSONSerialization.data(withJSONObject: Array(rows.values))) }
+            // As routes/activities.js and lib/versionedLogs.js keep and return it.
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.requestBody(request)) as? [String: Any])
+            let entity = try XCTUnwrap(body["client_id"] as? String)
+            let revision = (rows[entity]?["revision"] as? Int ?? 0) + 1
+            let minutes = try XCTUnwrap(body["duration_min"] as? Double)
+            rows[entity] = ["id": "server-\(entity)", "client_id": entity, "revision": revision, "account_id": "a",
+                            "email": "synthetic@example.com", "activity": body["activity"]!,
+                            "duration_min": minutes == minutes.rounded() ? Int(minutes) as Any : minutes as Any,
+                            "calories": body["calories"] ?? NSNull(), "intensity": body["intensity"] ?? NSNull(),
+                            "type": body["type"] ?? NSNull(), "entry_date": body["entry_date"]!, "revision_locked": true,
+                            "created_at": "2026-10-20T08:00:00.000Z", "updated_at": "2026-10-20T08:00:00.000Z", "deleted_at": NSNull()]
+            return (revision == 1 ? 201 : 200, try JSONSerialization.data(withJSONObject: rows[entity]!))
+        }
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self), configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false)
+        engine.configure(container: container, accountID: "a")
+        let id = UUID().uuidString.lowercased()
+        try engine.saveImportedActivity(ActivityRequest(type: "Running", duration: 30, calories: 320, intensity: nil, entryDate: day,
+                                                        category: "health"), clientID: id)
+        let imported = try XCTUnwrap(engine.activityFingerprint(id))
+        await engine.synchronize(force: true)
+        let reached = await engine.refreshActivities(from: day, to: day)
+        XCTAssertTrue(reached)
+        XCTAssertEqual(engine.activityFingerprint(id), imported, "The server's copy is the activity as it was imported")
+        var entries = try await engine.activityEntries(from: day, to: day, cachedOnly: true)
+        var saved = try XCTUnwrap(entries.first)
+        try engine.saveActivity(ActivityRequest(type: "Running", duration: 35, calories: 320, intensity: nil, entryDate: day,
+                                                category: "health"), editing: saved)
+        XCTAssertNotEqual(engine.activityFingerprint(id), imported, "Its minutes changed")
+        entries = try await engine.activityEntries(from: day, to: day, cachedOnly: true)
+        saved = try XCTUnwrap(entries.first)
+        try engine.saveActivity(ActivityRequest(type: "Running", duration: 30, calories: 320, intensity: nil, entryDate: day,
+                                                category: "cardio"), editing: saved)
+        XCTAssertNotEqual(engine.activityFingerprint(id), imported, "Its type changed")
+    }
+
     func testActivityAndSleepReviewConflictsThenDeleteAndUndoTheSameRecord() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let day = testToday.rawValue

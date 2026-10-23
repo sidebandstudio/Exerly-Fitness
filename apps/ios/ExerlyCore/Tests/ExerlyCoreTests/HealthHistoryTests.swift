@@ -155,6 +155,18 @@ import Testing
         #expect(store.entries(on: LocalDate("2026-10-05")!).map(\.id) == [unnamed.id], "deleted in Health, gone here")
     }
 
+    /// Review 3, item 1: an activity's fingerprint covers what it's saved
+    /// with, minutes and type among them, and not how the server writes numbers.
+    @Test func anActivitysFingerprintCoversItsMinutesAndType() {
+        let saved: [String: Any] = ["activity": "Running", "duration_min": 30.0, "calories": 320.0, "type": "health", "entry_date": "2026-10-20"]
+        let print = HealthImport.fingerprint(activity: saved)
+        #expect(HealthImport.fingerprint(activity: saved.merging(["duration_min": 35.0]) { $1 }) != print, "minutes")
+        #expect(HealthImport.fingerprint(activity: saved.merging(["type": "cardio"]) { $1 }) != print, "type")
+        let server = saved.merging(["duration_min": 30, "calories": 320, "intensity": NSNull(), "id": "server-1", "revision": 2,
+                                    "created_at": "2026-10-20T08:00:00.000Z"]) { $1 }
+        #expect(HealthImport.fingerprint(activity: server) == print, "the server's copy")
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))
