@@ -14,8 +14,22 @@ enum TodayUndo {
     /// Takes back those of `logged` still as logged: all of them, or, if
     /// saving fails, none, so the same Undo can be tried again.
     @MainActor static func remove(_ logged: [FoodEntry], from store: NutritionStore) throws {
+        #if DEBUG
+        if failingDeletes > 0 {
+            failingDeletes -= 1
+            throw TestDeleteFailure()
+        }
+        #endif
         try store.deleteEntries(removable(logged, in: store.entries))
     }
+
+    #if DEBUG
+    /// UI tests only: this many Undos fail before deleting anything, as one
+    /// a full disk rolls back would, set by the launch argument
+    /// `-exerlyTestFailNextDeletes <count>`.
+    @MainActor private static var failingDeletes = UserDefaults.standard.integer(forKey: "exerlyTestFailNextDeletes")
+    private struct TestDeleteFailure: Error {}
+    #endif
 
     static let unfinished = "Undo didn't finish. Those foods are still logged. Try again."
 

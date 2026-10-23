@@ -30,6 +30,38 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         tap(control, in: app)
     }
 
+    /// An Undo that can't be saved keeps its food and offers Try again, which
+    /// takes the food back and goes once it does.
+    func testTryAgainFinishesAnUndoThatFailed() async throws {
+        let (app, person) = try await budgetHome(prefix: "undo-retry")
+        // The next Undo fails inside the app, as a full disk would make it.
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "--ui-testing" }
+        app.launchArguments += ["-exerlyTestFailNextDeletes", "1"]
+        app.launch()
+        let meal = app.buttons["today.repeatMeal"]
+        XCTAssertTrue(meal.waitForExistence(timeout: 20))
+        tapOnShelf(meal, in: app)
+        try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
+        let undo = app.buttons["today.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        tap(undo, in: app)
+
+        let retry = app.buttons["today.undo.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), "The failure offers Try again")
+        XCTAssertEqual(retry.label, "Try again")
+        let failure = app.staticTexts["Undo didn't finish. Those foods are still logged. Try again."]
+        XCTAssertTrue(failure.exists, "And says the Undo didn't finish")
+        XCTAssertFalse(undo.exists, "The bar's Undo has gone; Try again is the way back")
+        try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
+
+        tap(retry, in: app)
+        try await expectEntries(token: person.token, [])
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 5), "The banner goes once the Undo finishes")
+        XCTAssertFalse(failure.exists)
+        XCTAssertTrue(meal.label.hasPrefix("Repeat Yesterday's breakfast"), "The meal can be repeated again: \(meal.label)")
+    }
+
     /// Blueberries first, then the meal: the meal adds only the yogurt, and
     /// each check takes back only its own food.
     func testAFoodThenItsMealEachUndoOnlyTheirOwn() async throws {
