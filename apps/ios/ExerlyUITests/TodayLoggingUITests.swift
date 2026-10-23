@@ -12,15 +12,22 @@ final class TodayLoggingUITests: ExerlyUITestCase {
     /// Taps a Log again chip, scrolling the shelf sideways first when it's
     /// off to the right; `tap(_:in:)` only scrolls up and down.
     private func tapChip(_ name: String, in app: XCUIApplication) {
-        let chip = foodChip(name, in: app)
+        tapOnShelf(foodChip(name, in: app), in: app)
+    }
+
+    /// Taps a control on Log again's shelf, scrolling the shelf sideways
+    /// first when it's off either edge: after a chip further along, the meal
+    /// chip is off to the left.
+    private func tapOnShelf(_ control: XCUIElement, in app: XCUIApplication) {
         let meal = app.buttons["today.repeatMeal"]
-        reveal(meal, in: app)
-        for _ in 0..<5 where chip.exists && !app.frame.contains(chip.frame) {
+        if !(app.frame.minY...app.frame.maxY).contains(meal.frame.midY) { reveal(meal, in: app) }
+        for _ in 0..<5 where control.exists && !app.frame.contains(control.frame) {
             let row = meal.frame.midY / app.frame.height
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: row))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: row)))
+            let (from, to) = control.frame.minX < app.frame.minX ? (0.25, 0.85) : (0.85, 0.25)
+            app.coordinate(withNormalizedOffset: CGVector(dx: from, dy: row))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: to, dy: row)))
         }
-        tap(chip, in: app)
+        tap(control, in: app)
     }
 
     /// Blueberries first, then the meal: the meal adds only the yogurt, and
@@ -32,13 +39,13 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         tapChip("Blueberries", in: app)
         try await expectEntries(token: person.token, ["Blueberries"], meal: "Breakfast")
         XCTAssertTrue(meal.label.hasPrefix("Repeat Yesterday's breakfast, 1 food"), "What's left of it: \(meal.label)")
-        tap(meal, in: app)
+        tapOnShelf(meal, in: app)
         try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"], meal: "Breakfast")
 
         tapChip("Blueberries", in: app)
         try await expectEntries(token: person.token, ["Greek yogurt, plain"])
         XCTAssertTrue(foodChip("Blueberries", in: app).label.hasPrefix("Log Blueberries"), "Its own entry gone, the chip logs again")
-        tap(meal, in: app)
+        tapOnShelf(meal, in: app)
         try await expectEntries(token: person.token, [])
     }
 
@@ -56,7 +63,7 @@ final class TodayLoggingUITests: ExerlyUITestCase {
         try await Task.sleep(for: .seconds(2))
         try await expectEntries(token: person.token, ["Blueberries", "Greek yogurt, plain"])
 
-        tap(meal, in: app)
+        tapOnShelf(meal, in: app)
         try await expectEntries(token: person.token, [])
         XCTAssertTrue(foodChip("Blueberries", in: app).label.hasPrefix("Log Blueberries"))
     }
