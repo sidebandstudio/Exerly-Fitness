@@ -212,4 +212,64 @@ final class TrainingDevice {
             #expect(device.session(session.id)?.notes == "Felt strong" && device.conflicts.conflicts.isEmpty)
         }
     }
+
+    // MARK: Undo of a delete
+
+    /// Deleted and pushed, then Undo: it comes back on both devices.
+    @Test func undoingAWorkoutDeleteAfterItsPushBringsItBack() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        try phone.store.importSessions([session])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        let snapshot = try #require(phone.session(session.id))
+        try phone.store.deleteSession(session.id)
+        try await phone.sync.sync()
+        try phone.conflicts.restore(snapshot)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        #expect(phone.session(session.id) == snapshot && tablet.session(session.id) == snapshot)
+        #expect(phone.conflicts.conflicts.isEmpty && tablet.conflicts.conflicts.isEmpty)
+    }
+
+    /// The phone deletes a workout; before Undo it pulls the tablet's new
+    /// notes, kept in a conflict. Undo brings back the workout with the
+    /// tablet's notes, settles that conflict, and the tablet keeps them.
+    @Test func undoingAWorkoutDeleteKeepsAnEditPulledSince() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        try phone.store.importSessions([session])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var edited = try #require(tablet.session(session.id))
+        edited.notes = "Felt strong"
+        try tablet.store.saveSession(edited)
+        try await tablet.sync.sync()
+        let snapshot = try #require(phone.session(session.id))
+        try phone.store.deleteSession(session.id)
+        try await phone.sync.sync()
+        #expect(phone.conflicts.unresolved.count == 1, "The tablet's notes wait for review")
+        try phone.conflicts.restore(snapshot)
+        #expect(phone.session(session.id)?.notes == "Felt strong" && phone.conflicts.unresolved.isEmpty)
+        for device in [phone, tablet, phone] { try await device.sync.sync() }
+        #expect(tablet.session(session.id)?.notes == "Felt strong" && tablet.conflicts.unresolved.isEmpty)
+        #expect(phone.session(session.id) == tablet.session(session.id))
+    }
+
+    /// The same for a food entry, the Undo the diary offers after a delete.
+    @Test func undoingAFoodDeleteKeepsAnEditPulledSince() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var moved = try #require(tablet.entry(logged.id))
+        moved.meal = "Lunch"
+        try tablet.nutrition.saveEntry(moved)
+        try await tablet.sync.sync()
+        let snapshot = try #require(phone.entry(logged.id))
+        try phone.nutrition.deleteEntry(logged.id)
+        try await phone.sync.sync()
+        try phone.conflicts.restore(snapshot)
+        for device in [phone, tablet, phone] { try await device.sync.sync() }
+        #expect(phone.entry(logged.id)?.meal == "Lunch" && tablet.entry(logged.id)?.meal == "Lunch")
+        #expect(phone.conflicts.unresolved.isEmpty && tablet.conflicts.unresolved.isEmpty)
+    }
 }

@@ -45,7 +45,7 @@ struct NutritionLibraryView: View {
         self.workspace = workspace
         self.timeZone = timeZone
         self.unit = unit
-        _diaryActions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _diaryActions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     var body: some View {
@@ -243,7 +243,7 @@ private struct NutritionLibraryDetail: View {
         self.timeZone = timeZone
         self.unit = unit
         _actions = StateObject(wrappedValue: NutritionLibraryActions(store: workspace.nutrition))
-        _diaryActions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _diaryActions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     var body: some View {

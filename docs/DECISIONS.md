@@ -2315,3 +2315,12 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   whose scan is still pending consumes the scan (`ConflictSideEffects.broughtBack`), so it
   can't be logged again. The PARITY I03 pin from 2026-10-21 already passes on this branch;
   the tablet-resolves case is now a passing test with three variants.
+- Undo of a delete wrote the deleted snapshot back as it was, so an edit another device made
+  in the Undo window, pulled and kept in a "deleted here" conflict, was overwritten when the
+  snapshot was pushed, and that conflict stayed open for a record that existed again.
+  `SyncConflictStore.restore` brings the record back merged with each open deletion
+  conflict's other version against its base, settles those conflicts, and records a new
+  field conflict where both changed one field. `TrainingStore.restoreSession`, which the
+  training review named, isn't on this base (the training branch hasn't landed), and nothing
+  here offers Undo of a workout delete; `restore(_:)` for a session is ready for it and
+  tested through sync. The diary's Undo of a food delete now goes through it.

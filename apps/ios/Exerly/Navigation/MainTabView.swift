@@ -236,7 +236,7 @@ private struct FoodSearchTabContent: View {
         self.unit = unit
         self.timeZone = timeZone
         self.entered = entered
-        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     var body: some View {

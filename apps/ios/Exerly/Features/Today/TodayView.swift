@@ -174,7 +174,7 @@ struct TodayView: View {
         _byTime = AppStorage(wrappedValue: false, "today.byTime.v1.\(workspace.accountID)")
         _date = State(initialValue: LocalDate(Date(), in: timeZone))
         _openedOn = State(initialValue: LocalDate(Date(), in: timeZone))
-        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     private var store: NutritionStore { workspace.nutrition }

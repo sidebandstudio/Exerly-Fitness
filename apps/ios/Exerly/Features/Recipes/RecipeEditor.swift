@@ -46,7 +46,7 @@ struct RecipeEditor: View {
         self.startsImporting = startsImporting
         _draft = StateObject(wrappedValue: RecipeDraft(store: workspace.nutrition, unit: unit, editing: editing, start: start,
                                                        imported: imported))
-        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     var body: some View {

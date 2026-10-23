@@ -504,8 +504,13 @@ final class NutritionDiaryActions: ObservableObject {
     @Published private(set) var deleted: FoodEntry?
     @Published private(set) var error: String?
     private let store: NutritionStore
+    /// Undo of a delete goes through it, so an edit another device made since isn't overwritten.
+    private let conflicts: SyncConflictStore?
 
-    init(store: NutritionStore) { self.store = store }
+    init(store: NutritionStore, conflicts: SyncConflictStore? = nil) {
+        self.store = store
+        self.conflicts = conflicts
+    }
 
     func clearError() { error = nil }
 
@@ -551,7 +556,7 @@ final class NutritionDiaryActions: ObservableObject {
             return false
         }
         do {
-            try store.saveEntry(deleted)
+            if let conflicts { try conflicts.restore(deleted) } else { try store.saveEntry(deleted) }
             self.deleted = nil
             return true
         } catch {

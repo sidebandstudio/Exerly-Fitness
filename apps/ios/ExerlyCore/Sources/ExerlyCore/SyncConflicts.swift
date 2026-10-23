@@ -263,6 +263,55 @@ public final class SyncConflictStore {
         undoable = id
     }
 
+    // MARK: Undo of a delete
+
+    /// Undo of a delete: brings the record back as `payload`, the version
+    /// deleted, with every change another device made since and this one
+    /// pulled, kept until now in the deletion's conflicts, so the snapshot
+    /// never overwrites them. Those conflicts are settled; a field both
+    /// changed differently keeps this version and the other waits in a new
+    /// conflict. A record already back, from another device, stays as it is.
+    public func restore(kind: String, id: String, payload: Data) throws {
+        guard let host = host(for: kind) else { throw DocumentError(message: "Unknown kind \(kind)") }
+        guard try host.payload(kind: kind, id: id) == nil else { return }
+        let open = unresolved.filter { $0.kind == kind && $0.documentID == id && $0.isDeletion }
+        var restored = try host.canonicalize(kind: kind, payload: payload)
+        var clashes: [SyncConflict] = []
+        for conflict in open.reversed() {
+            guard let other = (conflict.local ?? conflict.remote)?.canonicalData, other != restored else { continue }
+            let base = conflict.base?.canonicalData
+            let outcome = try host.merge(kind: kind, base: base, local: restored, remote: other, preferring: .local)
+            if !outcome.conflicts.isEmpty {
+                clashes.append(try found(kind: kind, id: id, base: base, local: restored, remote: other, fields: outcome.conflicts,
+                                         remoteAt: conflict.remoteAt))
+            }
+            restored = outcome.merged
+        }
+        try host.validate(kind: kind, id: id, payload: restored)
+        var publishes: [() -> Void] = []
+        try state.performAtomically {
+            publishes.append(try host.prepareWrite(kind: kind, id: id, payload: restored))
+            for conflict in open {
+                var settled = conflict
+                settled.resolution = SyncConflict.Resolution(choice: conflict.local == nil ? .remote : .local, at: now(), device: device)
+                settled.changedAt = now()
+                publishes.append(try stage(settled))
+            }
+            for clash in clashes { publishes.append(try stage(clash)) }
+        }
+        publishes.forEach { $0() }
+    }
+
+    /// Undo of deleting a food entry.
+    public func restore(_ entry: FoodEntry) throws {
+        try restore(kind: NutritionStore.entryKind, id: entry.id.uuidString, payload: ExerlyJSON.canonical(entry))
+    }
+
+    /// Undo of deleting a workout.
+    public func restore(_ session: WorkoutSession) throws {
+        try restore(kind: TrainingStore.sessionKind, id: session.id.uuidString, payload: ExerlyJSON.canonical(session))
+    }
+
     /// Reopens the last conflict resolved here and puts its records back.
     public func undo() throws {
         guard let undoStep else { return }
