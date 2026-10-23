@@ -2132,7 +2132,9 @@ final class ProductionTests: XCTestCase {
         saved.merge(values) { _, new in new }
         let user = UserDTO(id: "a", email: "preferences@exerly.test", name: PreferenceFields.text(saved["name"]!),
                            onboardingCompleted: true, height: 167.75, weight: 72.25,
-                           unitSystem: PreferenceFields.text(saved["unitSystem"]!), preferencesRevision: revision)
+                           unitSystem: PreferenceFields.text(saved["unitSystem"]!), preferencesRevision: revision,
+                           nutritionDisplay: saved["nutritionDisplay"].map(PreferenceFields.text),
+                           waterGoalMl: saved["waterGoalMl"].flatMap { if case .number(let ml) = $0 { Int(ml) } else { nil } })
         return PreferencesSnapshot(schemaVersion: 1, accountID: "a", revision: revision, values: saved, user: user)
     }
 
@@ -2303,6 +2305,65 @@ final class ProductionTests: XCTestCase {
         XCTAssertEqual(sent, [.number(2000), .number(3000)])
         XCTAssertEqual(quick.waterGoal(nil), nil, "Nothing left unsent: the account's own value shows")
         XCTAssertEqual(remote.values["waterGoalMl"], .number(3000))
+    }
+
+    /// Confirming review, P1: a queue kept from a session that ended still
+    /// retried, and after signing back into the same account it sent its
+    /// older goal over the one saved since and rewrote the account's queue.
+    func testSigningBackInStopsTheEndedSessionsQuickPreferenceQueue() async throws {
+        let token = Self.sessionToken()
+        keychain.saveSession(token: token, refreshToken: "fixture-refresh")
+        let account = #"{"_id":"a","email":"a@example.test","name":"Taylor","onboardingCompleted":true}"#
+        var remote = preferencesDocument()
+        var operations: [String: (body: Data, response: PreferencesSnapshot)] = [:]
+        var offline = true
+        StubURLProtocol.handler = { request in
+            if offline { throw URLError(.notConnectedToInternet) }
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/login"):
+                return (200, Data(#"{"token":"\#(token)","refreshToken":"login-refresh","user":\#(account)}"#.utf8))
+            case ("GET", "/api/preferences"):
+                return (200, try JSONEncoder().encode(remote))
+            case ("PATCH", "/api/preferences"):
+                // The server: a key replays its answer for the same body and refuses another one.
+                let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+                let raw = Self.requestBody(request)
+                if let previous = operations[key] {
+                    guard previous.body == raw else { return (409, Data(#"{"message":"This operation key was already used with different content"}"#.utf8)) }
+                    return (200, try JSONEncoder().encode(previous.response))
+                }
+                let body = try JSONDecoder().decode(PreferenceMutation.self, from: raw)
+                guard body.baseRevision == remote.revision else { return (409, Data(#"{"message":"Preferences changed"}"#.utf8)) }
+                remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+                operations[key] = (raw, remote)
+                return (200, try JSONEncoder().encode(remote))
+            default:
+                return (200, Data("{\"account\":\(account),\"account_id\":\"a\",\"onboarding\":{\"complete\":true,\"needs_repair\":false,\"user\":\(account)}}".utf8))
+            }
+        }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        let ended = QuickPreferences.signedIn(accountID: "a", auth: auth, api: api, defaults: defaults, retryDelays: [.seconds(1)])
+        ended.set("waterGoalMl", .number(2000))
+        await ended.waitForSend()
+        XCTAssertTrue(ended.isWaitingForConnection, "Its retry is pending")
+
+        auth.logout()
+        offline = false
+        await auth.login(email: "a@example.test", password: "fixture-password")
+        let quick = QuickPreferences.signedIn(accountID: "a", auth: auth, api: api, defaults: defaults, retryDelays: [.seconds(3600)])
+        XCTAssertFalse(quick === ended, "The new session has its own queue")
+        XCTAssertEqual(quick.waterGoal(nil), 2000, "It holds what the ended session left unsent")
+        quick.set("waterGoalMl", .number(3000))
+        await quick.waitForSend()
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3000))
+
+        try await Task.sleep(for: .milliseconds(1500))
+        await ended.waitForSend()
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3000), "The ended session's queue sent nothing more")
+        XCTAssertFalse(quick.hasUnsent)
+        XCTAssertEqual(quick.waterGoal(auth.currentUser), 3000)
+        let stored = try XCTUnwrap(defaults.data(forKey: quick.storageKey))
+        XCTAssertEqual(try JSONDecoder().decode(QuickPreferences.Queue.self, from: stored), QuickPreferences.Queue(), "Nothing rewrote the account's queue")
     }
 
     func testPreferencesLostAcknowledgementReplaysAfterReopeningAndDoesNotUndoLaterDeviceChanges() async throws {

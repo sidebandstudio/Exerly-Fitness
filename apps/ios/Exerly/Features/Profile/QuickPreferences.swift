@@ -8,6 +8,8 @@ import SwiftUI
 /// account's latest revision, one send at a time with newer changes queued
 /// behind it. Offline they wait and go once a request gets through. Your
 /// details' draft and its conflict review are never read or written here.
+/// One queue writes an account's storage at a time: a session's queue stops
+/// when the session ends, and the account's next session sends what it held.
 @MainActor
 final class QuickPreferences: ObservableObject {
     struct Queue: Codable, Equatable {
@@ -31,37 +33,52 @@ final class QuickPreferences: ObservableObject {
     private let api: APIClient
     private let defaults: UserDefaults
     private let onAccepted: (PreferencesSnapshot) -> Void
+    private let isCurrent: () -> Bool
     private let retryDelays: [Duration]
     private var flushing: Task<Void, Never>?
     private var retry: Task<Void, Never>?
     private var failures = 0
+    private var stopped = false
+
+    static let standardRetryDelays: [Duration] = [.seconds(3), .seconds(6), .seconds(12), .seconds(20)]
 
     init(accountID: String, api: APIClient = .shared, defaults: UserDefaults = .standard,
-         retryDelays: [Duration] = [.seconds(3), .seconds(6), .seconds(12), .seconds(20)],
+         retryDelays: [Duration] = standardRetryDelays, isCurrent: @escaping () -> Bool = { true },
          onAccepted: @escaping (PreferencesSnapshot) -> Void = { _ in }) {
         self.accountID = accountID
         self.api = api
         self.defaults = defaults
         self.onAccepted = onAccepted
+        self.isCurrent = isCurrent
         self.retryDelays = retryDelays
         storageKey = "preferences.quick.v1.\(api.storageNamespace).\(accountID)"
         queue = defaults.data(forKey: storageKey).flatMap { try? JSONDecoder().decode(Queue.self, from: $0) } ?? Queue()
         if hasUnsent { flush() }
     }
 
-    private static var instances: [String: QuickPreferences] = [:]
+    private static var instances: [String: (sessionID: UUID, quick: QuickPreferences)] = [:]
 
     /// The signed-in account's queue, shared by every control that sets one
-    /// of these preferences; what the server accepts reaches `auth`.
-    static func signedIn(accountID: String, auth: AuthViewModel) -> QuickPreferences {
+    /// of these preferences; what the server accepts reaches `auth`. Queues
+    /// from a session that has ended stop here, before this one reads the
+    /// account's storage.
+    static func signedIn(accountID: String, auth: AuthViewModel, api: APIClient = .shared,
+                         defaults: UserDefaults = .standard,
+                         retryDelays: [Duration] = standardRetryDelays) -> QuickPreferences {
         let sessionID = auth.sessionID
-        let key = "\(APIClient.shared.storageNamespace).\(accountID).\(sessionID)"
-        if let existing = instances[key] { return existing }
-        let made = QuickPreferences(accountID: accountID) { [weak auth] snapshot in
-            auth?.acceptPreferences(snapshot.user, accountID: accountID, sessionID: sessionID)
-            NotificationService.shared.accept(snapshot)
+        let key = "\(api.storageNamespace).\(accountID)"
+        if let existing = instances[key], existing.sessionID == sessionID { return existing.quick }
+        for (other, entry) in instances where entry.sessionID != sessionID {
+            entry.quick.stop()
+            instances[other] = nil
         }
-        instances[key] = made
+        let made = QuickPreferences(accountID: accountID, api: api, defaults: defaults, retryDelays: retryDelays,
+                                    isCurrent: { [weak auth] in auth?.sessionID == sessionID },
+                                    onAccepted: { [weak auth] snapshot in
+                                        auth?.acceptPreferences(snapshot.user, accountID: accountID, sessionID: sessionID)
+                                        NotificationService.shared.accept(snapshot)
+                                    })
+        instances[key] = (sessionID, made)
         return made
     }
 
@@ -114,12 +131,26 @@ final class QuickPreferences: ObservableObject {
     /// Waits for the send running now, for tests.
     func waitForSend() async { await flushing?.value }
 
+    /// Ends this queue for good: it no longer sends, retries or saves.
+    func stop() {
+        stopped = true
+        retry?.cancel()
+        retry = nil
+        flushing?.cancel()
+        isWaitingForConnection = false
+    }
+
+    /// False once stopped or once the session it belongs to has ended
+    /// (signed out, or signed in again).
+    private var isActive: Bool { !stopped && isCurrent() }
+
     private func persist() {
+        guard isActive else { return }
         if let data = try? JSONEncoder().encode(queue) { defaults.set(data, forKey: storageKey) }
     }
 
     private func send() async {
-        while true {
+        while isActive {
             if queue.sending == nil {
                 guard !queue.waiting.isEmpty else { return }
                 queue.sending = Sending(id: UUID().uuidString, baseRevision: nil, changes: queue.waiting)
@@ -137,6 +168,7 @@ final class QuickPreferences: ObservableObject {
                 error = nil
                 onAccepted(result)
             } catch APIError.serverError(400, let message) {
+                guard isActive else { return }
                 // The server refuses these values: nothing to retry.
                 queue.sending = nil
                 persist()
@@ -146,11 +178,20 @@ final class QuickPreferences: ObservableObject {
             } catch APIError.unauthorized {
                 return
             } catch {
+                guard isActive else { return }
                 isWaitingForConnection = true
                 scheduleRetry()
                 return
             }
         }
+    }
+
+    /// The account's preferences now, unless this queue's session has ended.
+    private func latest() async throws -> PreferencesSnapshot {
+        guard isActive else { throw CancellationError() }
+        let remote: PreferencesSnapshot = try await api.request("GET", path: "/api/preferences", expectedAccountID: accountID)
+        guard remote.accountID == accountID, isActive else { throw CancellationError() }
+        return remote
     }
 
     /// Sends `sending`: as it was first sent after a lost response, so the
@@ -159,17 +200,20 @@ final class QuickPreferences: ObservableObject {
         var sending = sending
         for _ in 0..<3 {
             if sending.baseRevision == nil {
-                let remote: PreferencesSnapshot = try await api.request("GET", path: "/api/preferences", expectedAccountID: accountID)
-                guard remote.accountID == accountID else { throw CancellationError() }
-                sending.baseRevision = remote.revision
+                sending.baseRevision = try await latest().revision
                 queue.sending = sending
                 persist()
             }
+            guard isActive else { throw CancellationError() }
             do {
-                return try await api.request("PATCH", path: "/api/preferences",
-                                             body: PreferenceMutation(baseRevision: sending.baseRevision ?? 0, changes: sending.changes),
-                                             operationID: sending.id, expectedAccountID: accountID)
+                let result: PreferencesSnapshot = try await api.request(
+                    "PATCH", path: "/api/preferences",
+                    body: PreferenceMutation(baseRevision: sending.baseRevision ?? 0, changes: sending.changes),
+                    operationID: sending.id, expectedAccountID: accountID)
+                guard isActive else { throw CancellationError() }
+                return result
             } catch APIError.serverError(409, _) {
+                guard isActive else { throw CancellationError() }
                 // Another device saved first: only these fields are sent, so send them again on top of its save.
                 sending = Sending(id: UUID().uuidString, baseRevision: nil, changes: sending.changes)
                 queue.sending = sending
