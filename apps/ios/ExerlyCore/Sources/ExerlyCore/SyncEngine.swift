@@ -249,13 +249,10 @@ public final class SyncEngine {
         var publishConflict: () -> Void = {}
         try stateStore.performAtomically {
             for write in writes { publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload)) }
-            // Written as the server has it, nothing to push; otherwise, merged
-            // or kept as it is here, it's pushed even if nothing was written.
-            if writes == [DocumentWrite(kind: change.kind, id: change.id, payload: remote)] {
-                try stateStore.markUnchanged(kind: change.kind, id: change.id)
-            } else {
-                try stateStore.markChanged(kind: change.kind, id: change.id)
-            }
+            // To push until it's known to be as the server has it: merged, kept
+            // as it is here, or declined by the store, it goes back even if
+            // nothing was written. A crash before the check below only costs a compare.
+            try stateStore.markChanged(kind: change.kind, id: change.id)
             if isBack, writes.contains(where: { $0.id == change.id && $0.payload != nil }) {
                 try conflicts.effects?.broughtBack(kind: change.kind, id: change.id)
             }
@@ -267,6 +264,10 @@ public final class SyncEngine {
         }
         publishes.forEach { $0() }
         publishConflict()
+        // As the store now holds it, not as planned.
+        if try host.payload(kind: change.kind, id: change.id) == remote {
+            try stateStore.markUnchanged(kind: change.kind, id: change.id)
+        }
         bases[key] = newBase
         rejected = remaining
         return true

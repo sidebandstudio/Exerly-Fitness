@@ -616,3 +616,25 @@ final class CountingHost: DocumentHost {
 extension SQLiteDatabase {
     func reopen(_ url: URL) throws -> SQLiteDatabase { try SQLiteDatabase(url: url) }
 }
+
+/// Review round 3, finding 7: a pulled change the store declines to apply,
+/// such as another device deleting a custom exercise sessions still use,
+/// leaves this device's copy recorded to push, as comparing every document
+/// would, so the devices end up agreeing.
+@MainActor
+@Suite struct DeclinedWriteTests {
+    @Test func aDeletionTheStoreKeepsFromIsPushedBack() async throws {
+        let server = FakeDocumentServer()
+        let disk = InMemoryTrainingPersistence()
+        let store = try TrainingStore(persistence: disk)
+        let exercise = Exercise(id: "custom-synthetic-sled-push", name: "Synthetic Sled Push", aliases: [], metric: .weightReps,
+                                mechanics: .compound, region: .lower, muscles: [.quads: 1], equipment: [.sled], support: [])
+        try store.addCustomExercise(exercise)
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1")
+        try await sync.sync()
+        server.inject(kind: TrainingStore.exerciseKind, id: exercise.id.rawValue, payload: nil)
+        try await sync.sync()
+        #expect(store.library.exercise(exercise.id) != nil, "Kept here, as sessions may use it")
+        #expect(server.stored(TrainingStore.exerciseKind, exercise.id.rawValue)?.payload != nil, "Pushed back, so both devices agree")
+    }
+}

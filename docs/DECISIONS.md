@@ -2471,3 +2471,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   first knew the server had the settled version (`conflictAcknowledgements`: its push
   applied, or it pulled the version), and the 30- or 60-day wait counts from then. A
   reopened conflict drops its time, and a conflict too large to sync counts from settling.
+- After a pull, sync cleared a document's change record when the writes it planned matched
+  the server's copy, but `TrainingStore` declines to delete a custom exercise that sessions
+  may use, so the phone kept one the server had deleted and never sent it back. A pulled
+  document is now recorded as changed inside the pull's transaction and cleared only after
+  publishing, when the store really holds the server's copy. Anything merged, kept or
+  declined is pushed as a full comparison would push it. A crash in between costs one extra
+  comparison, never a missed push.
