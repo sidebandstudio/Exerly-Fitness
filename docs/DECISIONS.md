@@ -2296,3 +2296,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   The randomized check also counts a choice as the person's decision about what that device
   showed for the clashing fields, since the review shows it beside both versions, and follows
   a Keep both copy back to its conflict; run eight times over, its 120 seeds pass.
+- Lists merged in the local order, so a phone that changed a workout's notes pushed its old
+  exercise order back over the tablet's reorder without a word. `Merge.list` now compares the
+  order of the items all three versions have against the base: one side's reorder is taken,
+  two different reorders keep the preferred side's and are reported as `exercises[]` (or a
+  set list's), and items only one side has follow, in that side's order.

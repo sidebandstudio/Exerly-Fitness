@@ -166,4 +166,50 @@ final class TrainingDevice {
         try phone.conflicts.resolve(conflict.id, .remote)
         #expect(phone.store.activeSession == nil, "Keeping it deleted ends it here too")
     }
+
+    // MARK: 5. A reorder
+
+    @Test func aOneSidedReorderIsTakenAndTwoDifferentReordersAreReported() {
+        let a = PerformedExercise(exerciseID: "barbell-bench-press"), b = PerformedExercise(exerciseID: "back-squat"),
+            c = PerformedExercise(exerciseID: "deadlift")
+        let base = WorkoutSession(name: "Full", startedAt: Fixture.instant(), timeZone: Fixture.utc, exercises: [a, b, c])
+        var reordered = base, noted = base
+        reordered.exercises = [c, a, b]
+        noted.notes = "Felt strong"
+        for (local, remote) in [(noted, reordered), (reordered, noted)] {
+            let merged = Merge.session(base: base, local: local, remote: remote, preferring: .local)
+            #expect(merged.merged.exercises.map(\.id) == [c, a, b].map(\.id) && merged.merged.notes == "Felt strong")
+            #expect(merged.conflicts.isEmpty)
+        }
+        var other = base
+        other.exercises = [b, a, c]
+        let both = Merge.session(base: base, local: reordered, remote: other, preferring: .local)
+        #expect(both.conflicts == ["exercises[]"] && both.merged.exercises.map(\.id) == [c, a, b].map(\.id))
+        #expect(Merge.session(base: base, local: reordered, remote: other, preferring: .remote).merged.exercises.map(\.id)
+            == [b, a, c].map(\.id))
+        // An exercise added on one side joins the other side's order.
+        var added = base
+        added.exercises.append(PerformedExercise(exerciseID: "barbell-row"))
+        #expect(Merge.session(base: base, local: added, remote: reordered).exercises.map(\.id) == [c, a, b, added.exercises[3]].map(\.id))
+    }
+
+    /// The tablet reorders while the phone changes the notes: the phone
+    /// takes the order, reports nothing, and both end in the tablet's order.
+    @Test func aReorderOnTheOtherDeviceSurvivesSync() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)]), ("back-squat", [Fixture.set(5, 140)])])
+        try phone.store.importSessions([session])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var mine = try #require(phone.session(session.id)), theirs = try #require(tablet.session(session.id))
+        theirs.exercises.reverse()
+        mine.notes = "Felt strong"
+        try tablet.store.saveSession(theirs)
+        try phone.store.saveSession(mine)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        for device in [phone, tablet] {
+            #expect(device.session(session.id)?.exercises.map(\.id) == theirs.exercises.map(\.id))
+            #expect(device.session(session.id)?.notes == "Felt strong" && device.conflicts.conflicts.isEmpty)
+        }
+    }
 }

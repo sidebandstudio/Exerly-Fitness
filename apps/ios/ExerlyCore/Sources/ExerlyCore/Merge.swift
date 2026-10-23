@@ -10,8 +10,11 @@ import Foundation
 ///   deleted on one side and changed on the other, the item stays and is
 ///   reported, so a set logged mid-workout is never lost; preferring the
 ///   remote side, as a resolution does, follows it instead;
-/// - the local order wins, and remote additions are appended.
-/// Without a common version every item is treated as added on its side.
+/// - a list one side reordered takes that order; reordered differently on
+///   both sides it takes the preferred side's and is reported as `list[]`;
+///   items only one side has follow the others, in that side's order.
+/// Without a common version every item is treated as added on its side,
+/// and the local order stands.
 public enum Merge {
     /// Which side a field takes when both sides changed it differently.
     public enum Preference: Sendable, Hashable { case local, remote }
@@ -137,7 +140,18 @@ public enum Merge {
                 result.append(item)
             }
         }
-        return result
+        // The order of the items all three have says who reordered.
+        guard let base else { return result }
+        let shared = Set(base.map(\.id)).intersection(localIDs).intersection(remoteByID.keys)
+        func order(_ items: [Element]) -> [Element.ID] { items.map(\.id).filter(shared.contains) }
+        let original = order(base), mine = order(local), theirs = order(remote)
+        guard theirs != original, theirs != mine else { return result }
+        if mine != original {
+            recorder.conflicts.append("\(path)[]")
+            if recorder.prefer == .local { return result }
+        }
+        let rank = Dictionary(remote.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return result.filter { rank[$0.id] != nil }.sorted { rank[$0.id]! < rank[$1.id]! } + result.filter { rank[$0.id] == nil }
     }
 
     // MARK: Fields
