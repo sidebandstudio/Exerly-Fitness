@@ -2513,3 +2513,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   entry links although they were on disk: a full comparison deleted the server's links, and
   the original of a scan logged again, brought back, made a second entry. The read now
   includes `food_entry_link` documents and the loaded nutrition store starts from them.
+- A push that met a record this build can't read set it aside with its own, sequence-less
+  record, replacing the one the pull had just made for the newer version (its revision
+  and place in the feed). After an upgrade nothing pointed at that version, so it was never
+  fetched. The push now leaves an existing record as it is and only adds one when there is
+  none.

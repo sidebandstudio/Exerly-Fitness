@@ -361,8 +361,12 @@ public final class SyncEngine {
             if current == nil, stateStore.isUnreadable(kind: kind, id: id) {
                 // Missing because this build can't read it, not deleted: it stays, here and on the server.
                 try checkActive()
-                try setAside(RemoteDocument(kind: kind, id: id, revision: base.revision, deleted: false, payload: nil),
-                             reason: "This device stores it in a form this version can't read")
+                // A newer version pulled and set aside already says where it is
+                // in the feed, so a later build fetches it: that record stays.
+                if !rejected.contains(where: { $0.kind == kind && $0.id == id }) {
+                    try setAside(RemoteDocument(kind: kind, id: id, revision: base.revision, deleted: false, payload: nil),
+                                 reason: "This device stores it in a form this version can't read")
+                }
                 return false
             }
             if current == base.payload || (current == nil && base.revision == 0) { return try unchanged(kind, id) }

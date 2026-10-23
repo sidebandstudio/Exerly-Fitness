@@ -622,6 +622,57 @@ final class CountingHost: DocumentHost {
     }
 }
 
+/// Review round 4, finding 3: an older build can't read a workout (rev 1)
+/// and sets aside the tablet's rev 2 as it pulls it; its push mustn't
+/// replace that record of where rev 2 is, so after upgrading it fetches rev 2.
+@MainActor
+@Suite struct SetAsideRecoveryTests {
+    @Test func aNewerVersionSetAsideWhileTheRowIsUnreadableIsFetchedAfterTheUpgrade() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let server = FakeDocumentServer()
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            _ = try TrainingStore(persistence: disk).importSessions([session])
+            try await SyncEngine(hosts: [try TrainingStore(persistence: disk)], state: disk, api: server, appVersion: "2").sync()
+            disk.close()
+        }
+        // The row as this table stores it, which a newer build would read.
+        let original = try SQLiteDatabase(url: url)
+        guard case .blob(let readable)? = try original.query("SELECT payload FROM sessions WHERE id = ?", session.id.uuidString).first?.first
+        else { Issue.record("No row"); return }
+        original.close()
+        func store(_ payload: Data) throws {
+            let database = try SQLiteDatabase(url: url)
+            try database.execute("UPDATE sessions SET payload = ? WHERE id = ?", payload, session.id.uuidString)
+            database.close()
+        }
+        // Rolled back to an older build, which can't read rev 1.
+        try store(Data(String(decoding: readable, as: UTF8.self).replacingOccurrences(of: "\"standard\"", with: "\"cluster\"").utf8))
+        var renamed = session
+        renamed.name = "Synthetic heavy day"
+        server.inject(kind: TrainingStore.sessionKind, id: session.id.uuidString, payload: try ExerlyJSON.canonical(renamed))
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            let sync = SyncEngine(hosts: [try TrainingStore(persistence: disk)], state: disk, api: server, appVersion: "1")
+            try await sync.sync()
+            #expect(sync.rejected.first?.revision == 2 && sync.rejected.first?.sequence != nil, "Where rev 2 is stays recorded")
+            disk.close()
+        }
+        // Upgraded again: this build reads the row, and fetches rev 2.
+        try store(readable)
+        let disk = try SQLiteTrainingPersistence(url: url)
+        let training = try TrainingStore(persistence: disk)
+        let sync = SyncEngine(hosts: [training], state: disk, api: server, appVersion: "3")
+        try await sync.sync()
+        #expect(training.history.session(session.id)?.name == "Synthetic heavy day", "Rev 2 was fetched after the upgrade")
+        #expect(server.revision(TrainingStore.sessionKind, session.id.uuidString) == 2)
+    }
+}
+
 extension SQLiteDatabase {
     func reopen(_ url: URL) throws -> SQLiteDatabase { try SQLiteDatabase(url: url) }
 }
