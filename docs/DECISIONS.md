@@ -2335,3 +2335,12 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   shows now. The Undo bar is a bottom inset rather than an overlay, so at the largest text the
   last card scrolls clear of it. `EXERLY_SYNC_CONFLICT_SEED=all` adds a workout set and a goal
   conflict for the screenshots.
+
+## 2026-10-23: Conflict review, round 2
+
+- Undo of a resolution that brought a scanned entry back ran the barcode library's Undo first
+  and unconditionally, so an edit made since (55 g brought back, then 65 g) was deleted and
+  its scan put back as pending. The resolution now records what the bring-back wrote, and
+  Undo runs the library's step only while the entry is still exactly that; changed or
+  deleted since, the entry and its scan's log stay, as Undo keeps any record changed since a
+  resolution, and the conflict reopens.

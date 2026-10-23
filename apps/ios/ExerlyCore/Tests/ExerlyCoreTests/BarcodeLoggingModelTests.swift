@@ -342,6 +342,42 @@ private struct ModelRandom {
         #expect(phone.entries.isEmpty && library.pending.map(\.id) == [scan.id])
     }
 
+    /// Review round 2, finding 1: brought back at 55 g and changed to 65 g
+    /// since, Undo keeps the entry as it is now and its scan logged, as Undo
+    /// keeps any record changed since its resolution, and reopens the conflict.
+    @Test func undoingABringBackKeepsAnEditMadeSince() async throws {
+        let server = FakeDocumentServer()
+        let phoneDisk = InMemoryTrainingPersistence(), tabletDisk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: phoneDisk)
+        let phone = try NutritionStore(persistence: phoneDisk), tablet = try NutritionStore(persistence: tabletDisk)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneDisk, api: server)
+        phoneSync.conflicts.effects = ScanConflictEffects(library: library, store: phone)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server)
+        let code = Self.codes[3]
+        _ = await library.resolve(code, meal: "Dinner", date: Self.days[1]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let first = try library.log([NutritionStore.PlateItem(Self.food(code), grams: 40)], consuming: [[scan.id]], to: phone,
+                                    on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var edited = try #require(tablet.entries.first)
+        edited.grams = 55
+        try tablet.saveEntry(edited)
+        try await tabletSync.sync()
+        try library.undo(Set(first.map(\.id)), from: phone)
+        try await phoneSync.sync()
+        let conflict = try #require(phoneSync.conflicts.unresolved.first)
+        try phoneSync.conflicts.resolve(conflict.id, .remote)
+        var changed = try #require(phone.entries.first)
+        changed.grams = 65
+        try phone.saveEntry(changed)
+        try phoneSync.conflicts.undo()
+        #expect(phone.entries.map(\.grams) == [65], "Undo took back an edit made since: \(phone.entries.map(\.grams))")
+        #expect(library.pending.isEmpty, "The entry still logs the scan")
+        #expect(phoneSync.conflicts.conflict(conflict.id)?.isResolved == false)
+    }
+
     @Test func oneTransactionNeedsOneStore() async throws {
         let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence())
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())

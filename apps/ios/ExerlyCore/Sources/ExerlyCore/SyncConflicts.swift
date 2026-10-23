@@ -235,13 +235,17 @@ public final class SyncConflictStore {
             publishes.append(try stage(resolved))
         }
         publishes.forEach { $0() }
+        // What the effect wrote: its Undo runs only while the record is still that.
+        let effectWrote = undoEffect == nil ? nil : try host.payload(kind: kind, id: documentID)
         undoStep = { [self] in
             var reopened = resolved
             reopened.resolution = nil
             reopened.changedAt = now()
             var publishes: [() -> Void] = []
             try state.performAtomically {
-                try undoEffect?()
+                // Changed since, it stays, with the scans it logs, as any
+                // record changed since a resolution does.
+                if let undoEffect, try host.payload(kind: kind, id: documentID) == effectWrote { try undoEffect() }
                 for (write, written) in zip(before, after).reversed() {
                     let now = try host.payload(kind: write.kind, id: write.id)
                     var payload = write.payload
