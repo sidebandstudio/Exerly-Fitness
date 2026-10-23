@@ -10,6 +10,8 @@ final class TickingClock {
         current += 1
         return current
     }
+
+    func advance(_ interval: TimeInterval) { current += interval }
 }
 
 /// One device of one account: its store, its conflicts and its sync engine.

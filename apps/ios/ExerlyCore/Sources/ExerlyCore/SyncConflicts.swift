@@ -38,6 +38,8 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
         public var choice: Choice
         public var at: Date
         public var device: SyncDevice
+        /// Settled by sync, not the person: the record was deleted on every device since.
+        public var automatic: Bool?
     }
 
     public var id: UUID
@@ -190,6 +192,18 @@ public final class SyncConflictStore {
     @ObservationIgnored private var undoStep: (() throws -> Void)?
 
     public var unresolved: [SyncConflict] { conflicts.filter { !$0.isResolved } }
+    /// Settled for the person in the last week, to say so in the review.
+    public var settledForYou: [SyncConflict] {
+        let since = now().addingTimeInterval(-Self.settledNotice)
+        return conflicts.filter { $0.resolution?.automatic == true && $0.changedAt > since }
+    }
+
+    /// How long a settled conflict is kept, for devices that haven't synced
+    /// since, before the device that settled it removes it everywhere. Any
+    /// other device waits twice as long, so the one whose Undo could still
+    /// reopen it decides, and a device that's gone for good holds nothing up.
+    public static let keptAfterSettling: TimeInterval = 30 * 24 * 3600
+    static let settledNotice: TimeInterval = 7 * 24 * 3600
 
     public init(state: SyncStateStore, hosts: [DocumentHost], deviceName: String = "iPhone", now: @escaping () -> Date = Date.init) {
         self.state = state
@@ -334,6 +348,40 @@ public final class SyncConflictStore {
             publishes.forEach { $0() }
         }
         undoable = id
+    }
+
+    // MARK: Tidying
+
+    /// Settles each open field conflict whose record is now deleted on every
+    /// device (`deletedEverywhere`): neither version is a live edit, and
+    /// nothing is written but the resolution, which says sync settled it.
+    /// Then removes conflicts settled more than `keptAfterSettling` ago
+    /// here, or twice that elsewhere, once `synced` says that version
+    /// reached the server, or at once when it never syncs; never the one
+    /// Undo would reopen. Sync calls this.
+    func tidy(deletedEverywhere: (String, String) -> Bool, synced: (SyncConflict) -> Bool) throws {
+        let at = now()
+        var settled: [SyncConflict] = []
+        for conflict in unresolved where !conflict.isDeletion && deletedEverywhere(conflict.kind, conflict.documentID) {
+            guard let host = host(for: conflict.kind), try host.payload(kind: conflict.kind, id: conflict.documentID) == nil else { continue }
+            var done = conflict
+            done.resolution = SyncConflict.Resolution(choice: .current, at: at, device: device, automatic: true)
+            done.changedAt = at
+            settled.append(done)
+        }
+        let expired = conflicts.filter { conflict in
+            guard let resolution = conflict.resolution, conflict.id != undoable else { return false }
+            let kept = Self.keptAfterSettling * (resolution.device.id == device.id ? 1 : 2)
+            guard at.timeIntervalSince(max(resolution.at, conflict.changedAt)) > kept else { return false }
+            return conflict.tooLarge == true || synced(conflict)
+        }
+        guard !settled.isEmpty || !expired.isEmpty else { return }
+        var publishes: [() -> Void] = []
+        try state.performAtomically {
+            for conflict in settled { publishes.append(try stage(conflict)) }
+            for conflict in expired { publishes.append(try prepareWrite(kind: Self.kind, id: conflict.id.uuidString, payload: nil)) }
+        }
+        publishes.forEach { $0() }
     }
 
     // MARK: Undo of a delete

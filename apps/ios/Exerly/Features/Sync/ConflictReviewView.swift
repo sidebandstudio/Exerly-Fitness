@@ -81,6 +81,19 @@ struct ConflictReviewView: View {
                     ConflictCard(summary: summary(conflict)) { option in resolve(conflict, option) }
                 }
             }
+            let settled = conflicts.settledForYou
+            if !settled.isEmpty {
+                // Sync settled these: the record went on every device, so there was nothing to choose.
+                ExCard {
+                    Text("Settled for you").font(.exH3).foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
+                    ForEach(settled) { conflict in
+                        Text("\(summary(conflict).title): deleted on every device since, so there was nothing to choose.")
+                            .font(.exBody).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("conflicts.settled")
+            }
             if let error {
                 Text(error).font(.exCaption).foregroundStyle(Color.exError).accessibilityIdentifier("conflicts.error")
             }

@@ -47,6 +47,54 @@ final class TrainingDevice {
         return grams
     }
 
+    // MARK: Tidying
+
+    /// Review round 2: a settled conflict is removed everywhere 30 days
+    /// after the device that settled it synced it, and not before; the one
+    /// Undo would reopen stays while it can, on every device.
+    @Test func settledConflictsAreRemovedEverywhereAfterThirtyDays() async throws {
+        let clock = TickingClock()
+        let (phone, tablet) = try devices(clock)
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        let other = try phone.nutrition.log(Foods.oats, grams: 50, on: monday, meal: "Lunch")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try await clash(phone, tablet, logged.id, phone: 60, tablet: 90)
+        try await clash(phone, tablet, other.id, phone: 70, tablet: 80)
+        for device in [tablet, phone] { try await device.sync.sync() }
+        let conflicts = phone.conflicts.unresolved
+        #expect(conflicts.count == 2)
+        try phone.conflicts.resolve(conflicts[0].id, .local)
+        try phone.conflicts.resolve(conflicts[1].id, .local)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        clock.advance(29 * 24 * 3600)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        #expect(phone.conflicts.conflicts.count == 2 && tablet.conflicts.conflicts.count == 2, "Kept for 30 days")
+        clock.advance(2 * 24 * 3600)
+        for device in [phone, tablet, phone] { try await device.sync.sync() }
+        #expect(phone.conflicts.conflicts.map(\.id) == [conflicts[1].id], "Undo can still reopen the last one")
+        #expect(tablet.conflicts.conflicts.map(\.id) == [conflicts[1].id])
+        try phone.conflicts.undo()
+        #expect(phone.conflicts.unresolved.map(\.id) == [conflicts[1].id])
+    }
+
+    /// Review round 2: a clash about an entry later deleted everywhere is
+    /// settled by sync, which the review says, on both devices.
+    @Test func aConflictAboutARecordDeletedEverywhereSettlesItself() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try await clash(phone, tablet, logged.id, phone: 60, tablet: 90)
+        try await tablet.sync.sync()
+        #expect(phone.conflicts.unresolved.count == 1 && tablet.conflicts.unresolved.count == 1)
+        try tablet.nutrition.deleteEntry(logged.id)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        for device in [phone, tablet] {
+            #expect(device.conflicts.unresolved.isEmpty, "\(device.conflicts.device.name) still asks")
+            #expect(device.conflicts.settledForYou.count == 1 && device.entry(logged.id) == nil)
+        }
+        #expect(phone.conflicts.conflicts == tablet.conflicts.conflicts)
+    }
+
     // MARK: 1. A later conflict
 
     /// An unresolved 60 g against 90 g, then 120 g against 150 g: the first

@@ -141,6 +141,7 @@ public final class SyncEngine {
         }
         rejected = try stateStore.rejectedDocuments()
         try await pull()
+        try tidyConflicts()
         if try await push() { try await pull() }
     }
 
@@ -253,6 +254,17 @@ public final class SyncEngine {
         let updated = rejected.filter { $0.kind != change.kind || $0.id != change.id } + [entry]
         try stateStore.saveRejectedDocuments(updated)
         rejected = updated
+    }
+
+    /// Settles conflicts about records deleted on every device, and removes
+    /// long-settled ones; the changes go out in this run's push.
+    private func tidyConflicts() throws {
+        try checkActive()
+        try conflicts.tidy(deletedEverywhere: { [self] kind, id in
+            bases[Self.key(kind, id)].map { $0.payload == nil && $0.revision > 0 } ?? false
+        }, synced: { [self] conflict in
+            bases[Self.key(SyncConflictStore.kind, conflict.id.uuidString)]?.payload == (try? ExerlyJSON.canonical(conflict))
+        })
     }
 
     // MARK: Push

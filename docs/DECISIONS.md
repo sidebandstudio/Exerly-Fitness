@@ -2396,3 +2396,16 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   it stays on the device that found it, sync never offers it, and its card says "Too large to
   sync, so it's only on this iPhone." A 413 for a conflict marks it the same way, so a
   misjudged size never blocks the rest of sync.
+- Settled conflicts were kept forever, and a card about a record later deleted everywhere
+  stayed open forever. Each sync now tidies between pull and push
+  (`SyncConflictStore.tidy`). An open field conflict whose record is gone here, with the
+  deletion acknowledged by the server, is settled with the new choice `.current`, marked
+  `automatic`, and pushed; both versions predate the deletion, so neither is a live edit.
+  Deletion conflicts are never settled this way, since their changed version is exactly
+  the live edit. The review lists such conflicts for a week under "Settled for you",
+  saying the record was deleted on every device since. A settled conflict is removed (a
+  synced deletion) 30 days after settling by the device that settled it, once the settled
+  version has reached the server; other devices wait 60 days, so the device whose Undo
+  could still reopen it decides, and a device that's gone for good holds nothing up. The
+  conflict Undo would reopen is never removed, and one too large to sync is removed only on
+  its own device.
