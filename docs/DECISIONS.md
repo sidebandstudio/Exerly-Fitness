@@ -2677,3 +2677,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   app `exerly://logged` with the entry and its account; Today shows it only
   for that account and while the entry is still logged. The UI test checks
   Today is in front with the confirmation, and that Undo takes it back.
+- Turning on Read weigh-ins from its preview imports only the readings the
+  preview showed. Confirming used to turn the switch on, whose read queried
+  Health again and imported a reading saved while the preview was open,
+  unseen. Now the switch's next read compares what it finds with what was
+  shown; if Health has others, nothing is imported, the switch stays off,
+  and the preview opens again with them.
