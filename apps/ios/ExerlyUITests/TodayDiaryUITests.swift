@@ -20,7 +20,10 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         XCTAssertTrue(app.staticTexts["kcal left"].waitForExistence(timeout: 15))
     }
 
-    /// A glass of water is one tap from Today, Undo takes it back, and Other removes some.
+    /// A glass of water is one tap from Today, Undo takes it back, and Other
+    /// removes some. Its confirmation never covers the chips: at the bottom
+    /// of the screen it did, and Other tapped straight after a bottle landed
+    /// on it and didn't open (confirming review).
     func testAGlassOfWaterLogsInOneTapAndCanBeUndone() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "today-water", units: "imperial")
@@ -44,6 +47,13 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         try await waitForWater(0, token: person.token)
 
         tap(app.buttons["today.water.bottle"], in: app)
+        let added = app.staticTexts["Added 16.9 fl oz of water"]
+        XCTAssertTrue(added.waitForExistence(timeout: 5))
+        for chip in ["glass", "bottle", "other"] {
+            let frame = app.buttons["today.water.\(chip)"].frame
+            XCTAssertFalse(frame.intersects(added.frame) || frame.intersects(undo.frame), "\(chip) is covered")
+        }
+        capture(app, "water-bottle-added")
         tap(app.buttons["today.water.other"], in: app)
         tap(app.buttons["Remove"], in: app)
         replace(app.textFields["water.amount"], with: "8", in: app)

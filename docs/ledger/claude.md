@@ -25,9 +25,10 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
-- claude/polish6 (not landed): run 7 and review round 1. Gain or Maintain for a passed goal weight;
-  liquids by density, exact drained cans; Customize Today and the water goal kept offline and sent
-  alone (QuickPreferences); Next in each form's order; weigh-ins read with time, fat, source.
+- claude/polish6 (not landed): run 7 and reviews. Gain or Maintain for a passed goal weight; liquids
+  by density, drained cans; Customize Today and the water goal kept offline, sent alone, one writer
+  per session, replays reconciled (QuickPreferences); Next in each form's order (iPad layout test);
+  weigh-ins read with time, fat, source; water's Undo over the water card's header, not its chips.
 
 ## Current outcome
 
@@ -61,7 +62,7 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 | Branch      | Unlanded               | Last landed                             |
 | ----------- | ---------------------- | --------------------------------------- |
 | claude/next | nothing                | this commit                             |
-| polish6     | 12 commits on 8e39690a | not yet: fast-forwards onto claude/next |
+| polish6     | 18 commits on b3981833 | not yet: fast-forwards onto claude/next |
 
 ## Risks
 
@@ -70,10 +71,9 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 - Watch, App Intents and reminders: unverified on hardware, with a passcode, from
   the Action button, and when an action relaunches a terminated app.
 - Recipe import matched 16 of 47 real lines (all correct); USDA table lacks salt, flour, spices, oils.
-- Water: Other right after a bottle didn't open its sheet in 2 of 6 polish6 runs (0 of 3 on next).
+- Other toasts still cover the bottom of Today for 6 s, as water's did (Log again chips, meals).
 - Progress photos: camera capture and moving a real older store unverified; kept on device.
-- The swipe to Hide is a custom pan; checked by XCTest's swipe, not by hand.
-- The trend chart's scrub takes a drag that starts on it, so at the largest text Progress
-  scrolls only from beside it (UI tests drag in the margin). Package sizes: synthetic only.
+- Hide's swipe is a custom pan, checked only by XCTest. At the largest text Progress scrolls only
+  beside the trend chart, whose scrub takes drags (tests drag in the margin). Package sizes: synthetic.
 - Open Food Facts search budget is 10/min server-wide; type-ahead spends it faster.
 - Six idle "Exerly App" simulators from the Astra run are left alone per the brief.

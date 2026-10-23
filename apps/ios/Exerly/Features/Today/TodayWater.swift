@@ -25,6 +25,9 @@ struct TodayWaterCard: View {
     let imperial: Bool
     /// Millilitres a day, from Your details.
     let goal: Int?
+    /// Today's confirmation of a change, with Undo. It sits on the header,
+    /// growing upward when it's taller, so the chips stay uncovered.
+    var confirmation: AnyView?
     /// A change queued, in millilitres, for Today's toast and Undo.
     let changed: (Int) -> Void
     let failed: (String) -> Void
@@ -47,6 +50,8 @@ struct TodayWaterCard: View {
             .buttonStyle(TodayPressStyle())
             .accessibilityHint("Opens water, to add another amount or remove some")
             .accessibilityIdentifier("today.water")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .anchorPreference(key: HeaderBounds.self, value: .bounds) { $0 }
             if let goal = day.goal { ExProgressBar(value: day.drinks, total: goal, color: .exSecondary) }
             let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
                 : AnyLayout(HStackLayout(spacing: ExSpacing.small))
@@ -71,12 +76,29 @@ struct TodayWaterCard: View {
                     .font(.exSmall).foregroundStyle(Color.exTextMuted)
             }
         }
+        // Outside the card, which clips: the confirmation's bottom meets the
+        // header's, and a taller one grows up over the card above.
+        .overlayPreferenceValue(HeaderBounds.self) { header in
+            if let header, let confirmation {
+                GeometryReader { proxy in
+                    let frame = proxy[header]
+                    confirmation.fixedSize(horizontal: false, vertical: true)
+                        .frame(width: frame.width, height: frame.maxY, alignment: .bottom)
+                        .offset(x: frame.minX)
+                }
+            }
+        }
         .task(id: "\(date)-\(sync.changeToken)") { await load() }
         .sheet(isPresented: $editing) {
             TodayWaterSheet(date: date, water: current, store: store, imperial: imperial, goal: goal) { change in
                 apply(change)
             }
         }
+    }
+
+    private struct HeaderBounds: PreferenceKey {
+        static var defaultValue: Anchor<CGRect>?
+        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
     }
 
     private func header(_ day: WaterDay) -> some View {

@@ -111,6 +111,11 @@ struct TodayView: View {
         let message: String
         let undo: Undo?
         var failed = false
+
+        /// Water's shows on the water card, over its header and above it: at
+        /// the bottom of the screen it covered the chips just tapped, so a
+        /// second glass tapped straight after the first landed on it.
+        var isWater: Bool { if case .water = undo { true } else { false } }
     }
 
     enum Destination: Identifiable {
@@ -226,16 +231,12 @@ struct TodayView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            if let toast, selection == nil {
+            if let toast, selection == nil, !toast.isWater {
                 TodayToast(message: toast.message, failed: toast.failed, undo: toast.undo == nil ? nil : { undo(toast) },
                            undoIdentifier: undoIdentifier(toast.undo))
                     .padding(.bottom, ExSpacing.small)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: toast.id) {
-                        // Long enough to reach Undo, longer still with VoiceOver.
-                        try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 12 : 6))
-                        withAnimation(.snappy) { if self.toast == toast { self.toast = nil } }
-                    }
+                    .task(id: toast.id) { await expire(toast) }
             }
         }
         .onChange(of: actions.deleted) { _, deleted in
@@ -374,7 +375,13 @@ struct TodayView: View {
         case .water:
             // Water is logged on the day it's drunk, so not ahead.
             if date <= today {
-                TodayWaterCard(date: date, store: store, imperial: unit == .pounds, goal: waterGoal) { change in
+                let confirmation = toast.flatMap { toast in
+                    toast.isWater ? AnyView(TodayToast(message: toast.message, undo: { undo(toast) },
+                                                       undoIdentifier: undoIdentifier(toast.undo), horizontalPadding: 0)
+                        .transition(.opacity)
+                        .task(id: toast.id) { await expire(toast) }) : nil
+                }
+                TodayWaterCard(date: date, store: store, imperial: unit == .pounds, goal: waterGoal, confirmation: confirmation) { change in
                     let amount = WaterDisplay.amount(abs(change), imperial: unit == .pounds)
                     show(change > 0 ? "Added \(amount) of water" : "Removed \(amount) of water", undo: .water(date, change))
                 } failed: { show($0, failed: true) }
@@ -539,6 +546,13 @@ struct TodayView: View {
     private func show(_ message: String, undo: Toast.Undo? = nil, failed: Bool = false) {
         withAnimation(.snappy) { toast = Toast(message: message, undo: undo, failed: failed) }
         UIAccessibility.post(notification: .announcement, argument: message)
+    }
+
+    /// Takes `toast` away once there's been long enough to reach Undo,
+    /// longer still with VoiceOver.
+    private func expire(_ toast: Toast) async {
+        try? await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 12 : 6))
+        withAnimation(.snappy) { if self.toast == toast { self.toast = nil } }
     }
 
     private func undo(_ toast: Toast) {
