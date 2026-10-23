@@ -246,6 +246,24 @@ final class HealthSyncTests: XCTestCase {
         XCTAssertNil(sync.notices[.readWeights])
     }
 
+    /// Review 2, item 6: readings the pairing read finds around a reviewed
+    /// weigh-in are not imported unless the preview showed them.
+    func testReadWeighInsImportsNothingThePreviewDidntShowEvenFromThePairingRead() async throws {
+        let workspace = try open("account-a")
+        let first = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-3 * 86400), kilograms: 80.6, source: "com.example.scale")
+        client.deltas = [HealthWeightDelta(addedMass: [first], massAnchor: Data([1]), bodyFatAnchor: Data([2]))]
+        await sync.setEnabled(.readWeights, true)
+        try await settle()
+        await sync.setEnabled(.readWeights, false)
+        let shown = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-7200), kilograms: 80.4, source: "com.example.scale")
+        let unseen = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-7100), kilograms: 80.3, source: "com.example.scale")
+        client.deltas = [HealthWeightDelta(addedMass: [shown], massAnchor: Data([3]), bodyFatAnchor: Data([4]))]
+        client.around = ([shown, unseen], [])
+        _ = await sync.enableReadingWeights(reviewed: [first.id, shown.id])
+        try await settle()
+        XCTAssertFalse(workspace.nutrition.weights.contains { $0.id == unseen.id }, "Never imported unseen")
+    }
+
     func testBodyFatArrivingLaterJoinsItsWeighIn() async throws {
         let workspace = try open("account-a")
         let at = Date().addingTimeInterval(-900)

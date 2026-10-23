@@ -2726,3 +2726,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   are shorter, one line each where possible, so at the largest text size
   the switches and Import stay in reach; the preview's sources heading is
   "Sources, best first".
+
+## 2026-10-23: Apple integration, review round 2
+
+- Read weigh-ins checks the reviewed set against the final candidates,
+  the pairing read's included, immediately before saving. It used to
+  check and clear the set after the first query, so a reading the pairing
+  read found beside a reviewed one was imported unseen.

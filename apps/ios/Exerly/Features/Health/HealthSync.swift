@@ -295,13 +295,6 @@ final class HealthSync: ObservableObject {
     private func importWeights(_ workspace: TrainingWorkspace) async throws -> HealthWeightImport {
         let delta = try await client.weightChanges(massAnchor: state.anchors["bodyMass"], bodyFatAnchor: state.anchors["bodyFat"])
         guard self.workspace === workspace else { throw CancellationError() }
-        if let reviewed = reviewedWeights {
-            reviewedWeights = nil
-            // Exerly's own, from the watch, aren't previewed.
-            guard delta.addedMass.allSatisfy({ reviewed.contains($0.id) || $0.source?.hasPrefix("com.exerly.") == true }) else {
-                throw ReviewChanged()
-            }
-        }
         let nutrition = workspace.nutrition
         // Weigh-ins whose body fat was deleted are paired again without it.
         let unpaired = Set(delta.deletedBodyFat.compactMap { state.bodyFatPairs[$0.uuidString] })
@@ -317,6 +310,15 @@ final class HealthSync: ObservableObject {
             let knownMass = Set(mass.map(\.id)), knownFat = Set(bodyFat.map(\.id))
             mass += around.mass.filter { !knownMass.contains($0.id) }
             bodyFat += around.bodyFat.filter { !knownFat.contains($0.id) }
+        }
+        if let reviewed = reviewedWeights {
+            // Every weigh-in about to be saved, the pairing read's too, was
+            // shown or is already here. Exerly's own, from the watch, aren't previewed.
+            reviewedWeights = nil
+            let here = Set(nutrition.weights.map(\.id))
+            guard mass.allSatisfy({ reviewed.contains($0.id) || here.contains($0.id) || $0.source?.hasPrefix("com.exerly.") == true }) else {
+                throw ReviewChanged()
+            }
         }
         let paired = HealthWeightPairing.pair(mass, bodyFat)
         let imported = try nutrition.importHealthWeights(paired.weights, deleted: delta.deletedMass, timeZone: timeZone)
