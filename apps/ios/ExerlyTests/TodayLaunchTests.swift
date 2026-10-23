@@ -15,4 +15,13 @@ final class TodayLaunchTests: XCTestCase {
         // With the ring hidden, Log again follows the shortcuts, which still come first.
         XCTAssertTrue(TodayLayout.drawnFirst([.meals, .water, .weight, .quickActions]).contains(.quickActions))
     }
+
+    func testTheFirstFrameDrawsEveryCardAboveTheLoggingTools() {
+        // Water, fourth, sits above the ring and Log again: drawn a frame
+        // later, it would push them down after launch placed them.
+        XCTAssertEqual(TodayLayout.drawnFirst([.training, .quickActions, .weight, .water, .nutrition, .meals]),
+                       [.training, .quickActions, .weight, .water, .nutrition])
+        XCTAssertEqual(TodayLayout.drawnFirst([.quickActions, .nutrition, .weight, .water, .training, .meals]),
+                       [.quickActions, .nutrition, .weight, .water, .training], "and above the workout's Start")
+    }
 }

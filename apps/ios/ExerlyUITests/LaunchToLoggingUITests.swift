@@ -38,6 +38,7 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         RecordedSignpostMetric.values = []
         var wallClock: [Double] = []
         var hittableAtLaunch = 0
+        var seen: [CGRect?] = []
         let clock = ContinuousClock()
         let options = XCTMeasureOptions()
         options.iterationCount = 20
@@ -46,6 +47,7 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         measure(metrics: [launchMetric, ready], options: options) {
             let started = clock.now
             app.launch()
+            seen.append(chip.exists ? chip.frame : nil)
             if chip.exists && chip.isHittable { hittableAtLaunch += 1 }
             XCTAssertTrue(chip.waitForExistence(timeout: 10) && chip.isHittable, "Signed in, on Today, with Log again")
             wallClock.append(Self.seconds(started.duration(to: clock.now)))
@@ -62,10 +64,9 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         attachment.name = "launch-to-logging"
         attachment.lifetime = .keepAlways
         add(attachment)
-        // Each report placed Log again where the accessibility tree has it.
-        let seen = chip.frame
-        let placed = timings.filter { timing in
-            guard let place = (timing["frames"] as? [String: [Double]])?["logAgain"], place.count == 4 else { return false }
+        // Each report placed Log again where the accessibility tree had it as that launch returned.
+        let placed = zip(timings, seen).filter { timing, seen in
+            guard let seen, let place = (timing["frames"] as? [String: [Double]])?["logAgain"], place.count == 4 else { return false }
             return seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
         }.count
         XCTAssertGreaterThanOrEqual(timings.count, 20, "One report per launch")
@@ -115,28 +116,35 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
     /// The p50 ceiling with three years on the device; see the test above.
     static let yearsCeiling = 3.5
 
-    /// Today customized with the logging cards last: launch still draws them,
-    /// and Log again, in its first frame, never a frame later. Below the fold
-    /// there, Log again isn't hittable without a scroll, so each launch must
-    /// report the place the accessibility tree has it in as the launch returns.
+    /// Today customized two ways: with the logging cards last, and with water,
+    /// a card the first frame could leave for later, above the ring and Log
+    /// again. Launch still draws them, and Log again, in its first frame,
+    /// never a frame later, where it stays. Below the fold there, Log again
+    /// isn't hittable without a scroll, so each launch must report the place
+    /// the accessibility tree has it in as the launch returns.
     func testColdLaunchDrawsTheLoggingCardsInACustomizedOrder() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "launch-custom", units: "imperial")
         try await seedWeek(token: person.token)
         let app = launch(resetSession: true)
         let account = try XCTUnwrap(Self.accountID(in: person.token))
-        app.launchArguments += ["-today.layout.v1.\(account)", "meals,water,weight,training,quickActions,nutrition"]
+        let key = "-today.layout.v1.\(account)"
+        app.launchArguments += [key, "meals,water,weight,training,quickActions,nutrition"]
         signIn(app, email: person.email)
         settleAfterSignIn(app)
         let chip = logAgain(app)
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         app.launchArguments.removeAll { $0 == "--ui-testing" }
-        let (timings, hittable, placed) = try await coldLaunches(app, chip: chip, count: 5)
-        let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
-        print("Logging cards last: \(endToEnd.text) over \(timings.count) cold launches; Log again hittable as the launch returned: "
-              + "\(hittable), where the launch reported it: \(placed).")
-        XCTAssertEqual(timings.count, 5, "Each launch reported the frame with Log again")
-        XCTAssertEqual(placed, 5, "Each launch reported Log again where it was drawn, not a frame early")
+        for order in ["meals,water,weight,training,quickActions,nutrition", "training,quickActions,weight,water,nutrition,meals"] {
+            let at = try XCTUnwrap(app.launchArguments.firstIndex(of: key))
+            app.launchArguments[at + 1] = order
+            let (timings, hittable, placed) = try await coldLaunches(app, chip: chip, count: 5)
+            let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
+            print("Today as \(order): \(endToEnd.text) over \(timings.count) cold launches; Log again hittable as the launch returned: "
+                  + "\(hittable), where the launch reported it: \(placed).")
+            XCTAssertEqual(timings.count, 5, "Each launch reported the frame with Log again (\(order))")
+            XCTAssertEqual(placed, 5, "Each launch reported Log again where it was drawn, not a frame early (\(order))")
+        }
     }
 
     private func logAgain(_ app: XCUIApplication) -> XCUIElement {
