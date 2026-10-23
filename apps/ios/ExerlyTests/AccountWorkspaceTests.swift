@@ -129,6 +129,8 @@ final class AccountWorkspaceTests: XCTestCase {
         } catch let read as Read {
             XCTAssertFalse(read.onMain, "Read off the main thread")
         }
+    }
+
     /// Review round 4, merge-only: opened as the app opens an account, with
     /// its history read off the main actor, a workout this build can't read is
     /// known to persistence (counted once), and entry links are loaded. Core's
