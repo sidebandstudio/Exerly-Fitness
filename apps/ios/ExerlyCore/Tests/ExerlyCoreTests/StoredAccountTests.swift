@@ -49,4 +49,39 @@ import Testing
         #expect(try reopened.schemaVersion() == SQLiteTrainingPersistence.currentSchemaVersion)
         #expect(try TrainingStore(persistence: reopened, loaded: stored.training).history.sessions.map(\.id) == [session.id])
     }
+
+    /// Two opens of one older file, an abandoned one and its replacement,
+    /// can migrate it at once: both succeed, and it ends up current.
+    @Test func twoMigrationsOfAnOlderFileRacingBothSucceed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("exerly-race-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var made: [URL] = []
+        for index in 0..<40 {
+            let url = directory.appendingPathComponent("\(index)/x.sqlite")
+            let persistence = try SQLiteTrainingPersistence(url: url)
+            try persistence.database.executeScript("DROP TABLE documents; PRAGMA user_version = 3;")
+            persistence.close()
+            made.append(url)
+        }
+        let urls = made
+        let failures = await Task.detached { () -> [String] in
+            let failures = Failures()
+            for url in urls {
+                DispatchQueue.concurrentPerform(iterations: 2) { _ in
+                    do { try SQLiteTrainingPersistence.migrate(url: url) } catch { failures.append("\(error)") }
+                }
+            }
+            return failures.all
+        }.value
+        #expect(failures.isEmpty, "\(failures.count) of \(urls.count * 2) failed: \(failures.first ?? "")")
+        for url in urls { #expect(try SQLiteTrainingPersistence(url: url).schemaVersion() == SQLiteTrainingPersistence.currentSchemaVersion) }
+    }
+}
+
+/// Errors collected from several threads.
+private final class Failures: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [String] = []
+    var all: [String] { lock.withLock { items } }
+    func append(_ item: String) { lock.withLock { items.append(item) } }
 }

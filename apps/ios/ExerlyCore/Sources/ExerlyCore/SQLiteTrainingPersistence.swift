@@ -85,29 +85,29 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
     /// Ordered migrations; migration `n` moves the schema from version n to n + 1.
     private nonisolated static let migrations = [
         """
-        CREATE TABLE sessions (
+        CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             started_at REAL NOT NULL,
             ended_at REAL,
             payload BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
-        CREATE INDEX sessions_started_at ON sessions (started_at);
-        CREATE TABLE custom_exercises (
+        CREATE INDEX IF NOT EXISTS sessions_started_at ON sessions (started_at);
+        CREATE TABLE IF NOT EXISTS custom_exercises (
             id TEXT PRIMARY KEY,
             payload BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
         """,
         """
-        CREATE TABLE settings (
+        CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
         """,
         """
-        CREATE TABLE sync_bases (
+        CREATE TABLE IF NOT EXISTS sync_bases (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
             revision INTEGER NOT NULL,
@@ -118,7 +118,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         );
         """,
         """
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
             payload BLOB NOT NULL,
@@ -139,13 +139,23 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         try migrate(database)
     }
 
+    /// Another connection can be migrating the same file (an abandoned open
+    /// and its replacement), so the version that decides the steps is read
+    /// again under the write lock, held until every step is done. The steps
+    /// are safe to repeat as well.
     private nonisolated static func migrate(_ database: SQLiteDatabase) throws {
-        let version = try schemaVersion(database)
-        guard version <= Self.currentSchemaVersion else {
-            throw PersistenceError.newerSchema(found: version, supported: currentSchemaVersion)
+        func check(_ version: Int) throws {
+            guard version <= currentSchemaVersion else {
+                throw PersistenceError.newerSchema(found: version, supported: currentSchemaVersion)
+            }
         }
-        for step in version..<currentSchemaVersion {
-            try database.transaction {
+        let seen = try schemaVersion(database)
+        try check(seen)
+        guard seen < currentSchemaVersion else { return }
+        try database.transaction {
+            let version = try schemaVersion(database)
+            try check(version)
+            for step in version..<currentSchemaVersion {
                 try database.executeScript(migrations[step])
                 try database.executeScript("PRAGMA user_version = \(step + 1)")
             }

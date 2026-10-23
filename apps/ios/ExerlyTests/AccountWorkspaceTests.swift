@@ -85,6 +85,38 @@ final class AccountWorkspaceTests: XCTestCase {
         XCTAssertNil(owner.openingError)
     }
 
+    /// An abandoned open that still succeeds closes only what it opened: the
+    /// replacement opened meanwhile stays open and keeps saving.
+    func testAnAbandonedOpenThatSucceedsClosesOnlyItsOwnStore() async throws {
+        let directory = root!
+        var held: CheckedContinuation<Void, Never>?
+        var abandoned: TrainingWorkspace?
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { api in
+            attempts += 1
+            if attempts == 1 {
+                await withCheckedContinuation { held = $0 }
+                let late = try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+                abandoned = late
+                return late
+            }
+            return try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+        }, deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        let first = Task { @MainActor in await owner.configure(self.auth.accountAPI) }
+        while held == nil { await Task.yield() }
+        await owner.configure(nil)
+        await owner.configure(auth.accountAPI)
+        let replacement = try XCTUnwrap(owner.training)
+        held?.resume()
+        await first.value
+        let late = try XCTUnwrap(abandoned)
+        XCTAssertTrue(owner.training === replacement, "The replacement stays the account's workspace")
+        XCTAssertThrowsError(try late.store.startSession(name: "From the abandoned open", bodyweight: nil), "Its own store is closed")
+        try replacement.store.startSession(name: "Saved after the late open closed", bodyweight: nil)
+        try replacement.store.updateActiveSession { $0.notes = "Still saving" }
+        XCTAssertEqual(try TrainingWorkspace(accountID: "account-a", root: root).store.activeSession?.notes, "Still saving")
+    }
+
     /// An account's history is read off the main thread, so a long one
     /// never holds up the screen while it opens.
     func testHistoryIsReadOffTheMainThread() async throws {
