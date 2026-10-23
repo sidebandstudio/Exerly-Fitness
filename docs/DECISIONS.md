@@ -2439,3 +2439,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   Every persistence mutation (a session, a custom exercise or a document, saved or
   deleted) now runs with its change record in one transaction of its own, nested in the
   caller's when there is one, on disk and in memory, so no caller can forget it.
+- Two opens of an older file at once both read `user_version` before locking, so both ran
+  `ADD COLUMN previous` and one failed, as the schema 6 table would have. Migration now runs
+  as one `BEGIN IMMEDIATE` transaction that reads the version inside it; a racing open waits
+  (the five-second busy timeout) and finds the file current. Every step is also safe to
+  repeat: tables and indexes are created only if missing, and a column only where it is.
+  Migration takes the `nonisolated static migrate(url:)` shape `claude/taps` uses, so that
+  merge only adds the off-main-actor caller.

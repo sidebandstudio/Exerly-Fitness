@@ -222,3 +222,35 @@ import Testing
         }
     }
 }
+
+/// Review round 3, finding 4: two opens of an older file at once, as the app
+/// and a background read can, both bring it up to date without an error.
+@Suite struct RacingMigrationTests {
+    @Test func twoOpensOfASchemaFourFileAtOnceBothSucceed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for round in 0..<20 {
+            let url = directory.appendingPathComponent("race-\(round).sqlite")
+            try SQLiteTrainingPersistence.migrate(url: url)
+            let old = try SQLiteDatabase(url: url)
+            try old.executeScript("DROP TABLE sync_changes; ALTER TABLE sync_bases DROP COLUMN previous; PRAGMA user_version = 4;")
+            old.close()
+            let failures = Failures()
+            DispatchQueue.concurrentPerform(iterations: 2) { _ in
+                do { try SQLiteTrainingPersistence.migrate(url: url) } catch { failures.add("\(error)") }
+            }
+            #expect(failures.all.isEmpty, "Round \(round): \(failures.all)")
+            let migrated = try SQLiteDatabase(url: url)
+            #expect(try SQLiteTrainingPersistence.schemaVersion(migrated) == SQLiteTrainingPersistence.currentSchemaVersion)
+            migrated.close()
+        }
+    }
+
+    final class Failures: @unchecked Sendable {
+        private let lock = NSLock()
+        private var errors: [String] = []
+        func add(_ error: String) { lock.withLock { errors.append(error) } }
+        var all: [String] { lock.withLock { errors } }
+    }
+}

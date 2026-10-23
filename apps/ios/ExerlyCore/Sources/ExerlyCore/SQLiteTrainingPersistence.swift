@@ -129,7 +129,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         """,
         "ALTER TABLE sync_bases ADD COLUMN previous BLOB;",
         """
-        CREATE TABLE sync_changes (
+        CREATE TABLE IF NOT EXISTS sync_changes (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
             PRIMARY KEY (kind, id)
@@ -151,8 +151,8 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
 
     /// Another connection can be migrating the same file (an abandoned open
     /// and its replacement), so the version that decides the steps is read
-    /// again under the write lock, held until every step is done. The steps
-    /// are safe to repeat as well.
+    /// again under the write lock, held until every step is done; a current
+    /// file takes no lock at all. Each step is safe to repeat as well.
     private nonisolated static func migrate(_ database: SQLiteDatabase) throws {
         func check(_ version: Int) throws {
             guard version <= currentSchemaVersion else {
@@ -166,10 +166,22 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             let version = try schemaVersion(database)
             try check(version)
             for step in version..<currentSchemaVersion {
-                try database.executeScript(migrations[step])
+                try run(migrations[step], on: database)
                 try database.executeScript("PRAGMA user_version = \(step + 1)")
             }
         }
+    }
+
+    /// A step adding a column runs only where the column is missing.
+    private nonisolated static func run(_ script: String, on database: SQLiteDatabase) throws {
+        let words = script.split(whereSeparator: \.isWhitespace).map(String.init)
+        if words.count >= 6, words[0] == "ALTER", words[3] == "ADD", words[4] == "COLUMN" {
+            let columns = try database.query("PRAGMA table_info(\(words[2]))").compactMap { row -> String? in
+                if case .text(let name) = row[1] { name } else { nil }
+            }
+            if columns.contains(words[5]) { return }
+        }
+        try database.executeScript(script)
     }
 
     public func performAtomically(_ body: () throws -> Void) throws {
