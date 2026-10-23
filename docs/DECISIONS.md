@@ -2453,3 +2453,16 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   rows SQLite already keeps aside). Sync never pushes such a record, and a pulled version of
   one doesn't overwrite it either. Both are set aside in `rejected`, which the sync screen
   lists, with the row left untouched for a build that can read it.
+- Undo of a resolution that folded an original into the entry logged again always removed
+  the conflicts that fold made, even when that entry had changed since and so stayed as the
+  choice left it: the conflict holding the entry's own 80 g, its only copy, vanished. Undo
+  now removes such a conflict only when it put that conflict's record back; otherwise the
+  conflict waits for a decision. The randomized obligation check now starts the phone from
+  scanned entries and adds logging a scan, undoing a log and logging the scan again, plus
+  resolving and then editing and undoing at once, and it counts a value as kept when an
+  entry standing in for its record, or a conflict about one, holds it. It found this bug
+  in 1 run of 4 without the fix. Two of the check's own rules changed. A choice that
+  brings an original back is a decision about what it overwrites in the entry logged again,
+  except for fields that clash and wait in a new conflict. A brought-back record's changes
+  count from the version agreed before its tombstone, so a value set back to that version
+  merges as no change, as it does for any record.

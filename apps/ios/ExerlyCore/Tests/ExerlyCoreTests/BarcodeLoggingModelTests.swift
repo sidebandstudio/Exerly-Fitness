@@ -425,6 +425,49 @@ private struct ModelRandom {
         #expect(phone.entries.map(\.grams) == [60] && library.pending.isEmpty)
     }
 
+    /// Review round 3, finding 2: logged again at 80 g, the original's 60 g
+    /// brought back into it leaves 80 g waiting in a conflict. Its meal
+    /// changed since, Undo can't take the 60 g back, so that conflict, the
+    /// only place 80 g is kept, stays.
+    @Test func undoingAFoldKeepsTheAlternateAmountWhenItCantBeUndone() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phoneDisk = InMemoryTrainingPersistence(), tabletDisk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: phoneDisk)
+        let phone = try NutritionStore(persistence: phoneDisk), tablet = try NutritionStore(persistence: tabletDisk)
+        let phoneConflicts = SyncConflictStore(state: phoneDisk, hosts: [phone], deviceName: "iPhone", now: clock.now)
+        phoneConflicts.effects = ScanConflictEffects(library: library, store: phone)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneDisk, api: server, conflicts: phoneConflicts, now: clock.now)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server, now: clock.now)
+        let code = Self.codes[0]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let first = try library.log([NutritionStore.PlateItem(Self.food(code), grams: 40)], consuming: [[scan.id]], to: phone,
+                                    on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var edited = try #require(tablet.entries.first)
+        edited.grams = 60
+        try tablet.saveEntry(edited)
+        try await tabletSync.sync()
+        try library.undo(Set(first.map(\.id)), from: phone)
+        let again = try library.log([NutritionStore.PlateItem(Self.food(code), grams: 80)], consuming: [[scan.id]], to: phone,
+                                    on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        let deletion = try #require(phoneConflicts.unresolved.first { $0.documentID == first[0].id.uuidString })
+        try phoneConflicts.resolve(deletion.id, .remote)
+        #expect(phone.entries.map(\.grams) == [60])
+        let clash = try #require(phoneConflicts.open(kind: NutritionStore.entryKind, id: again[0].id.uuidString))
+        #expect(grams(clash.remote) == 80)
+        var moved = try #require(phone.entries.first)
+        moved.meal = "Dinner"
+        try phone.saveEntry(moved)
+        try phoneConflicts.undo()
+        #expect(phone.entries.map(\.grams) == [60] && phone.entries.map(\.meal) == ["Dinner"], "Changed since, it stays")
+        #expect(phoneConflicts.open(kind: NutritionStore.entryKind, id: again[0].id.uuidString)?.id == clash.id,
+                "80 g still waits for a decision")
+    }
+
     private func grams(_ version: JSONValue?) -> Double? {
         guard case .object(let fields)? = version, case .number(let grams)? = fields["grams"] else { return nil }
         return grams

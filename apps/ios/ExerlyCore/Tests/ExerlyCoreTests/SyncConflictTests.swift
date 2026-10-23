@@ -374,7 +374,19 @@ final class AccountDevice {
         var random = Random(state: seed &+ 0xC0FF1C7)
         let server = FakeDocumentServer(), clock = TickingClock()
         let devices = [try AccountDevice("iPhone", server: server, clock: clock), try AccountDevice("iPad", server: server, clock: clock)]
-        for _ in 0..<3 { try devices[0].nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast") }
+        // The phone scans offline, logs, undoes and logs again (review round 3),
+        // starting from three entries each logged from a scan.
+        let library = BarcodeLibrary(persistence: devices[0].disk)
+        devices[0].conflicts.effects = ScanConflictEffects(library: library, store: devices[0].nutrition)
+        // Codes not yet cached, so each scan waits offline.
+        var codes = BarcodeLoggingModelTests.codes
+        for _ in 0..<3 {
+            _ = await library.resolve(codes.removeFirst(), meal: "Breakfast", date: monday) { _ in .unavailable }
+            await library.resolveWaiting { _ in .found(Foods.oats, attribution: "OFF") }
+            let scan = try #require(library.ready.first)
+            try library.log([NutritionStore.PlateItem(Foods.oats, grams: 40)], consuming: [[scan.id]], to: devices[0].nutrition,
+                            on: monday, meal: "Breakfast")
+        }
         for device in devices { try await device.sync.sync() }
         let kind = NutritionStore.entryKind
         var steps: [String] = []
@@ -392,13 +404,21 @@ final class AccountDevice {
         func current(_ device: AccountDevice, _ id: String) throws -> JSONValue? {
             try device.nutrition.payload(kind: kind, id: id).map(JSONValue.init(data:))
         }
-        /// Some device shows it, or some conflict, open or decided, holds it.
+        /// The entries standing in for `id` on any device: logged again from its scan.
+        func standIns(_ id: String) -> [String] {
+            devices.flatMap { $0.nutrition.links.values.filter { $0.replaces.map(\.uuidString).contains(id) }.map(\.id.uuidString) }
+        }
+        /// Some device shows it, or some conflict, open or decided, holds it,
+        /// about the record or an entry logged again in its place.
         func kept(_ duty: Obligation) throws -> Bool {
+            let ids = [duty.id] + standIns(duty.id)
             for device in devices {
-                let shown = try current(device, duty.id)
-                if duty.value == nil ? shown == nil : fields(shown, duty.keys) == duty.value { return true }
+                for id in ids where duty.value != nil || id == duty.id {
+                    let shown = try current(device, id)
+                    if duty.value == nil ? shown == nil : fields(shown, duty.keys) == duty.value { return true }
+                }
                 let held = device.conflicts.conflicts.contains { conflict in
-                    guard conflict.documentID == duty.id || conflict.documentID == copies[duty.id] else { return false }
+                    guard ids.contains(conflict.documentID) || conflict.documentID == copies[duty.id] else { return false }
                     if duty.value == nil { return conflict.isDeletion }
                     return fields(conflict.local, duty.keys) == duty.value || fields(conflict.remote, duty.keys) == duty.value
                 }
@@ -431,7 +451,9 @@ final class AccountDevice {
             // What this device changed since the server last had it. Every
             // version on the server was some device's change, or a merge of them.
             for id in ids {
-                let base = try bases[id]?.payload.map(JSONValue.init(data:))
+                // Against what the server last had, or for a tombstone what it
+                // had before: a value set back to that is no change, as in any merge.
+                let base = try (bases[id]?.payload ?? bases[id]?.previous).map(JSONValue.init(data:))
                 let mine = try current(device, id)
                 for keys in [Self.amount, ["meal"]] where base != nil || mine != nil {
                     let duty = Obligation(id: id, keys: keys, value: fields(mine, keys))
@@ -444,7 +466,7 @@ final class AccountDevice {
 
         for _ in 0..<30 {
             guard let device = random.pick(devices) else { continue }
-            switch random.next(9) {
+            switch random.next(12) {
             case 0, 1:
                 guard var entry = random.pick(device.nutrition.entries) else { continue }
                 try seen(device, entry.id.uuidString, [Self.amount])
@@ -479,10 +501,51 @@ final class AccountDevice {
                 let groups = conflict.isDeletion ? [Self.amount, ["meal"]]
                     : [Self.amount, ["meal"]].filter { conflict.fields.contains($0[0]) }
                 try seen(device, conflict.documentID, groups)
+                // Brought back where it was logged again, the card says the
+                // choice is for the entry logged again: what it showed is
+                // decided too, except what clashed, which waits in a new conflict.
+                var standInSeen = Set<Obligation>()
+                let standIn = conflict.isDeletion ? device.conflicts.replacement(for: conflict) : nil
+                if conflict.version(choice) != nil, let standIn {
+                    let shown = try current(device, standIn)
+                    standInSeen = obligations.filter { $0.id == standIn && fields(shown, $0.keys) == $0.value }
+                }
+                let known = Set(device.conflicts.conflicts.map(\.id))
                 let before = Set(device.nutrition.entries.map(\.id.uuidString))
                 try device.conflicts.resolve(conflict.id, choice)
+                let clashed = Set(device.conflicts.conflicts.filter { !known.contains($0.id) }.flatMap(\.fields))
+                let alsoDecided = standInSeen.filter { !clashed.contains($0.keys[0]) }
+                obligations.subtract(alsoDecided)
+                settled.formUnion(alsoDecided)
                 for id in Set(device.nutrition.entries.map(\.id.uuidString)).subtracting(before) { copies[id] = conflict.documentID }
                 steps.append("\(name(device)) resolves \(conflict.documentID.prefix(4)) \(choice)")
+                // Then, half the time, moves what the choice wrote to another meal and takes the choice back.
+                let wrote = standIn ?? conflict.documentID
+                if random.next(2) == 0, var entry = device.nutrition.entries.first(where: { $0.id.uuidString == wrote }) {
+                    try seen(device, wrote, [["meal"]])
+                    entry.meal = ["Breakfast", "Lunch", "Dinner"][random.next(3)]
+                    try device.nutrition.saveEntry(entry)
+                    try device.conflicts.undo()
+                    steps.append("\(name(device)) \(wrote.prefix(4)) \(entry.meal), then undoes")
+                }
+            case 9:
+                // A scan made offline, found, and logged.
+                guard !codes.isEmpty else { continue }
+                _ = await library.resolve(codes.removeFirst(), meal: "Lunch", date: monday) { _ in .unavailable }
+                await library.resolveWaiting { _ in .found(Foods.oats, attribution: "OFF") }
+                fallthrough
+            case 10:
+                // A scan Undo put back, logged again, perhaps at another amount.
+                guard let scan = library.ready.first else { continue }
+                let grams = Double([40, 80][random.next(2)])
+                let logged = try library.log([NutritionStore.PlateItem(Foods.oats, grams: grams)], consuming: [[scan.id]],
+                                             to: devices[0].nutrition, on: scan.date, meal: scan.meal)
+                steps.append("phone logs scan as \(logged[0].id.uuidString.prefix(4)) \(grams) g")
+            case 11:
+                guard let entry = random.pick(devices[0].nutrition.entries) else { continue }
+                try seen(devices[0], entry.id.uuidString, [Self.amount, ["meal"]])
+                try library.undo([entry.id], from: devices[0].nutrition)
+                steps.append("phone undoes log \(entry.id.uuidString.prefix(4))")
             default:
                 if device.conflicts.undoable != nil { steps.append("\(name(device)) undoes") }
                 try device.conflicts.undo()

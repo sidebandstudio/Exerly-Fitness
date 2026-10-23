@@ -327,6 +327,7 @@ public final class SyncConflictStore {
                 // Changed since, it stays, with the scans it logs, as any
                 // record changed since a resolution does.
                 if let undoEffect, try host.payload(kind: kind, id: documentID) == effectWrote { try undoEffect() }
+                var kept = Set<String>()
                 for (write, written) in zip(before, after).reversed() {
                     let now = try host.payload(kind: write.kind, id: write.id)
                     var payload = write.payload
@@ -334,15 +335,22 @@ public final class SyncConflictStore {
                         // Changed since: of a field conflict's record, only
                         // the fields the choice set and nobody changed since
                         // go back; anything else changed since stays.
-                        guard !conflict.isDeletion, write.id == documentID, let earlier = write.payload, let now, let written else { continue }
+                        guard !conflict.isDeletion, write.id == documentID, let earlier = write.payload, let now, let written else {
+                            kept.insert(write.id)
+                            continue
+                        }
                         let undone = Merge.apply(conflict.fields, from: try JSONValue(data: earlier), to: try JSONValue(data: written),
                                                  groups: host.fieldGroups(kind: kind))
                         payload = try host.merge(kind: kind, base: written, local: now, remote: undone.canonicalData, preferring: .local).merged
                     }
                     publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: payload))
                 }
-                // The choice made them; taken back, they never were.
-                for clash in clashes { publishes.append(try prepareWrite(kind: Self.kind, id: clash.id.uuidString, payload: nil)) }
+                // The choice made them, and taken back they never were; but
+                // one about a record that stays as the choice left it holds
+                // the only copy of the other value, so it waits for a decision.
+                for clash in clashes where !kept.contains(clash.documentID) {
+                    publishes.append(try prepareWrite(kind: Self.kind, id: clash.id.uuidString, payload: nil))
+                }
                 publishes.append(try stage(reopened))
             }
             publishes.forEach { $0() }
