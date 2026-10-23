@@ -47,6 +47,10 @@ public protocol SyncStateStore: AnyObject {
     func saveSyncConflict(id: String, payload: Data?) throws
     /// This device's ID in the conflicts it finds, made once per account.
     func syncDeviceID() throws -> UUID
+    /// When this device first knew the server had each settled conflict, by
+    /// conflict ID: the clock its removal waits on.
+    func conflictAcknowledgements() throws -> [String: Date]
+    func saveConflictAcknowledgements(_ acknowledgements: [String: Date]) throws
     /// Every document written since sync last found it matching its base,
     /// recorded with the write itself, or nil until `trustChanges(token:)`
     /// was called with this `token`: then sync compares every document.
@@ -92,6 +96,7 @@ let changesTokenKey = "sync.changes.token"
 private let cursorKey = "sync.cursor"
 private let rejectedKey = "sync.rejected"
 private let deviceKey = "sync.device"
+private let acknowledgementsKey = "sync.conflicts.acknowledged"
 let syncConflictKind = "sync_conflict"
 
 extension SyncStateStore where Self: TrainingPersistence & DocumentPersistence {
@@ -100,6 +105,14 @@ extension SyncStateStore where Self: TrainingPersistence & DocumentPersistence {
         if let payload { try saveDocument(kind: syncConflictKind, id: id, payload: payload) } else {
             try deleteDocument(kind: syncConflictKind, id: id)
         }
+    }
+
+    public func conflictAcknowledgements() throws -> [String: Date] {
+        try loadValue(forKey: acknowledgementsKey).map { try ExerlyJSON.decoder.decode([String: Date].self, from: $0) } ?? [:]
+    }
+
+    public func saveConflictAcknowledgements(_ acknowledgements: [String: Date]) throws {
+        try saveValue(acknowledgements.isEmpty ? nil : ExerlyJSON.canonical(acknowledgements), forKey: acknowledgementsKey)
     }
 
     public func syncDeviceID() throws -> UUID {

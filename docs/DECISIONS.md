@@ -2466,3 +2466,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   except for fields that clash and wait in a new conflict. A brought-back record's changes
   count from the version agreed before its tombstone, so a value set back to that version
   merges as no change, as it does for any record.
+- Pruning measured a settled conflict's age from its resolution, so one resolved offline and
+  synced 40 days later was removed on the next sync. Each device now keeps, locally, when it
+  first knew the server had the settled version (`conflictAcknowledgements`: its push
+  applied, or it pulled the version), and the 30- or 60-day wait counts from then. A
+  reopened conflict drops its time, and a conflict too large to sync counts from settling.

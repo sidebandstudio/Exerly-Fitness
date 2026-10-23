@@ -77,6 +77,34 @@ final class TrainingDevice {
         #expect(phone.conflicts.unresolved.map(\.id) == [conflicts[1].id])
     }
 
+    /// Review round 3, finding 5: resolved offline and synced 40 days later,
+    /// a conflict is kept 30 days from when the server took it, not removed
+    /// on the next sync.
+    @Test func pruningCountsFromWhenTheServerTookTheSettledConflict() async throws {
+        let clock = TickingClock()
+        let server = FakeDocumentServer()
+        let phone = try AccountDevice("iPhone", server: server, clock: clock), tablet = try AccountDevice("iPad", server: server, clock: clock)
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try await clash(phone, tablet, logged.id, phone: 60, tablet: 90)
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        server.offline = true
+        try phone.conflicts.resolve(conflict.id, .local)
+        clock.advance(40 * 24 * 3600)
+        server.offline = false
+        // Weeks later the app has been relaunched, so Undo is long gone.
+        let later = try AccountDevice("iPhone", server: server, clock: clock, disk: phone.disk)
+        try await later.sync.sync()
+        try await later.sync.sync()
+        #expect(later.conflicts.conflict(conflict.id) != nil, "Removed on the first sync after it reached the server")
+        clock.advance(29 * 24 * 3600)
+        try await later.sync.sync()
+        #expect(later.conflicts.conflict(conflict.id) != nil)
+        clock.advance(2 * 24 * 3600)
+        try await later.sync.sync()
+        #expect(later.conflicts.conflict(conflict.id) == nil, "Removed 30 days after the server took it")
+    }
+
     /// Review round 2: a clash about an entry later deleted everywhere is
     /// settled by sync, which the review says, on both devices.
     @Test func aConflictAboutARecordDeletedEverywhereSettlesItself() async throws {

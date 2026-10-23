@@ -367,8 +367,20 @@ public final class SyncConflictStore {
     /// here, or twice that elsewhere, once `synced` says that version
     /// reached the server, or at once when it never syncs; never the one
     /// Undo would reopen. Sync calls this.
+    /// The server has `payload` for conflict `id`, pushed or pulled: a settled
+    /// version starts the clock on its removal, if it hasn't started; one
+    /// reopened stops it.
+    func acknowledged(_ id: String, payload: Data?) throws {
+        var acknowledgements = try state.conflictAcknowledgements()
+        let settled = try payload.map { try ExerlyJSON.decoder.decode(SyncConflict.self, from: $0).isResolved } ?? false
+        guard settled != (acknowledgements[id] != nil) else { return }
+        acknowledgements[id] = settled ? now() : nil
+        try state.saveConflictAcknowledgements(acknowledgements)
+    }
+
     func tidy(deletedEverywhere: (String, String) -> Bool, synced: (SyncConflict) -> Bool) throws {
         let at = now()
+        let acknowledgements = try state.conflictAcknowledgements()
         var settled: [SyncConflict] = []
         for conflict in unresolved where !conflict.isDeletion && deletedEverywhere(conflict.kind, conflict.documentID) {
             guard let host = host(for: conflict.kind), try host.payload(kind: conflict.kind, id: conflict.documentID) == nil else { continue }
@@ -380,14 +392,20 @@ public final class SyncConflictStore {
         let expired = conflicts.filter { conflict in
             guard let resolution = conflict.resolution, conflict.id != undoable else { return false }
             let kept = Self.keptAfterSettling * (resolution.device.id == device.id ? 1 : 2)
-            guard at.timeIntervalSince(max(resolution.at, conflict.changedAt)) > kept else { return false }
-            return conflict.tooLarge == true || synced(conflict)
+            // From when the server took it: settled offline, it isn't removed as soon as it's sent.
+            let tooLarge = conflict.tooLarge == true
+            guard let since = tooLarge ? max(resolution.at, conflict.changedAt) : acknowledgements[conflict.id.uuidString],
+                  at.timeIntervalSince(since) > kept else { return false }
+            return tooLarge || synced(conflict)
         }
         guard !settled.isEmpty || !expired.isEmpty else { return }
         var publishes: [() -> Void] = []
         try state.performAtomically {
             for conflict in settled { publishes.append(try stage(conflict)) }
             for conflict in expired { publishes.append(try prepareWrite(kind: Self.kind, id: conflict.id.uuidString, payload: nil)) }
+            if !expired.isEmpty {
+                try state.saveConflictAcknowledgements(acknowledgements.filter { id, _ in !expired.contains { $0.id.uuidString == id } })
+            }
         }
         publishes.forEach { $0() }
     }

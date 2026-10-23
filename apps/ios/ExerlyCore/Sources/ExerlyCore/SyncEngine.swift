@@ -262,6 +262,7 @@ public final class SyncEngine {
             let staged = try ([conflict].compactMap { $0 } + clashes).map { try conflicts.stage($0) }
             publishConflict = { staged.forEach { $0() } }
             try stateStore.saveSyncBase(newBase)
+            if change.kind == SyncConflictStore.kind { try conflicts.acknowledged(change.id, payload: remote) }
             if remaining != rejected { try stateStore.saveRejectedDocuments(remaining) }
         }
         publishes.forEach { $0() }
@@ -376,6 +377,7 @@ public final class SyncEngine {
             case .applied(let revision):
                 try saveBase(SyncBase(kind: kind, id: id, revision: revision, payload: current,
                                       previous: current == nil ? base.payload ?? base.previous : nil))
+                if kind == SyncConflictStore.kind { try conflicts.acknowledged(id, payload: current) }
                 // Changed again while it was sent, it's still to push.
                 if try host.payload(kind: kind, id: id) == current { _ = try unchanged(kind, id) }
                 return true
