@@ -2446,3 +2446,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   repeat: tables and indexes are created only if missing, and a column only where it is.
   Migration takes the `nonisolated static migrate(url:)` shape `claude/taps` uses, so that
   merge only adds the off-main-actor caller.
+- Training persistence skips rows it can't decode (a newer app's unknown set kind, say), so
+  their host reports them missing, and a full comparison pushed a deletion: an older build
+  opening the account turned a newer app's workout into a server tombstone. The state store
+  now says which records are stored but unreadable (`SyncStateStore.isUnreadable`, from the
+  rows SQLite already keeps aside). Sync never pushes such a record, and a pulled version of
+  one doesn't overwrite it either. Both are set aside in `rejected`, which the sync screen
+  lists, with the row left untouched for a build that can read it.

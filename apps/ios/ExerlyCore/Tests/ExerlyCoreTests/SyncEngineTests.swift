@@ -574,3 +574,45 @@ final class CountingHost: DocumentHost {
         #expect(server.writes == entries.count + 1, "Nothing else was pushed")
     }
 }
+
+/// Review round 3, finding 3: a workout a newer app saved with a value this
+/// build doesn't know can't be read here. A full comparison leaves it, here
+/// and on the server, rather than pushing its deletion, and sets it aside.
+@MainActor
+@Suite struct UnreadableRowTests {
+    @Test func aRowThisBuildCantReadIsNeverPushedAsADeletion() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let server = FakeDocumentServer()
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            let store = try TrainingStore(persistence: disk)
+            _ = try store.importSessions([session])
+            try await SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1").sync()
+            disk.close()
+        }
+        // A newer app's set kind, written as that app would.
+        let database = try SQLiteDatabase(url: url)
+        let newer = String(decoding: try #require(server.stored(TrainingStore.sessionKind, session.id.uuidString)?.payload), as: UTF8.self)
+            .replacingOccurrences(of: "\"standard\"", with: "\"cluster\"")
+        try database.execute("UPDATE sessions SET payload = ? WHERE id = ?", Data(newer.utf8), session.id.uuidString)
+        database.close()
+
+        let disk = try SQLiteTrainingPersistence(url: url)
+        let store = try TrainingStore(persistence: disk)
+        #expect(store.history.session(session.id) == nil && disk.unreadableRows.count == 1)
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "2")
+        try await sync.sync()
+        #expect(server.history(TrainingStore.sessionKind, session.id.uuidString).allSatisfy { $0.payload != nil }, "No deletion was pushed")
+        #expect(sync.rejected.map(\.id) == [session.id.uuidString])
+        let row = try database.reopen(url).query("SELECT payload FROM sessions WHERE id = ?", session.id.uuidString)
+        #expect(row.count == 1, "The row stays for a newer build")
+    }
+}
+
+extension SQLiteDatabase {
+    func reopen(_ url: URL) throws -> SQLiteDatabase { try SQLiteDatabase(url: url) }
+}

@@ -61,6 +61,9 @@ public protocol SyncStateStore: AnyObject {
     /// The document may differ from its base without a write here, such as
     /// one kept deleted when the server brought it back.
     func markChanged(kind: String, id: String) throws
+    /// Stored here in a form this build can't read, such as a newer app's:
+    /// missing from its store, yet not deleted.
+    func isUnreadable(kind: String, id: String) -> Bool
 }
 
 /// A document by kind and ID.
@@ -81,6 +84,7 @@ extension SyncStateStore {
     public func trustChanges(token: String) throws {}
     public func markUnchanged(kind: String, id: String) throws {}
     public func markChanged(kind: String, id: String) throws {}
+    public func isUnreadable(kind: String, id: String) -> Bool { false }
 }
 
 let changesTokenKey = "sync.changes.token"
@@ -162,6 +166,15 @@ extension SQLiteTrainingPersistence: SyncStateStore {
     }
 
     public func markChanged(kind: String, id: String) throws { try recordChange(kind, id) }
+
+    public func isUnreadable(kind: String, id: String) -> Bool {
+        let table = switch kind {
+        case TrainingStore.sessionKind: "sessions"
+        case TrainingStore.exerciseKind: "custom_exercises"
+        default: kind
+        }
+        return unreadableRows.contains("\(table)/\(DocumentWrite.canonicalID(id))")
+    }
 
     public func syncBases() throws -> [SyncBase] {
         try database.query("SELECT kind, id, revision, payload, push_key, push_hash, previous FROM sync_bases").compactMap { row in

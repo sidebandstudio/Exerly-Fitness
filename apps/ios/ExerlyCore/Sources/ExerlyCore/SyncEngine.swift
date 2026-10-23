@@ -190,6 +190,11 @@ public final class SyncEngine {
             return false
         }
         let local = try host.payload(kind: change.kind, id: change.id)
+        if local == nil, stateStore.isUnreadable(kind: change.kind, id: change.id) {
+            // Neither side is overwritten by a copy this build can't merge.
+            try setAside(change, reason: "This device stores it in a form this version can't read")
+            return false
+        }
         let clean = base.map { local == $0.payload } ?? (local == nil)
         var write: Data??
         var found: (fields: [String], local: Data?, remote: Data?)?
@@ -328,6 +333,13 @@ public final class SyncEngine {
             guard let host = host(for: kind) else { return try unchanged(kind, id) }
             let current = try host.payload(kind: kind, id: id)
             var base = bases[Self.key(kind, id)] ?? SyncBase(kind: kind, id: id, revision: 0)
+            if current == nil, stateStore.isUnreadable(kind: kind, id: id) {
+                // Missing because this build can't read it, not deleted: it stays, here and on the server.
+                try checkActive()
+                try setAside(RemoteDocument(kind: kind, id: id, revision: base.revision, deleted: false, payload: nil),
+                             reason: "This device stores it in a form this version can't read")
+                return false
+            }
             if current == base.payload || (current == nil && base.revision == 0) { return try unchanged(kind, id) }
             // One key per content and base revision: a lost response is
             // retried with the same key, a merged version gets a new one.
