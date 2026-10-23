@@ -2654,3 +2654,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   Screen. Also, the system relaunches a terminated Exerly without the UI
   test's isolated account. Both stay device checks. The reminder buttons'
   options (no unlock for Remind me, unlock for logging) are unit-tested.
+
+## 2026-10-23: Apple integration, review round 1
+
+- Log by JSON refuses `true` and `false` for a nutrient or a serving's
+  amount or weight. Foundation reads them as the numbers 1 and 0, so
+  `"energy": true` logged 1 kcal.

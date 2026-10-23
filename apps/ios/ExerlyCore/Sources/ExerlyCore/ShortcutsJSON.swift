@@ -29,6 +29,12 @@ public enum ShortcutsJSON {
 
     static func nutrient(named key: String) -> Nutrient? { renamed[key] ?? Nutrient(rawValue: key) }
 
+    /// A JSON number. Foundation reads `true` and `false` as numbers too, which aren't amounts.
+    static func number(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number.doubleValue
+    }
+
     static func name(of nutrient: Nutrient) -> String {
         renamed.first { $0.value == nutrient }?.key ?? nutrient.rawValue
     }
@@ -61,7 +67,7 @@ public enum ShortcutsJSON {
                     problems.append("\(key) is not a nutrient")
                     continue
                 }
-                guard let amount = (value as? NSNumber)?.doubleValue, amount.isFinite, amount >= 0 else {
+                guard let amount = number(value), amount.isFinite, amount >= 0 else {
                     problems.append("\(key) must be a number of 0 or more")
                     continue
                 }
@@ -87,7 +93,7 @@ public enum ShortcutsJSON {
             serving = Serving("100 ml", grams: 100)
             quantity = 1
         case let measured as [String: Any]:
-            let amount = (measured["amount"] as? NSNumber)?.doubleValue ?? 0
+            let amount = number(measured["amount"]) ?? 0
             if let unit = measured["unit"] as? String {
                 if let factor = grams[unit], amount > 0 {
                     weight = amount * factor
@@ -96,7 +102,7 @@ public enum ShortcutsJSON {
                 } else {
                     problems.append("serving needs a positive amount in one of \(grams.keys.sorted().joined(separator: ", "))")
                 }
-            } else if let label = measured["label"] as? String, let total = (measured["weight"] as? NSNumber)?.doubleValue,
+            } else if let label = measured["label"] as? String, let total = number(measured["weight"]),
                       amount > 0, total > 0, !label.isEmpty {
                 weight = total
                 serving = Serving(label, grams: total / amount)

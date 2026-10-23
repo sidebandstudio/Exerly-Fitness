@@ -51,6 +51,20 @@ import Testing
         }
     }
 
+    @Test func trueOrFalseIsNotANumber() {
+        #expect(throws: ShortcutsJSON.Problem(messages: ["energy must be a number of 0 or more",
+                                                         "serving needs a positive amount in one of \(ShortcutsJSON.grams.keys.sorted().joined(separator: ", "))"])) {
+            try ShortcutsJSON.food(from: Data("""
+            { "name": "Toast", "source": "s", "nutrients": { "energy": true }, "serving": { "amount": true, "unit": "grams" } }
+            """.utf8))
+        }
+        #expect(throws: ShortcutsJSON.Problem(messages: ["a custom serving needs an amount, a label and a weight in grams"])) {
+            try ShortcutsJSON.food(from: Data("""
+            { "name": "Toast", "source": "s", "nutrients": { "energy": 80 }, "serving": { "amount": 1, "label": "slice", "weight": true } }
+            """.utf8))
+        }
+    }
+
     @Test func theTodaySummaryHasConsumptionAndWhatRemainsOfEachGoal() throws {
         let nutrition = try store()
         let plan = NutritionPlan(startDate: monday, createdAt: Fixture.instant(), goal: NutritionGoal(.maintain),
