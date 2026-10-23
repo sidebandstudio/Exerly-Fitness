@@ -2498,3 +2498,14 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   an ordinary surface with no count badge or accent, saying how many changes sync
   settled. `EXERLY_SYNC_CONFLICT_SEED=settled` seeds one for
   `testWhatSyncSettledStaysReachableFromToday`.
+
+## 2026-10-23: Conflict review, round 4, on claude/taps
+
+- Taps opens an account by reading its history off the main actor (`StoredAccount`) and
+  starting the stores from it, so persistence never decoded the sessions and never learned
+  which rows it couldn't read: a newer app's workout looked deleted again, and a full
+  comparison pushed its deletion. The background read now passes the training rows it
+  couldn't decode to the training store, which notes them with persistence
+  (`TrainingPersistence.noteUnreadable`) before anything can sync, in canonical form, so
+  sync keeps them exactly as it does rows persistence read itself. The workspace counts them
+  once, from persistence.

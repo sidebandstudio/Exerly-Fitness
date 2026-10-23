@@ -21,6 +21,14 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
     /// untouched so a later version can read them.
     public private(set) var unreadableRows: [String] = []
 
+    public func noteUnreadable(_ rows: [String]) {
+        for row in rows {
+            let parts = row.split(separator: "/", maxSplits: 1).map(String.init)
+            let canonical = parts.count == 2 ? "\(parts[0])/\(DocumentWrite.canonicalID(parts[1]))" : row
+            if !unreadableRows.contains(canonical) { unreadableRows.append(canonical) }
+        }
+    }
+
     let database: SQLiteDatabase
     private let path: String
     private let encoder = JSONEncoder()

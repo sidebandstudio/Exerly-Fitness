@@ -52,7 +52,8 @@ final class TrainingWorkspace: ObservableObject {
                                       deviceName: UIDevice.current.model)
         conflicts.effects = ScanConflictEffects(library: barcodes, store: nutrition)
         entryChecks = TrainingEntryChecks(training: store, agent: agent, accountID: accountID)
-        unreadableCount = (stored?.unreadableRows ?? []).count + persistence.unreadableRows.count
+        // The background read's unreadable rows are noted with persistence by the training store.
+        unreadableCount = persistence.unreadableRows.count
         if let api { resumeSync(api: api) }
     }
 

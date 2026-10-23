@@ -585,7 +585,10 @@ final class CountingHost: DocumentHost {
 /// and on the server, rather than pushing its deletion, and sets it aside.
 @MainActor
 @Suite struct UnreadableRowTests {
-    @Test func aRowThisBuildCantReadIsNeverPushedAsADeletion() async throws {
+    /// `loaded`: opened as the app does, history read off the main actor
+    /// (`StoredAccount`) and the stores started from it (review round 4).
+    @Test(arguments: [false, true])
+    func aRowThisBuildCantReadIsNeverPushedAsADeletion(loaded: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -606,8 +609,9 @@ final class CountingHost: DocumentHost {
         try database.execute("UPDATE sessions SET payload = ? WHERE id = ?", Data(newer.utf8), session.id.uuidString)
         database.close()
 
+        let stored = loaded ? try #require(try StoredAccount.read(url: url)) : nil
         let disk = try SQLiteTrainingPersistence(url: url)
-        let store = try TrainingStore(persistence: disk)
+        let store = try stored.map { try TrainingStore(persistence: disk, loaded: $0.training) } ?? TrainingStore(persistence: disk)
         #expect(store.history.session(session.id) == nil && disk.unreadableRows.count == 1)
         let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "2")
         try await sync.sync()

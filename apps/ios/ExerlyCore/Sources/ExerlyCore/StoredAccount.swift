@@ -17,6 +17,9 @@ public struct StoredAccount: Sendable {
     public struct Training: Sendable {
         let sessions: [WorkoutSession]
         let customExercises: [Exercise]
+        /// Its rows that couldn't be decoded, as `table/id`: the store tells
+        /// persistence, so sync never takes them for deleted.
+        let unreadable: [String]
     }
 
     public let nutrition: Nutrition
@@ -71,8 +74,9 @@ public struct StoredAccount: Sendable {
                 .sorted(by: NutritionStore.planOrder),
             hidden: try documents(NutritionStore.hiddenKind).map { try decoder.decode(HiddenSuggestion.self, from: $0) }
                 .sorted(by: NutritionStore.hiddenOrder))
-        let training = Training(sessions: try rows(WorkoutSession.self, table: "sessions", order: "started_at"),
-                                customExercises: try rows(Exercise.self, table: "custom_exercises", order: "id"))
+        let sessions = try rows(WorkoutSession.self, table: "sessions", order: "started_at")
+        let customExercises = try rows(Exercise.self, table: "custom_exercises", order: "id")
+        let training = Training(sessions: sessions, customExercises: customExercises, unreadable: unreadable)
         return StoredAccount(nutrition: nutrition, training: training, unreadableRows: unreadable)
     }
 }

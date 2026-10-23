@@ -55,6 +55,7 @@ public final class TrainingStore {
         persistence: TrainingPersistence, loaded: StoredAccount.Training, library: ExerciseLibrary = .bundled,
         restPolicy: RestPolicy = RestPolicy(), now: @escaping () -> Date = Date.init
     ) throws {
+        persistence.noteUnreadable(loaded.unreadable)
         try self.init(persistence: persistence, sessions: loaded.sessions, customExercises: loaded.customExercises,
                       library: library, restPolicy: restPolicy, now: now)
     }

@@ -23,6 +23,13 @@ public protocol TrainingPersistence: AnyObject {
     /// in-memory state through it, so a write nested in a caller's transaction
     /// shows only once that transaction is saved.
     func afterCommit(_ action: @escaping () -> Void)
+    /// Rows another connection read and couldn't decode, as `table/id`, so
+    /// this one treats them as it would its own: kept, never deleted.
+    func noteUnreadable(_ rows: [String])
+}
+
+extension TrainingPersistence {
+    public func noteUnreadable(_ rows: [String]) {}
 }
 
 /// Keeps everything in memory. For previews, tests and the app agent's stubs.
