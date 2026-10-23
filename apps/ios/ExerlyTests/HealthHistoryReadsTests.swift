@@ -458,6 +458,48 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(workspace.healthImports.records[run.id]?.state, .removed)
     }
 
+    /// as it is: confirming adds nothing beside it and shows the preview again.
+    func testAnEntryChangedWhileItsPreviewIsOpenHoldsItsDay() async throws {
+        let diary = food(8, "com.example.diary")
+        client.foods = [diary]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        let watch = food(9, "com.apple.health.watch")
+        client.foods = [diary, watch]
+        await history.begin(.foods)
+        XCTAssertEqual(history.pending?.preview.adding, 1)
+        XCTAssertEqual(history.pending?.preview.displacing, 1)
+        let entry = try XCTUnwrap(workspace.nutrition.entries.first { $0.id == diary.id })
+        try workspace.nutrition.saveEntry(entry.editingNutrients(NutrientAmounts([.energy: 410])))
+        await history.confirm()
+        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), [diary.id])
+        XCTAssertNotNil(history.pending?.note, "Shown again as it is now")
+        XCTAssertEqual(history.pending?.preview.adding, 0)
+        XCTAssertEqual(history.pending?.preview.displacing, 0)
+    }
+
+    /// Item 4, for workouts: an activity changed while the preview is open holds its time.
+    func testAnActivityChangedWhileItsPreviewIsOpenHoldsItsTime() async throws {
+        let run = workout(source: "com.example.runs")
+        client.workouts = [run]
+        let history = model()
+        await history.begin(.workouts)
+        await history.confirm()
+        var watch = workout(source: "com.apple.health.watch")
+        watch.start = run.start.addingTimeInterval(60)
+        client.workouts = [run, watch]
+        await history.begin(.workouts)
+        XCTAssertEqual(history.pending?.preview.adding, 1)
+        let id = HealthHistory.activityID(for: run.id, accountID: "history")
+        activities.prints[id] = "they changed the minutes"
+        await history.confirm()
+        XCTAssertEqual(activities.saved.map(\.clientID), [id])
+        XCTAssertTrue(activities.deleted.isEmpty)
+        XCTAssertNotNil(history.pending?.note)
+        XCTAssertEqual(history.pending?.preview.adding, 0)
+    }
+
     /// doesn't keep a lower-ranked app's food out of its day.
     func testADisplacedFoodDeletedInHealthNeverComesBackNorHoldsItsDay() async throws {
         let diary = food(8, "com.example.diary"), watch = food(9, "com.apple.health.watch"), other = food(10, "com.example.zapp")

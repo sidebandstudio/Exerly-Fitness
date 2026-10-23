@@ -260,9 +260,13 @@ final class HealthHistoryModel: ObservableObject {
         var preview: HealthHistoryPreview
         var foods: HealthImportPlan<HealthFoodReading>?
         var workouts: HealthImportPlan<HealthWorkoutReading>?
-        /// What was read, to claim entries with no record.
+        /// What was read, to claim entries with no record, and to plan again as it's confirmed.
         var readings: [UUID: HealthFoodReading] = [:]
         var workoutReadings: [UUID: HealthWorkoutReading] = [:]
+        var deleted: [UUID] = []
+        var full = false
+        /// Workouts read while the account couldn't be reached, which add nothing.
+        var unreached = false
         /// The weigh-ins shown, which are all that may be imported.
         var weights: Set<UUID> = []
         var anchor: Data?
@@ -386,6 +390,10 @@ final class HealthHistoryModel: ObservableObject {
             case .held(let note):
                 messages[pending.kind] = note
                 return
+            case .revised(var revised):
+                revised.note = "Something in Exerly changed since this opened. This is what importing would do now."
+                self.pending = revised
+                return
             }
         } catch {
             messages[pending.kind] = "Nothing was imported. Try again."
@@ -423,10 +431,13 @@ final class HealthHistoryModel: ObservableObject {
             let started = generation[kind, default: 0]
             do {
                 guard let pending = try await read(kind, full: false, in: workspace, generation: started) else { continue }
-                switch try await apply(pending, in: workspace) {
+                // Changed since it was read: what Health's changes mean now, once.
+                var outcome = try await apply(pending, in: workspace)
+                if case .revised(let revised) = outcome { outcome = try await apply(revised, in: workspace) }
+                switch outcome {
                 case .applied: messages[kind] = pending.note
                 case .held(let note): messages[kind] = note
-                case .stale: continue
+                case .stale, .revised: continue
                 }
             } catch {
                 guard owns(workspace) else { return }
@@ -472,6 +483,7 @@ final class HealthHistoryModel: ObservableObject {
             let plan = foodPlan(changes, full: full, in: workspace)
             (pending.preview, pending.foods, pending.anchor) = (plan.preview, plan, changes.anchor)
             pending.readings = Dictionary(changes.added.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            (pending.deleted, pending.full) = (changes.deleted, full)
         case .workouts:
             let changes = try await client.workouts(after: full ? nil : anchor(kind))
             guard current(kind, workspace, since: started) else { return nil }
@@ -489,7 +501,7 @@ final class HealthHistoryModel: ObservableObject {
                 if !reached {
                     // Unsure what the account has, add none, nor set aside anything for them:
                     // the next read, from the same anchor and online, will.
-                    (plan.preview.adding, plan.adding, plan.preview.displacing, plan.displacing) = (0, [], 0, [])
+                    Self.holdAdditions(&plan)
                     pending.note = "Workouts from Health will be added once Exerly can reach your account."
                     keepAnchor = true
                 }
@@ -497,8 +509,41 @@ final class HealthHistoryModel: ObservableObject {
             (pending.preview, pending.workouts) = (plan.preview, plan)
             pending.anchor = keepAnchor ? anchor(kind) : changes.anchor
             pending.workoutReadings = Dictionary(changes.added.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            (pending.deleted, pending.full, pending.unreached) = (changes.deleted, full, keepAnchor)
         }
         return pending
+    }
+
+    private static func holdAdditions(_ plan: inout HealthImportPlan<HealthWorkoutReading>) {
+        (plan.preview.adding, plan.adding, plan.preview.displacing, plan.displacing) = (0, [], 0, [])
+    }
+
+    /// The plan made again from what was read, against the account as it is
+    /// now, so the whole day or time is checked as it's applied: an entry or
+    /// activity changed since holds its group, and what was to replace it
+    /// isn't added either.
+    private func planAgain(_ pending: Pending, in workspace: TrainingWorkspace) -> Pending {
+        var revised = pending
+        if pending.foods != nil {
+            let changes = HealthChanges(added: Array(pending.readings.values), deleted: pending.deleted, anchor: pending.anchor)
+            let plan = foodPlan(changes, full: pending.full, in: workspace)
+            (revised.preview, revised.foods) = (plan.preview, plan)
+        }
+        if pending.workouts != nil {
+            let changes = HealthChanges(added: Array(pending.workoutReadings.values), deleted: pending.deleted, anchor: pending.anchor)
+            var plan = workoutPlan(changes, full: pending.full, in: workspace)
+            if pending.unreached { Self.holdAdditions(&plan) }
+            (revised.preview, revised.workouts) = (plan.preview, plan)
+        }
+        (revised.removeMissing, revised.adopt) = (false, false)
+        return revised
+    }
+
+    /// Whether two plans make the same changes.
+    private static func same<T>(_ a: HealthImportPlan<T>?, _ b: HealthImportPlan<T>?, id: (T) -> UUID) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return Set(a.adding.map(id)) == Set(b.adding.map(id)) && a.removing == b.removing && a.displacing == b.displacing
+            && a.restoring == b.restoring && a.missing == b.missing && a.adoptable == b.adoptable
     }
 
     private func foodPlan(_ changes: HealthChanges<HealthFoodReading>, full: Bool, in workspace: TrainingWorkspace) -> HealthImportPlan<HealthFoodReading> {
@@ -559,6 +604,8 @@ final class HealthHistoryModel: ObservableObject {
         case stale
         /// Nothing was changed, for the reason given; Health's changes are read again next time.
         case held(String)
+        /// Nothing was changed: the account changed since the plan was made, and this is the plan now.
+        case revised(Pending)
     }
 
     /// The account's latest records from the server, so a phone that adopted
@@ -608,10 +655,14 @@ final class HealthHistoryModel: ObservableObject {
                 changes.restoring = try await client.foods(Set(plan.restoring))
                 guard current(kind, workspace, since: pending.generation) else { return .stale }
             }
+            let now = planAgain(pending, in: workspace)
+            guard Self.same(now.foods, plan, id: \.id) else { return .revised(now) }
             try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
             defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
         }
         if let plan = pending.workouts {
+            let now = planAgain(pending, in: workspace)
+            guard Self.same(now.workouts, plan, id: \.id) else { return .revised(now) }
             try perform(workoutWork(plan, pending, imports: imports, turningOn: turningOn), imports: imports)
         }
         return .applied
