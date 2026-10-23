@@ -2371,3 +2371,15 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   forget once the Undo's deletion was pushed, so every field differing from the relog (its
   time too) clashed. A tombstone's base now keeps the version agreed on before it
   (`SyncBase.previous`, SQLite schema 5 adds the column), and the fold merges against it.
+- "Showing now" compared a version applied onto the record with the record, and applying a
+  path into a set the record no longer has changes nothing, so after the set was removed the
+  card marked an old value as current, and both choices wrote nothing and dismissed the card.
+  The card now compares the value at each clashing path directly (`Merge.value(at:in:)`), a
+  missing item matching only a version that lacks it too, so a removed set is neither version
+  and the card's "now" line reads "Barbell Bench Press: set removed". When the clash is about
+  a set or exercise this device removed since, the choices say what they do: "Bring the set
+  back as this iPhone's" or "as the other device's", which brings it back whole with that
+  version's values (`Merge.apply(restoring:)`, used only by a resolution, so Undo and later
+  merges still never resurrect an item), and "Leave it removed", a new choice, `.current`,
+  that settles the conflict and writes nothing. Conflicts haven't shipped, so no installed app
+  meets a choice it can't decode.

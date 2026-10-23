@@ -143,6 +143,43 @@ final class TrainingDevice {
         #expect(phone.session(session.id)?.name == "Push day" && phone.session(session.id)?.exercises[0].sets[1].primary.reps == 4)
     }
 
+    /// Review round 2, finding 4: a set's reps clash, then the phone removes
+    /// that set but keeps the workout. Neither version is marked as shown,
+    /// the card says the set was removed, and the choices bring it back with
+    /// a version's reps or leave it removed, doing what they say.
+    @Test func aSetRemovedSinceIsNeitherVersionAndCanBeBroughtBack() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100), Fixture.set(5, 100)])])
+        try phone.store.importSessions([session])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var mine = try #require(phone.session(session.id)), theirs = try #require(tablet.session(session.id))
+        mine.exercises[0].sets[1].efforts[0].reps = 6
+        theirs.exercises[0].sets[1].efforts[0].reps = 4
+        try phone.store.saveSession(mine)
+        try tablet.store.saveSession(theirs)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        var removed = try #require(phone.session(session.id))
+        removed.exercises[0].sets.remove(at: 1)
+        try phone.store.saveSession(removed)
+
+        let summary = phone.conflicts.summary(of: conflict, unit: .kilograms, timeZone: .gmt, locale: Locale(identifier: "en_GB"))
+        #expect(!summary.local.shown && !summary.remote.shown, "A removed set is neither version")
+        #expect(summary.now == "Barbell Bench Press: set removed")
+        #expect(summary.options.map { $0.title } == ["Bring the set back as this iPhone's", "Bring the set back as the other device's",
+                                                 "Leave it removed"])
+        let four = try #require(conflict.choices.first { choice in
+            conflict.version(choice).map { (try? $0.decode(WorkoutSession.self))?.exercises[0].sets[1].primary.reps } == 4
+        })
+        try phone.conflicts.resolve(conflict.id, four)
+        #expect(phone.session(session.id)?.exercises[0].sets.map(\.primary.reps) == [5, 4], "The set is back with 4 reps")
+        try phone.conflicts.undo()
+        #expect(phone.session(session.id)?.exercises[0].sets.count == 1)
+        try phone.conflicts.resolve(conflict.id, .current)
+        #expect(phone.session(session.id)?.exercises[0].sets.count == 1 && phone.conflicts.unresolved.isEmpty)
+    }
+
     // MARK: 4. A clean deletion of the workout in progress
 
     /// The phone syncs its workout in progress and changes nothing since;

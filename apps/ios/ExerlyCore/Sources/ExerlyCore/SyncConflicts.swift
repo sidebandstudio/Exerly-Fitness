@@ -29,6 +29,9 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
         case remote
         /// Both, as two records: offered for food entries and weigh-ins.
         case both
+        /// Neither: the record stays as it is on this device now, such as a
+        /// workout whose clashing set was removed since.
+        case current
     }
 
     public struct Resolution: Codable, Hashable, Sendable {
@@ -193,7 +196,7 @@ public final class SyncConflictStore {
     /// records about it.
     public func resolve(_ id: SyncConflict.ID, _ choice: SyncConflict.Choice) throws {
         guard let conflict = conflict(id), !conflict.isResolved else { throw ResolveError.notOpen }
-        guard conflict.choices.contains(choice) else { throw ResolveError.notOffered(choice) }
+        guard conflict.choices.contains(choice) || choice == .current else { throw ResolveError.notOffered(choice) }
         guard let host = host(for: conflict.kind) else { throw DocumentError(message: "Unknown kind \(conflict.kind)") }
         let kind = conflict.kind, documentID = conflict.documentID
         let current = try host.payload(kind: kind, id: documentID)
@@ -207,7 +210,9 @@ public final class SyncConflictStore {
         resolved.resolution = SyncConflict.Resolution(choice: choice, at: now(), device: device)
         resolved.changedAt = now()
         try state.performAtomically {
-            if conflict.isDeletion {
+            if choice == .current {
+                // As it is: nothing to write.
+            } else if conflict.isDeletion {
                 if current != nil, conflict.version(choice) != nil {
                     // Already back, perhaps changed since: it stays as it is.
                 } else if let kept = conflict.version(choice)?.canonicalData {
@@ -227,8 +232,10 @@ public final class SyncConflictStore {
                     writes = [DocumentWrite(kind: kind, id: documentID, payload: nil)]
                 }
             } else if let current, let chosen = conflict.version(choice) {
+                // A set removed since comes back with the chosen values.
                 let merged = try host.canonicalize(kind: kind, payload: Merge.apply(
-                    conflict.fields, from: chosen, to: JSONValue(data: current), groups: host.fieldGroups(kind: kind)).canonicalData)
+                    conflict.fields, from: chosen, to: JSONValue(data: current), groups: host.fieldGroups(kind: kind),
+                    restoring: true).canonicalData)
                 if merged != current { writes.append(DocumentWrite(kind: kind, id: documentID, payload: merged)) }
                 if choice == .both, let copy = conflict.copyOfRemote(id: UUID()) { writes.append(copy) }
             }

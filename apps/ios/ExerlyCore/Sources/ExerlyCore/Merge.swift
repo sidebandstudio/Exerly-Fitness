@@ -204,21 +204,47 @@ public enum Merge {
     /// for a field of an item in a list, `exercises[ID]` for a whole item,
     /// added, replaced or removed, `exercises[]` for a list's order, and
     /// "*" for the whole record. A path into an item one side no longer
-    /// has changes nothing.
-    public static func apply(_ paths: [String], from chosen: JSONValue, to current: JSONValue, groups: [[String]] = []) -> JSONValue {
+    /// has changes nothing, unless `restoring`: then an item `current` no
+    /// longer has comes back whole from `chosen`.
+    public static func apply(_ paths: [String], from chosen: JSONValue, to current: JSONValue, groups: [[String]] = [],
+                             restoring: Bool = false) -> JSONValue {
         var result = current
         for path in paths {
             if path == "*" { return chosen }
             let steps = path.split(separator: ".").map(String.init)
             let fields = steps.count == 1 ? groups.first { $0.first == path } ?? [path] : [path]
             for field in fields {
-                result = transplant(field == path ? steps : [field], from: chosen, to: result)
+                result = transplant(field == path ? steps : [field], from: chosen, to: result, restoring: restoring)
             }
         }
         return result
     }
 
-    private static func transplant(_ steps: [String], from chosen: JSONValue?, to current: JSONValue) -> JSONValue {
+    /// The value at a path `apply` takes: `.none` when an item on the way
+    /// isn't there, `.some(nil)` for a field it doesn't have. A list's
+    /// order and "*" have no single value, and give `.none`.
+    public static func value(at path: String, in value: JSONValue) -> JSONValue?? {
+        var current: JSONValue? = value
+        for step in path.split(separator: ".").map(String.init) {
+            guard case .object(let fields)? = current else { return .some(nil) }
+            guard let open = step.firstIndex(of: "["), step.hasSuffix("]") else {
+                current = fields[step]
+                continue
+            }
+            let name = String(step[..<open]), id = String(step[step.index(after: open)..<step.index(before: step.endIndex)])
+            guard !id.isEmpty, case .array(let items)? = fields[name],
+                  let item = items.first(where: { if case .object(let f) = $0 { f["id"] == .string(id) } else { false } }) else { return .none }
+            current = item
+        }
+        return .some(current)
+    }
+
+    /// Whether a path names a list item, or a field of one, that `value` lacks.
+    public static func lacksItem(at path: String, in value: JSONValue) -> Bool {
+        path != "*" && !path.hasSuffix("[]") && path.contains("[") && Self.value(at: path, in: value) == nil
+    }
+
+    private static func transplant(_ steps: [String], from chosen: JSONValue?, to current: JSONValue, restoring: Bool) -> JSONValue {
         guard let step = steps.first, case .object(var fields) = current else { return current }
         let rest = Array(steps.dropFirst())
         let mine = chosen.flatMap { if case .object(let fields) = $0 { fields } else { nil } }
@@ -226,7 +252,7 @@ public enum Merge {
             if rest.isEmpty {
                 fields[step] = mine?[step]
             } else if let inner = fields[step] {
-                fields[step] = transplant(rest, from: mine?[step], to: inner)
+                fields[step] = transplant(rest, from: mine?[step], to: inner, restoring: restoring)
             }
             return .object(fields)
         }
@@ -244,9 +270,9 @@ public enum Merge {
             let here = items.firstIndex { key($0) == id }, there = theirs.firstIndex { key($0) == id }
             switch (here, there, rest.isEmpty) {
             case (let here?, let there?, true): items[here] = theirs[there]
-            case (let here?, let there?, false): items[here] = transplant(rest, from: theirs[there], to: items[here])
+            case (let here?, let there?, false): items[here] = transplant(rest, from: theirs[there], to: items[here], restoring: restoring)
             case (let here?, nil, true): items.remove(at: here)
-            case (nil, let there?, true):
+            case (nil, let there?, let whole) where whole || restoring:
                 // Back after the item before it in the chosen version, or first.
                 let before = theirs[..<there].reversed().compactMap(key).lazy.compactMap { id in items.firstIndex { key($0) == id } }.first
                 items.insert(theirs[there], at: before.map { $0 + 1 } ?? 0)

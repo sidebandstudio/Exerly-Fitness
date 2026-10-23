@@ -55,10 +55,28 @@ extension SyncConflict {
             return Array(NSOrderedSet(array: parts)).compactMap { $0 as? String }.joined(separator: ", ")
         }
         let now = current ?? local
-        /// Whether `now` has this version: deleted or not, and the clashing fields as in it.
+        /// Whether `now` has this version: deleted or not, and each clashing
+        /// field there and as in it. A list's order compares as it applies.
         func shows(_ version: JSONValue?) -> Bool {
             guard let version, let now else { return version == nil && now == nil }
-            return isDeletion || Merge.apply(fields, from: version, to: now, groups: Self.groups(kind)) == now
+            if isDeletion { return true }
+            let paths = fields.flatMap { field in Self.groups(kind).first { $0.first == field } ?? [field] }
+            return paths.allSatisfy { path in
+                path == "*" || path.hasSuffix("[]")
+                    ? Merge.apply([path], from: version, to: now) == now
+                    : Merge.value(at: path, in: version) == Merge.value(at: path, in: now)
+            }
+        }
+        /// What the clash was about and this device has removed since, a set
+        /// or an exercise, while a version still has it.
+        let removed: String? = isDeletion ? nil : now.flatMap { now in
+            fields.first { path in
+                Merge.lacksItem(at: path, in: now) && [local, remote].contains { $0.map { !Merge.lacksItem(at: path, in: $0) } ?? false }
+            }.map { path in
+                let exercise = String(path.split(separator: ".")[0])
+                return Merge.lacksItem(at: exercise, in: now) ? (exercise.hasPrefix("exercises[") ? "exercise" : "item")
+                    : path.contains("sets[") ? "set" : "item"
+            }
         }
         let explanation: String
         let options: [SyncConflictSummary.Option]
@@ -79,11 +97,18 @@ extension SyncConflict {
             }
         } else {
             explanation = "Both devices changed the \(words.list(fields.map(words.name)))."
-            options = choices.map { choice in
+                + (removed.map { " This \(viewer.name) removed the \($0) since." } ?? "")
+            options = removed.map { noun in
+                choices.map { choice in
+                    let owner = choice == .local ? localOwner : "the other device's"
+                    return .init(choice: choice, title: "Bring the \(noun) back as \(owner)", done: "Brought the \(noun) back")
+                } + [.init(choice: .current, title: "Leave it removed", done: "Left it removed")]
+            } ?? choices.map { choice in
                 switch choice {
                 case .local: .init(choice: choice, title: "Keep \(localOwner)", done: "Kept \(localOwner)")
                 case .remote: .init(choice: choice, title: "Keep the other device's", done: "Kept the other device's")
                 case .both: .init(choice: choice, title: "Keep both", done: "Kept both")
+                case .current: .init(choice: choice, title: "Keep it as it is", done: "Kept it as it is")
                 }
             }
         }
