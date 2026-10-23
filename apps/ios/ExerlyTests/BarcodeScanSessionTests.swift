@@ -341,7 +341,9 @@ final class BarcodeScanSessionTests: XCTestCase {
         let (again, _) = try session(transport, workspace: relaunched)
         guard case .logged(let relogged) = again.use(.pending(relaunched.barcodes.pending[0])) else { return XCTFail("Logs again") }
         XCTAssertEqual(try relaunched.barcodes.unlog([relogged, try current(second)], from: relaunched.nutrition).count, 2)
-        XCTAssertEqual(relaunched.barcodes.pending.map { [$0.id.uuidString, $0.meal] }, scans.map { [$0.id.uuidString, $0.meal] })
+        // Both scans can land in one millisecond, and scans saved at the same
+        // moment have no order of their own, so compare them as a set.
+        XCTAssertEqual(Set(relaunched.barcodes.pending.map { [$0.id.uuidString, $0.meal] }), Set(scans.map { [$0.id.uuidString, $0.meal] }))
         XCTAssertEqual(relaunched.nutrition.entries.count, 21)
     }
 
