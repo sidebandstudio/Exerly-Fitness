@@ -4,8 +4,11 @@ import SwiftUI
 /// What importing from Health would add, before anything is saved.
 struct HealthImportPreviewSheet: View {
     let pending: HealthHistoryModel.Pending
-    let onImport: () -> Void
+    /// With their choices: remove what's no longer in Health, adopt what another install imported.
+    let onImport: (_ removeMissing: Bool, _ adopt: Bool) -> Void
     let onCancel: () -> Void
+    @State private var removeMissing = false
+    @State private var adopt = false
 
     private var preview: HealthHistoryPreview { pending.preview }
 
@@ -43,10 +46,23 @@ struct HealthImportPreviewSheet: View {
                         }
                     }
                 }
+                if preview.missing > 0 {
+                    choice("No longer in Health",
+                           "\(pending.kind.count(preview.missing)) imported on this iPhone aren't in Health now. Health hides what Exerly can't read, so they stay unless you remove them.",
+                           toggle: "Remove these", isOn: $removeMissing, identifier: "health.preview.removeMissing")
+                }
+                if preview.adoptable > 0 {
+                    choice("Imported on another iPhone",
+                           "\(pending.kind.count(preview.adoptable)) came from Health on another iPhone, or before Exerly was reinstalled. Only the iPhone that imported one takes it out when Health deletes it.",
+                           toggle: "Keep these as imported from Health on this iPhone", isOn: $adopt, identifier: "health.preview.adopt")
+                }
                 Text(pending.kind == .foods ? "Each goes in the meal for its time and isn't written back to Health."
                     : "Nothing is saved until you import.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
-                Button(action: onImport) { Text(preview.adding == 0 ? (preview.removing > 0 ? "Update" : "Turn on") : "Import \(pending.kind.count(preview.adding))") }
+                Button { onImport(removeMissing, adopt) } label: {
+                    Text(preview.adding > 0 ? "Import \(pending.kind.count(preview.adding))"
+                        : preview.isEmpty && !removeMissing && !adopt ? "Turn on" : "Update")
+                }
                     .buttonStyle(ExActionStyle()).accessibilityIdentifier("health.preview.import")
             }
             .navigationTitle("Import from Health").navigationBarTitleDisplayMode(.inline)
@@ -63,11 +79,23 @@ struct HealthImportPreviewSheet: View {
         var notes: [String] = []
         if preview.alreadyIn > 0 { notes.append("\(pending.kind.count(preview.alreadyIn)) already in Exerly.") }
         if preview.leftOut > 0 { notes.append("\(pending.kind.count(preview.leftOut)) set aside for a better source.") }
-        if preview.removing > 0 {
-            notes.append("\(pending.kind.count(preview.removing)) taken out: deleted in Health, or a better source has \(pending.kind == .workouts ? "them" : "that day").")
-        }
+        if preview.removing > 0 { notes.append("\(pending.kind.count(preview.removing)) taken out: deleted in Health.") }
+        if preview.displacing > 0 { notes.append("\(pending.kind.count(preview.displacing)) set aside for a better source's, until it goes.") }
+        if preview.restoring > 0 { notes.append("\(pending.kind.count(preview.restoring)) put back: the better source's is gone.") }
         if preview.outside > 0 { notes.append("\(pending.kind.count(preview.outside)) left in Health: Exerly keeps the last ten years.") }
         return notes
+    }
+
+    /// A choice off until they turn it on.
+    private func choice(_ title: String, _ text: String, toggle: String, isOn: Binding<Bool>, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: ExSpacing.small) {
+            ExEyebrow(title).accessibilityAddTraits(.isHeader)
+            ExCard {
+                Text(text).font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                Toggle(isOn: isOn) { Text(toggle).font(.exBodyMedium).foregroundStyle(Color.exTextPrimary) }
+                    .tint(.exActionFill).accessibilityIdentifier(identifier)
+            }
+        }
     }
 
     private func sourceLine(_ source: HealthHistoryPreview.Source) -> String {

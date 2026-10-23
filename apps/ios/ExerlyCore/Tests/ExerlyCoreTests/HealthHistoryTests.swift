@@ -18,20 +18,126 @@ import Testing
                           source: source, sourceName: source == tracker ? "Tracker" : "Diary")
     }
 
+    let install = "phone-a"
+
+    func item(_ food: HealthFoodReading) -> HealthItem { HealthHistory.item(food, timeZone: newYork) }
+
+    /// A record of `food` imported by `owner`.
+    func record(_ food: HealthFoodReading, owner: String = "phone-a", state: HealthImport.State = .imported) -> HealthImport {
+        HealthImport(id: food.id, kind: .food, target: food.id.uuidString, owner: owner, source: food.source, sourceName: food.sourceName,
+                     start: food.at, end: food.at, day: LocalDate(food.at, in: newYork), fingerprint: "f", state: state, updatedAt: at(1, 0))
+    }
+
+    func plan(_ added: [HealthFoodReading], deleted: Set<UUID> = [], full: Bool = false, records: [HealthImport] = [],
+              live: Set<UUID>? = nil, changed: Set<UUID> = [], preferred: [String] = []) -> HealthImportPlan<HealthFoodReading> {
+        HealthHistory.plan(added: added, deleted: deleted, full: full, records: records, install: install,
+                           live: live ?? Set(records.map(\.id)), changed: changed, grouping: .day, preferred: preferred, item: item)
+    }
+
     @Test func eachDaysFoodComesFromItsBestSourceAndIsPreviewedFirst() {
         // Oct 5: both apps saved the day; the tracker has more overall. Oct 6: only the diary.
         let foods = [food(5, 8, tracker, kcal: 300), food(5, 13, tracker, kcal: 600), food(6, 19, tracker, kcal: 700),
                      food(5, 8, diary, kcal: 310), food(7, 12, diary, kcal: 500)]
-        let imported = foods[2].id
-        let plan = HealthHistory.foods(foods, existing: [imported], timeZone: newYork)
-        let preview = plan.preview
-        #expect(Set(plan.adding.map(\.id)) == [foods[0].id, foods[1].id, foods[4].id])
-        #expect(preview.adding == 3 && preview.alreadyIn == 1 && preview.leftOut == 1)
-        #expect(preview.first == LocalDate("2026-10-05") && preview.last == LocalDate("2026-10-07"))
-        #expect(preview.sources == [.init(name: "Tracker", adding: 2, leftOut: 0), .init(name: "Diary", adding: 1, leftOut: 1)])
+        let first = plan(foods, full: true, records: [record(foods[2])])
+        #expect(Set(first.adding.map(\.id)) == [foods[0].id, foods[1].id, foods[4].id])
+        #expect(first.preview.adding == 3 && first.preview.alreadyIn == 1 && first.preview.leftOut == 1)
+        #expect(first.preview.first == LocalDate("2026-10-05") && first.preview.last == LocalDate("2026-10-07"))
+        #expect(first.preview.sources == [.init(name: "Tracker", adding: 2, leftOut: 0), .init(name: "Diary", adding: 1, leftOut: 1)])
+        #expect(Set(plan(foods, full: true, preferred: [diary]).adding.map(\.id)) == [foods[3].id, foods[2].id, foods[4].id],
+                "the person's order wins")
+    }
 
-        let chosen = HealthHistory.foods(foods, existing: [], timeZone: newYork, preferred: [diary])
-        #expect(Set(chosen.adding.map(\.id)) == [foods[3].id, foods[2].id, foods[4].id], "the person's order wins")
+    @Test func aBetterSourceLaterDisplacesTheDayAndItComesBackWhenThatGoes() {
+        let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310)
+        let displaced = plan([better], records: [record(breakfast)], preferred: [tracker])
+        #expect(displaced.adding.map(\.id) == [better.id] && displaced.displacing == [breakfast.id] && displaced.removing.isEmpty)
+        // The tracker's is deleted in Health: it goes, and the diary's comes back.
+        let back = plan([], deleted: [better.id], records: [record(breakfast, state: .displaced), record(better)], preferred: [tracker])
+        #expect(back.removing == [better.id] && back.restoring == [breakfast.id])
+        // A worse source adds nothing to a day already held.
+        #expect(plan([food(5, 9, diary, kcal: 1)], records: [record(better)], preferred: [tracker]).adding.isEmpty)
+    }
+
+    @Test func nothingIsTakenOutForBeingMissingOnlyForHealthsDeletions() {
+        let soup = food(5, 12, tracker, kcal: 250), toast = food(5, 8, tracker, kcal: 120)
+        let records = [record(soup), record(toast)]
+        // A read that comes back empty, as a revoked one does.
+        let empty = plan([], full: true, records: records)
+        #expect(empty.removing.isEmpty && empty.displacing.isEmpty && empty.missing == [soup.id, toast.id].sorted { $0.uuidString < $1.uuidString })
+        #expect(empty.preview.missing == 2)
+        #expect(plan([], records: records).missing.isEmpty, "an anchored read lists nothing as missing")
+        #expect(plan([], deleted: [soup.id], records: records).removing == [soup.id])
+    }
+
+    @Test func whatTheyChangedOrAnotherInstallImportedIsNeverTakenOut() {
+        let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310)
+        let changed = plan([better], deleted: [breakfast.id], records: [record(breakfast)], changed: [breakfast.id], preferred: [tracker])
+        #expect(changed.removing.isEmpty && changed.displacing.isEmpty && changed.adding.isEmpty, "theirs now, and it holds its day")
+        let theirs = [record(breakfast, owner: "phone-b")]
+        let other = plan([better], deleted: [breakfast.id], full: true, records: theirs, preferred: [tracker])
+        #expect(other.removing.isEmpty && other.displacing.isEmpty && other.adding.isEmpty)
+        #expect(plan([breakfast], full: true, records: theirs).adoptable == [breakfast.id], "a full read offers it to keep as this phone's")
+        #expect(plan([breakfast], records: theirs).adoptable.isEmpty, "never implicitly")
+    }
+
+    @Test func overlappingWorkoutsAddOnceFromTheBestSourceInsideTheDaysKept() {
+        func workout(_ start: Date, _ end: Date, _ source: String) -> HealthWorkoutReading {
+            HealthWorkoutReading(id: UUID(), start: start, end: end, activity: "Running", kilocalories: 300, source: source, sourceName: source)
+        }
+        let run = [workout(at(5, 7), at(5, 7, 40), watch), workout(at(5, 7, 2), at(5, 7, 41), tracker)]
+        let ride = workout(at(5, 17), at(5, 18), tracker)
+        let old = workout(at(5, 7).addingTimeInterval(-11 * 365 * 86400), at(5, 8).addingTimeInterval(-11 * 365 * 86400), tracker)
+        let result = HealthHistory.plan(added: run + [ride, old], full: true, records: [], install: install, live: [], changed: [],
+                                        grouping: .overlap, within: LocalDate("2016-10-08")!...LocalDate("2026-10-08")!) {
+            HealthHistory.item($0, timeZone: newYork)
+        }
+        #expect(result.adding.map(\.id) == [run[0].id, ride.id])
+        #expect(result.preview.leftOut == 1 && result.preview.adding == 2 && result.preview.outside == 1)
+    }
+
+    @Test func foodChangesAreSavedWithTheirRecordsAndRecheckedInside() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let store = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
+        let imports = try HealthImportStore(persistence: persistence)
+        let soup = food(5, 12, tracker, kcal: 250), toast = food(5, 8, tracker, kcal: 120)
+        var changes = HealthFoodChanges()
+        changes.adding = [soup, toast]
+        #expect(try imports.apply(changes, to: store, install: install, timeZone: newYork).added == 2)
+        #expect(imports.records.count == 2 && imports.records[soup.id]?.owner == install)
+        // Changed after the plan was made: removal is checked again as it's saved.
+        let entry = try #require(store.entries.first { $0.id == soup.id })
+        try store.saveEntry(entry.editingNutrients(NutrientAmounts([.energy: 320])))
+        var removing = HealthFoodChanges()
+        removing.removing = [soup.id, toast.id]
+        #expect(try imports.apply(removing, to: store, install: install, timeZone: newYork).removed == 1)
+        #expect(store.entries.map(\.id) == [soup.id] && imports.records[toast.id]?.state == .removed)
+        #expect(try imports.apply(removing, to: store, install: "phone-b", timeZone: newYork).removed == 0, "never another install")
+        // Both kinds reach the documents sync tracks.
+        #expect(try persistence.loadDocuments(kind: "health_import").count == 2)
+        #expect(try persistence.loadDocuments(kind: "food_entry").count == 1)
+    }
+
+    /// Merge note (claude/sync): Health's additions and removals go through
+    /// the persistence saves and deletes that document sync tracks, records too.
+    @Test func healthImportsAndRemovalsReachTheServerWithTheirRecords() async throws {
+        let server = FakeDocumentServer(), disk = InMemoryTrainingPersistence()
+        let store = try NutritionStore(persistence: disk), imports = try HealthImportStore(persistence: disk)
+        let sync = SyncEngine(hosts: [store, imports], state: disk, api: server)
+        let soup = food(5, 12, tracker, kcal: 250)
+        var adding = HealthFoodChanges()
+        adding.adding = [soup]
+        try imports.apply(adding, to: store, install: install, timeZone: newYork)
+        try await sync.sync()
+        #expect(server.revision("food_entry", soup.id.uuidString) != nil && server.revision("health_import", soup.id.uuidString) != nil)
+        var removing = HealthFoodChanges()
+        removing.removing = [soup.id]
+        try imports.apply(removing, to: store, install: install, timeZone: newYork)
+        try await sync.sync()
+        let other = InMemoryTrainingPersistence()
+        let otherStore = try NutritionStore(persistence: other), otherImports = try HealthImportStore(persistence: other)
+        try await SyncEngine(hosts: [otherStore, otherImports], state: other, api: server).sync()
+        #expect(otherStore.entries.isEmpty, "the removal reached another device")
+        #expect(otherImports.records[soup.id]?.state == .removed && otherImports.records[soup.id]?.owner == install)
     }
 
     @Test func importedFoodsLandInTheirMealOnceAndAreNeverWrittenBack() throws {
@@ -47,65 +153,6 @@ import Testing
 
         try store.importHealthFoods([], deleted: [breakfast.id], timeZone: newYork)
         #expect(store.entries(on: LocalDate("2026-10-05")!).map(\.id) == [unnamed.id], "deleted in Health, gone here")
-    }
-
-    @Test func overlappingWorkoutsAddOnceFromTheBestSource() {
-        func workout(_ start: Date, _ end: Date, _ source: String) -> HealthWorkoutReading {
-            HealthWorkoutReading(id: UUID(), start: start, end: end, activity: "Running", kilocalories: 300, source: source, sourceName: source)
-        }
-        // A watch and a running app record one run; a ride later is only in the app.
-        let run = [workout(at(5, 7), at(5, 7, 40), watch), workout(at(5, 7, 2), at(5, 7, 41), tracker)]
-        let ride = workout(at(5, 17), at(5, 18), tracker)
-        let plan = HealthHistory.workouts(run + [ride], existing: [], timeZone: newYork)
-        #expect(plan.adding.map(\.id) == [run[0].id, ride.id])
-        #expect(plan.preview.leftOut == 1 && plan.preview.adding == 2)
-        #expect(plan.adding[0].minutes == 40)
-    }
-
-    @Test func aBetterSourceLaterReplacesTheDayImportedBeforeAndAWorseOneAddsNothing() {
-        let breakfast = food(5, 8, diary, kcal: 300)
-        let first = HealthHistory.foods([breakfast], existing: [], timeZone: newYork)
-        #expect(first.adding.map(\.id) == [breakfast.id] && first.imported == [breakfast.id])
-
-        // The tracker saves the same breakfast later. With more of the day's history, the diary keeps it.
-        let more = [breakfast, food(5, 13, diary, kcal: 500), food(5, 8, tracker, kcal: 310)]
-        let worse = HealthHistory.foods(more, existing: [breakfast.id], imported: first.imported, timeZone: newYork)
-        #expect(worse.adding.map(\.id) == [more[1].id] && worse.removing.isEmpty && worse.preview.leftOut == 1)
-
-        // Chosen first, the tracker's replaces it, even though it arrives alone.
-        let better = HealthHistory.foods([breakfast, more[2]], existing: [breakfast.id], imported: first.imported, timeZone: newYork,
-                                         preferred: [tracker])
-        #expect(better.adding.map(\.id) == [more[2].id] && better.removing == [breakfast.id])
-        #expect(better.preview.adding == 1 && better.preview.removing == 1)
-        #expect(better.imported == [more[2].id], "what's taken out can come back if it's best again")
-    }
-
-    @Test func whatHealthNoLongerHasIsTakenOutUnlessTheyChangedIt() {
-        let soup = food(5, 12, tracker, kcal: 250), toast = food(5, 8, tracker, kcal: 120)
-        // Imported, then deleted in Health while reading was off: the next full read finds it gone.
-        let plan = HealthHistory.foods([toast], existing: [soup.id, toast.id], imported: [soup.id, toast.id], timeZone: newYork)
-        #expect(plan.removing == [soup.id] && plan.preview.removing == 1 && plan.adding.isEmpty)
-        #expect(HealthHistory.foods([toast], existing: [soup.id, toast.id], imported: [soup.id, toast.id], locked: [soup.id],
-                                    timeZone: newYork).removing.isEmpty, "an entry they edited is theirs")
-        // One from another phone's Health is left alone; one they deleted here isn't added back.
-        #expect(HealthHistory.foods([toast], existing: [soup.id], imported: [toast.id], timeZone: newYork).removing.isEmpty)
-        #expect(HealthHistory.foods([toast], existing: [soup.id], imported: [toast.id], timeZone: newYork).adding.isEmpty)
-        // After a reinstall, what's synced and still in Health counts as imported here again.
-        let reinstalled = HealthHistory.foods([toast], existing: [toast.id], imported: [], timeZone: newYork)
-        #expect(reinstalled.imported == [toast.id] && reinstalled.preview.alreadyIn == 1 && reinstalled.adding.isEmpty)
-    }
-
-    @Test func workoutsOutsideTheTenYearsExerlyKeepsAreSetAsideAndTheRestImport() {
-        func workout(_ start: Date, _ source: String = "com.example.runs") -> HealthWorkoutReading {
-            HealthWorkoutReading(id: UUID(), start: start, end: start.addingTimeInterval(1800), activity: "Running", kilocalories: 300,
-                                 source: source, sourceName: "Runs")
-        }
-        let old = workout(at(5, 7).addingTimeInterval(-11 * 365 * 86400)), recent = workout(at(5, 7)), ahead = workout(at(9, 7))
-        let window = LocalDate("2016-10-08")!...LocalDate("2026-10-08")!
-        let plan = HealthHistory.workouts([old, recent, ahead], existing: [old.id], imported: [old.id], timeZone: newYork, within: window)
-        #expect(plan.adding.map(\.id) == [recent.id])
-        #expect(plan.preview.outside == 2 && plan.preview.adding == 1)
-        #expect(plan.removing.isEmpty, "one imported when it was newer stays")
     }
 
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {

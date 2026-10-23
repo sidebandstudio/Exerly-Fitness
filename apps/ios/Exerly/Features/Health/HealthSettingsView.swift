@@ -177,7 +177,9 @@ struct HealthKitSettingsView: View {
             await history.refresh()
         }
         .sheet(item: $history.pending) { pending in
-            HealthImportPreviewSheet(pending: pending, onImport: { Task { await history.confirm() } }, onCancel: history.cancel)
+            HealthImportPreviewSheet(pending: pending, onImport: { remove, adopt in
+                Task { await history.confirm(removeMissing: remove, adopt: adopt) }
+            }, onCancel: history.cancel)
         }
         .onDisappear {
             activity.close()
@@ -282,6 +284,13 @@ struct HealthKitSettingsView: View {
             .accessibilityIdentifier("health.history.\(kind.rawValue)")
             if history.requesting == kind { ProgressView("Reading Health…").font(.exCaption) }
             historyNotes(kind)
+            if history.enabled.contains(kind) {
+                // A deliberate full read: lists what's no longer in Health, and what this iPhone could keep as its own.
+                Button("Check everything again") { Task { await history.checkEverythingAgain(kind) } }
+                    .font(.exCaption.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                    .disabled(history.requesting != nil)
+                    .accessibilityIdentifier("health.history.\(kind.rawValue).checkAgain")
+            }
         }
     }
 

@@ -70,9 +70,17 @@ public struct HealthHistoryPreview: Sendable, Hashable {
     public var alreadyIn = 0
     /// Records set aside by source priority.
     public var leftOut = 0
-    /// Records imported earlier to take out: deleted in Health, or now set
-    /// aside for a better source's.
+    /// Imports Health deleted, taken out.
     public var removing = 0
+    /// Imports a better source now covers, taken out until it goes.
+    public var displacing = 0
+    /// Imports put back because the better source's record went.
+    public var restoring = 0
+    /// Imports no longer in Health, with no deletion: kept unless they choose.
+    public var missing = 0
+    /// Imports another install made, or that have no record, of samples this
+    /// phone's Health has: theirs to keep as this iPhone's.
+    public var adoptable = 0
     /// Records dated outside the days Exerly keeps, never imported.
     public var outside = 0
     /// The first and last day of what would be added.
@@ -83,99 +91,184 @@ public struct HealthHistoryPreview: Sendable, Hashable {
 
     public init() {}
 
-    public var isEmpty: Bool { adding == 0 && removing == 0 }
+    public var isEmpty: Bool { adding + removing + displacing + restoring == 0 }
 }
 
-/// What reading Health would change, and what this install has imported
-/// once it's done.
-public struct HealthHistoryPlan<Reading> {
+/// What reading Health would change. Removal, displacement and restoring
+/// touch only this install's records; nothing goes because it's missing.
+public struct HealthImportPlan<Reading> {
     public var preview: HealthHistoryPreview
     public var adding: [Reading]
-    /// Imported records to take out, by Health ID.
+    /// This install's unchanged imports Health deleted.
     public var removing: [UUID]
-    /// The Health IDs imported here and still in Health or Exerly, to save
-    /// once the changes are made. An entry deleted in Exerly stays in it, so
-    /// it isn't added back.
-    public var imported: Set<UUID>
+    /// This install's unchanged imports a better source now covers.
+    public var displacing: [UUID]
+    /// This install's displaced imports whose better source went.
+    public var restoring: [UUID]
+    /// This install's imports a full read no longer finds, with no deletion.
+    public var missing: [UUID]
+    /// Imports this install could adopt: another's, or entries with no record.
+    public var adoptable: [UUID]
+}
+
+/// What a reading is, for grouping and priority.
+public struct HealthItem: Sendable, Hashable {
+    public var id: UUID
+    public var source: String
+    public var sourceName: String
+    public var start: Date
+    public var end: Date
+    public var day: LocalDate
+
+    public init(id: UUID, source: String, sourceName: String, start: Date, end: Date, day: LocalDate) {
+        self.id = id
+        self.source = source
+        self.sourceName = sourceName
+        self.start = start
+        self.end = end
+        self.day = day
+    }
+
+    init(_ record: HealthImport) {
+        self.init(id: record.id, source: record.source, sourceName: record.sourceName, start: record.start, end: record.end, day: record.day)
+    }
 }
 
 public enum HealthHistory {
-    /// Foods from Health to import, from everything Health has now: each
-    /// day's from its best source only, so two apps that both saved the same
-    /// meals don't count them twice. `existing` is every Health ID with an
-    /// entry in Exerly, from any device; `imported`, those this install
-    /// imported. An imported entry whose food is gone from Health, or whose
-    /// day a better source now covers, is taken out, unless it's `locked`
-    /// because the person changed it.
-    public static func foods(_ readings: [HealthFoodReading], existing: Set<UUID>, imported: Set<UUID> = [], locked: Set<UUID> = [],
-                             timeZone: TimeZone, preferred: [String] = []) -> HealthHistoryPlan<HealthFoodReading> {
-        let day = { (food: HealthFoodReading) in LocalDate(food.at, in: food.timeZone ?? timeZone) }
-        return plan(readings, existing: existing, imported: imported, locked: locked, preferred: preferred, id: \.id, source: \.source,
-                    sourceName: \.sourceName, day: day, group: day)
+    /// How records count as the same: food by day, workouts by overlapping time.
+    public enum Grouping: Sendable { case day, overlap }
+
+    /// What Health's changes mean for Exerly, against the account's synced
+    /// records. `added` and `deleted` come from an anchored read, or `added`
+    /// is everything when `full`. `live` holds the records whose entry or
+    /// activity is still in Exerly, `changed` those they've changed since
+    /// import, and `untracked` the readings already in Exerly with no record.
+    public static func plan<T>(added: [T], deleted: Set<UUID> = [], full: Bool, records: [HealthImport], install: String,
+                               live: Set<UUID>, changed: Set<UUID>, untracked: Set<UUID> = [], grouping: Grouping,
+                               within: ClosedRange<LocalDate>? = nil, preferred: [String] = [],
+                               item: (T) -> HealthItem) -> HealthImportPlan<T> {
+        let known = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let mine = { (record: HealthImport) in record.owner == install }
+        // Health's deletions: this install's, as imported, are taken out.
+        var removing: [UUID] = []
+        for id in deleted.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let record = known[id], mine(record) else { continue }
+            if record.state == .displaced || (record.state == .imported && (!live.contains(id) || !changed.contains(id))) { removing.append(id) }
+        }
+        let gone = Set(removing)
+        let present = Set(added.map { item($0).id })
+        var outside = 0
+        var fresh: [T] = []
+        for reading in added where known[item(reading).id] == nil && !untracked.contains(item(reading).id) {
+            if let within, !within.contains(item(reading).day) { outside += 1 } else { fresh.append(reading) }
+        }
+        // What counts for a day or time: what's in Exerly, what's set aside to come back, and what's new.
+        let held = records.filter { record in
+            !gone.contains(record.id) && (record.state == .displaced || (record.state == .imported && live.contains(record.id)))
+        }
+        var members = held.map { (item: HealthItem($0), record: Optional($0), reading: T?.none) }
+            + fresh.map { (item: item($0), record: HealthImport?.none, reading: Optional($0)) }
+        members.sort { ($0.item.start, $0.item.id.uuidString) < ($1.item.start, $1.item.id.uuidString) }
+        var group: [UUID: Int] = [:]
+        switch grouping {
+        case .day:
+            var days: [LocalDate: Int] = [:]
+            for member in members {
+                if days[member.item.day] == nil { days[member.item.day] = days.count }
+                group[member.item.id] = days[member.item.day]
+            }
+        case .overlap:
+            var current = -1, reach = Date.distantPast
+            for member in members {
+                if member.item.start >= reach { current += 1 }
+                reach = max(reach, member.item.end)
+                group[member.item.id] = current
+            }
+        }
+        let order = HealthSourcePriority.order(Dictionary(members.map { ($0.item.source, 1) }, uniquingKeysWith: +), preferred: preferred)
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: min)
+        var adding: [T] = [], displacing: [UUID] = [], restoring: [UUID] = [], leftOut: [T] = []
+        for (_, those) in Dictionary(grouping: members, by: { group[$0.item.id] ?? 0 }) {
+            let best = those.map(\.item.source).min { rank[$0, default: .max] < rank[$1, default: .max] }
+            let worse = those.filter { $0.item.source != best }
+            // A day or time held by what this install may not take out (another's, or one they changed) stays as it is.
+            let frozen = worse.contains { member in
+                guard let record = member.record, record.state == .imported else { return false }
+                return !mine(record) || changed.contains(record.id)
+            }
+            for member in those {
+                switch (member.record, member.reading) {
+                case (nil, let reading?):
+                    if !frozen, member.item.source == best { adding.append(reading) } else { leftOut.append(reading) }
+                case (let record?, _) where !frozen && mine(record):
+                    if record.state == .imported, member.item.source != best { displacing.append(record.id) }
+                    if record.state == .displaced, member.item.source == best { restoring.append(record.id) }
+                default: break
+                }
+            }
+        }
+        adding.sort { (item($0).start, item($0).id.uuidString) < (item($1).start, item($1).id.uuidString) }
+        var missing: [UUID] = [], adoptable: [UUID] = []
+        if full {
+            for record in records where record.state == .imported && live.contains(record.id) && !gone.contains(record.id) {
+                if mine(record) { if !present.contains(record.id) { missing.append(record.id) } } else if present.contains(record.id) {
+                    adoptable.append(record.id)
+                }
+            }
+            adoptable += untracked.intersection(present)
+        }
+        let sorted = { (ids: [UUID]) in ids.sorted { $0.uuidString < $1.uuidString } }
+        var preview = HealthHistoryPreview()
+        preview.adding = adding.count
+        preview.alreadyIn = held.filter { $0.state == .imported }.count + untracked.intersection(present).count
+        preview.leftOut = leftOut.count
+        preview.removing = removing.count
+        preview.displacing = displacing.count
+        preview.restoring = restoring.count
+        preview.missing = missing.count
+        preview.adoptable = adoptable.count
+        preview.outside = outside
+        let days = adding.map { item($0).day }
+        preview.first = days.min()
+        preview.last = days.max()
+        let addingIDs = Set(adding.map { item($0).id }), leftOutIDs = Set(leftOut.map { item($0).id })
+        let names = Dictionary(members.map { ($0.item.source, $0.item.sourceName) }, uniquingKeysWith: { first, _ in first })
+        preview.sources = order.compactMap { key in
+            let theirs = fresh.map(item).filter { $0.source == key }
+            guard !theirs.isEmpty else { return nil }
+            return .init(name: names[key] ?? key, adding: theirs.filter { addingIDs.contains($0.id) }.count,
+                         leftOut: theirs.filter { leftOutIDs.contains($0.id) }.count)
+        }
+        return HealthImportPlan(preview: preview, adding: adding, removing: removing, displacing: sorted(displacing),
+                                restoring: sorted(restoring), missing: sorted(missing), adoptable: sorted(adoptable))
     }
 
-    /// Workouts from Health to import, in the same way: of workouts that
-    /// overlap in time, only those from the best source, so a watch and a
-    /// running app recording one run add it once. Those dated outside
-    /// `within` are set aside.
-    public static func workouts(_ readings: [HealthWorkoutReading], existing: Set<UUID>, imported: Set<UUID> = [], timeZone: TimeZone,
-                                within: ClosedRange<LocalDate>? = nil,
-                                preferred: [String] = []) -> HealthHistoryPlan<HealthWorkoutReading> {
-        let day = { (workout: HealthWorkoutReading) in LocalDate(workout.start, in: workout.timeZone ?? timeZone) }
-        // Overlapping workouts share the group of the first one in their run of overlaps.
-        let sorted = readings.sorted { $0.start < $1.start }
-        var group: [UUID: Int] = [:]
-        var current = -1, reach = Date.distantPast
-        for workout in sorted {
-            if workout.start >= reach { current += 1 }
-            reach = max(reach, workout.end)
-            group[workout.id] = current
-        }
-        return plan(sorted, existing: existing, imported: imported, locked: [], preferred: preferred, id: \.id, source: \.source,
-                    sourceName: \.sourceName, day: day, group: { group[$0.id] ?? 0 }, eligible: { within?.contains(day($0)) ?? true })
+    public static func item(_ food: HealthFoodReading, timeZone: TimeZone) -> HealthItem {
+        HealthItem(id: food.id, source: food.source, sourceName: food.sourceName, start: food.at, end: food.at,
+                   day: LocalDate(food.at, in: food.timeZone ?? timeZone))
+    }
+
+    public static func item(_ workout: HealthWorkoutReading, timeZone: TimeZone) -> HealthItem {
+        HealthItem(id: workout.id, source: workout.source, sourceName: workout.sourceName, start: workout.start, end: workout.end,
+                   day: LocalDate(workout.start, in: workout.timeZone ?? timeZone))
     }
 
     /// Weigh-ins from Health: every reading, as the weigh-in switch imports
     /// them, counted by source.
     public static func weights(_ readings: [(weight: HealthWeight, source: String)], existing: Set<UUID>,
                                timeZone: TimeZone) -> HealthHistoryPreview {
-        plan(readings, existing: existing, imported: [], locked: [], preferred: [], id: \.weight.id, source: \.source,
-             sourceName: \.source, day: { LocalDate($0.weight.at, in: $0.weight.timeZone ?? timeZone) }, group: { $0.weight.id }).preview
-    }
-
-    private static func plan<T, Group: Hashable>(_ readings: [T], existing: Set<UUID>, imported: Set<UUID>, locked: Set<UUID>,
-                                                 preferred: [String], id: (T) -> UUID, source: (T) -> String,
-                                                 sourceName: (T) -> String, day: (T) -> LocalDate, group: (T) -> Group,
-                                                 eligible: (T) -> Bool = { _ in true }) -> HealthHistoryPlan<T> {
-        let allowed = readings.filter(eligible)
-        let order = HealthSourcePriority.order(Dictionary(allowed.map { (source($0), 1) }, uniquingKeysWith: +), preferred: preferred)
-        let kept = HealthSourcePriority.resolve(allowed, order: order, source: source, group: group).kept
-        let keptIDs = Set(kept.map(id)), present = Set(readings.map(id)), allowedIDs = Set(allowed.map(id))
-        // What's in Exerly and still in this phone's Health was imported here,
-        // even by an earlier install.
-        let mine = imported.union(existing.intersection(present))
-        let adding = kept.filter { !existing.contains(id($0)) && !mine.contains(id($0)) }
-        // One set aside by its date stays as it was imported.
-        let removing = mine.intersection(existing).subtracting(keptIDs).subtracting(locked)
-            .filter { allowedIDs.contains($0) || !present.contains($0) }.sorted { $0.uuidString < $1.uuidString }
         var preview = HealthHistoryPreview()
+        let adding = readings.filter { !existing.contains($0.weight.id) }
         preview.adding = adding.count
-        preview.alreadyIn = kept.filter { existing.contains(id($0)) }.count
-        preview.leftOut = allowed.count - kept.count
-        preview.removing = removing.count
-        preview.outside = readings.count - allowed.count
-        let days = adding.map(day)
+        preview.alreadyIn = readings.count - adding.count
+        let days = adding.map { LocalDate($0.weight.at, in: $0.weight.timeZone ?? timeZone) }
         preview.first = days.min()
         preview.last = days.max()
-        let names = Dictionary(allowed.map { (source($0), sourceName($0)) }, uniquingKeysWith: { first, _ in first })
-        let addingIDs = Set(adding.map(id))
-        preview.sources = order.map { key in
-            let theirs = allowed.filter { source($0) == key }
-            return .init(name: names[key] ?? key, adding: theirs.filter { addingIDs.contains(id($0)) }.count,
-                         leftOut: theirs.filter { !keptIDs.contains(id($0)) }.count)
+        let order = HealthSourcePriority.order(Dictionary(readings.map { ($0.source, 1) }, uniquingKeysWith: +))
+        preview.sources = order.map { name in
+            .init(name: name, adding: adding.filter { $0.source == name }.count, leftOut: 0)
         }
-        let tracked = mine.union(addingIDs).subtracting(removing).intersection(present.union(existing))
-        return HealthHistoryPlan(preview: preview, adding: adding, removing: removing, imported: tracked)
+        return preview
     }
 
     /// The activity a Health workout becomes for an account: the same on
@@ -200,36 +293,39 @@ public enum HealthHistory {
 }
 
 extension NutritionStore {
-    /// Adds foods read from Health as entries, all or none. Each keeps its
-    /// Health ID, so importing again adds nothing; a food deleted in Health
-    /// removes its entry. Its meal is the one the clock gives at its time,
-    /// and it's never written back to Health (see `HealthFoodRecord`).
+    /// The entry a food from Health becomes: its Health ID, the meal the
+    /// clock gives at its time, never written back to Health (see `HealthFoodRecord`).
+    static func entry(for reading: HealthFoodReading, timeZone: TimeZone) -> FoodEntry {
+        let zone = reading.timeZone ?? timeZone
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let parts = calendar.dateComponents([.hour, .minute], from: reading.at)
+        let name = reading.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Food from \(reading.sourceName)"
+        var food = FoodSnapshot(foodID: HealthHistory.foodID(source: reading.source, name: name), name: name,
+                                brand: reading.sourceName, source: .imported, per100g: reading.nutrients)
+        food.unweighed = true
+        let at = reading.at.roundedToMilliseconds
+        return FoodEntry(id: reading.id, date: LocalDate(at, in: zone), meal: meal(atMinute: (parts.hour ?? 12) * 60 + (parts.minute ?? 0)),
+                         loggedAt: at, food: food, grams: 100)
+    }
+
+    /// Adds foods read from Health as entries, all or none, published once.
+    /// Each keeps its Health ID, so importing again adds nothing; `deleted`
+    /// takes out entries imported from Health.
     @discardableResult
     public func importHealthFoods(_ readings: [HealthFoodReading], deleted: [UUID] = [], timeZone: TimeZone) throws -> Int {
         let known = Set(entries.map(\.id))
-        var writes: [(UUID, FoodEntry?)] = deleted.filter { id in
+        var writes = deleted.filter { id in
             entries.contains { $0.id == id && $0.food.foodID.hasPrefix(HealthHistory.foodIDPrefix) }
-        }.map { ($0, nil) }
+        }.map { DocumentWrite(kind: Self.entryKind, id: $0.uuidString, payload: nil) }
         for reading in readings where !known.contains(reading.id) && !deleted.contains(reading.id) {
-            let zone = reading.timeZone ?? timeZone
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            let parts = calendar.dateComponents([.hour, .minute], from: reading.at)
-            let name = reading.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Food from \(reading.sourceName)"
-            var food = FoodSnapshot(foodID: HealthHistory.foodID(source: reading.source, name: name), name: name,
-                                    brand: reading.sourceName, source: .imported, per100g: reading.nutrients)
-            food.unweighed = true
-            let at = reading.at.roundedToMilliseconds
-            writes.append((reading.id, FoodEntry(id: reading.id, date: LocalDate(at, in: zone),
-                                                 meal: Self.meal(atMinute: (parts.hour ?? 12) * 60 + (parts.minute ?? 0)),
-                                                 loggedAt: at, food: food, grams: 100)))
+            writes.append(DocumentWrite(kind: Self.entryKind, id: reading.id.uuidString,
+                                        payload: try ExerlyJSON.canonical(Self.entry(for: reading, timeZone: timeZone))))
         }
         guard !writes.isEmpty else { return 0 }
-        var publish: [() -> Void] = []
         try persistence.performAtomically {
-            publish = try writes.map { try prepareWrite(kind: Self.entryKind, id: $0.0.uuidString, payload: $0.1.map(ExerlyJSON.canonical)) }
+            persistence.afterCommit(try prepareWrites(kind: Self.entryKind, writes))
         }
-        publish.forEach { $0() }
-        return writes.filter { $0.1 != nil }.count
+        return writes.filter { $0.payload != nil }.count
     }
 }

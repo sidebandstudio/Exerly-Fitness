@@ -65,7 +65,7 @@ private struct Offer: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("health.prompt")
         .sheet(item: $history.pending) { pending in
-            HealthImportPreviewSheet(pending: pending, onImport: {
+            HealthImportPreviewSheet(pending: pending, onImport: { _, _ in
                 Task {
                     await history.confirm()
                     if sync.preferences.isOn(.readWeights) { sync.dismissPrompt() }

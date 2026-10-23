@@ -13,6 +13,7 @@ final class HealthHistoryReadsTests: XCTestCase {
     private var workspace: TrainingWorkspace!
     private var activities: FakeActivityStore!
     private var current = "history"
+    private var install = "this-phone"
     private var reviewedWeights: [Set<UUID>] = []
     private var weightsMatch = true
 
@@ -22,6 +23,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         workspace = try TrainingWorkspace(accountID: "history", root: temporaryRoot())
         activities = FakeActivityStore(today: LocalDate(Date(), in: zone))
         current = "history"
+        install = "this-phone"
         reviewedWeights = []
         weightsMatch = true
     }
@@ -34,9 +36,20 @@ final class HealthHistoryReadsTests: XCTestCase {
 
     private func model(_ account: String = "history", defaults: UserDefaults? = nil) -> HealthHistoryModel {
         HealthHistoryModel(accountID: account, timeZone: zone, client: client, namespace: "test", defaults: defaults ?? self.defaults,
+                           install: install,
                            workspace: { self.workspace }, isCurrent: { $0 == self.current },
                            enableWeights: { self.reviewedWeights.append($0); return self.weightsMatch },
                            activities: { self.activities })
+    }
+
+    /// Health answering as if it had nothing, as a revoked read does: no samples, and no deletions.
+    private func revoke() { client.revoked = true }
+
+    /// Entries another phone imported, with their records, which reached this one by sync.
+    private func importedOnAnotherPhone(_ foods: [HealthFoodReading]) throws {
+        var changes = HealthFoodChanges()
+        changes.adding = foods
+        try workspace.healthImports.apply(changes, to: workspace.nutrition, install: "another-phone", timeZone: zone)
     }
 
     private func food(_ hour: Int, _ source: String, daysAgo: Int = 1) -> HealthFoodReading {
@@ -72,8 +85,8 @@ final class HealthHistoryReadsTests: XCTestCase {
         let later = food(19, "com.example.tracker", daysAgo: 0)
         client.foods = [earlier, other, later]
         await model().refresh()
-        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), [earlier.id, other.id, later.id],
-                       "Deleted in Health, gone here, so the diary's covers that day; new ones added")
+        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), [earlier.id, later.id], "Deleted in Health, gone here; new ones added")
+        XCTAssertEqual(client.anchorsSeen.count, 2, "Read from where the import stopped")
         XCTAssertTrue(model("someone-else").enabled.isEmpty, "Each account chooses its own")
     }
 
@@ -151,12 +164,14 @@ final class HealthHistoryReadsTests: XCTestCase {
         let synced = activities.states
         activities.states = [:]
         activities.remote = synced
+        install = "new-install"
         let reinstalled = model(defaults: UserDefaults(suiteName: "history-\(UUID().uuidString)"))
         await reinstalled.begin(.workouts)
         XCTAssertEqual(reinstalled.pending?.preview.adding, 0, "Found in the account, not added again")
         XCTAssertEqual(reinstalled.pending?.preview.alreadyIn, 2)
         XCTAssertFalse(activities.read.isEmpty, "The account's days were read first")
-        await reinstalled.confirm()
+        XCTAssertEqual(reinstalled.pending?.preview.adoptable, 2, "Offered to keep as this iPhone's, never taken")
+        await reinstalled.confirm(adopt: true)
         XCTAssertEqual(activities.saved.count, 2)
 
         client.workouts = [ride]
@@ -233,30 +248,183 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(reviewedWeights.last, [scale.id, added.id])
         XCTAssertEqual(history.lastImport[.weights], "Added 2 weigh-ins.")
     }
+
+    // MARK: Review 2
+
+    /// Item 1: a read Health has revoked looks like no data, so nothing imported goes for it.
+    func testARevokedReadRemovesNothing() async throws {
+        let breakfast = food(8, "com.example.tracker"), lunch = food(12, "com.example.tracker")
+        client.foods = [breakfast, lunch]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        revoke()
+        await history.refresh()
+        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), [breakfast.id, lunch.id])
+        // Checking everything again lists them, kept unless they choose.
+        await history.checkEverythingAgain(.foods)
+        XCTAssertEqual(history.pending?.preview.missing, 2)
+        await history.confirm()
+        XCTAssertEqual(workspace.nutrition.entries.count, 2, "Kept: removing them is off until chosen")
+        await history.checkEverythingAgain(.foods)
+        await history.confirm(removeMissing: true)
+        XCTAssertTrue(workspace.nutrition.entries.isEmpty, "Removed once chosen")
+    }
+
+    /// Item 2: an entry they changed, in amount or day and meal, stays when
+    /// a better source covers its day and Health deletes it.
+    func testAnEntryTheyChangedStaysWhenOutrankedOrDeleted() async throws {
+        let breakfast = food(8, "com.example.zdiary"), snack = food(15, "com.example.zdiary", daysAgo: 2)
+        client.foods = [breakfast, snack]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        var portion = try XCTUnwrap(workspace.nutrition.entries.first { $0.id == breakfast.id })
+        portion.grams = 150
+        try workspace.nutrition.saveEntry(portion)
+        try workspace.nutrition.move([snack.id], to: LocalDate(Date(), in: zone), meal: "Dinner")
+        client.foods = [food(8, "com.example.atracker"), food(15, "com.example.atracker", daysAgo: 2)]
+        await history.refresh()
+        XCTAssertTrue(Set(workspace.nutrition.entries.map(\.id)).isSuperset(of: [breakfast.id, snack.id]))
+    }
+
+    /// Item 2: a nutrient change made while the preview is open keeps the entry it would take out.
+    func testANutrientChangeAfterThePreviewKeepsTheEntry() async throws {
+        let soup = food(12, "com.example.zdiary")
+        client.foods = [soup]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods = [food(12, "com.example.atracker")]
+        await history.checkEverythingAgain(.foods)
+        let entry = try XCTUnwrap(workspace.nutrition.entries.first { $0.id == soup.id })
+        try workspace.nutrition.saveEntry(entry.editingNutrients(NutrientAmounts([.energy: 320])))
+        await history.confirm(removeMissing: true)
+        XCTAssertTrue(workspace.nutrition.entries.contains { $0.id == soup.id })
+    }
+
+    /// Item 3: what another phone imported is never taken out here, outranked or missing.
+    func testAnotherPhonesImportsAreNeverRemovedHere() async throws {
+        let breakfast = food(8, "com.example.zdiary"), lunch = food(12, "com.example.zdiary", daysAgo: 3)
+        try importedOnAnotherPhone([breakfast, lunch])
+        client.foods = [breakfast, food(8, "com.example.atracker")]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods = [food(8, "com.example.atracker")]
+        await history.refresh()
+        XCTAssertTrue(Set(workspace.nutrition.entries.map(\.id)).isSuperset(of: [breakfast.id, lunch.id]))
+    }
+
+    /// Item 4: a workout set aside for a better one comes back when that one is deleted in Health.
+    func testADisplacedWorkoutComesBackWhenTheBetterOneIsDeleted() async throws {
+        let app = workout(source: "com.example.runs")
+        var watch = workout(source: "com.apple.health.watch")
+        watch.start = app.start.addingTimeInterval(60)
+        client.workouts = [app]
+        let history = model()
+        await history.begin(.workouts)
+        await history.confirm()
+        let appID = HealthHistory.activityID(for: app.id, accountID: "history")
+        client.workouts = [app, watch]
+        await history.refresh()
+        XCTAssertEqual(activities.states[appID], true, "Set aside for the watch's")
+        client.workouts = [app]
+        await history.refresh()
+        XCTAssertEqual(activities.states[appID], false, "Back once the watch's is deleted")
+    }
+
+    /// Item 2: an activity they changed stays when Health deletes its workout
+    /// and a better source covers its time, and nothing is added beside it.
+    func testAnActivityTheyChangedStaysWhenDeletedOrOutranked() async throws {
+        let run = workout(source: "com.example.runs")
+        client.workouts = [run]
+        let history = model()
+        await history.begin(.workouts)
+        await history.confirm()
+        let id = HealthHistory.activityID(for: run.id, accountID: "history")
+        activities.prints[id] = "they changed the minutes"
+        var watch = workout(source: "com.apple.health.watch")
+        watch.start = run.start.addingTimeInterval(60)
+        client.workouts = [watch]
+        await history.refresh()
+        XCTAssertEqual(activities.states[id], false)
+        XCTAssertTrue(activities.deleted.isEmpty)
+        XCTAssertEqual(activities.saved.count, 1, "The watch's isn't added beside theirs")
+    }
+
+    /// Item 8: offline just after a reinstall, nothing is added while the
+    /// account can't be checked, so nothing is sent twice and needs attention;
+    /// online, one already in the account is found, and only the new one is added.
+    func testOfflineAfterAReinstallAddsNothingUntilTheAccountIsReached() async throws {
+        let synced = workout(), fresh = workout(daysAgo: 1)
+        activities.remote[HealthHistory.activityID(for: synced.id, accountID: "history")] = false
+        client.workouts = [synced, fresh]
+        activities.reachable = false
+        let history = model()
+        await history.begin(.workouts)
+        XCTAssertEqual(history.pending?.preview.adding, 0)
+        XCTAssertNotNil(history.pending?.note)
+        await history.confirm()
+        XCTAssertTrue(activities.saved.isEmpty)
+        activities.reachable = true
+        await history.refresh()
+        XCTAssertEqual(activities.saved.map(\.clientID), [HealthHistory.activityID(for: fresh.id, accountID: "history")])
+    }
+
+    /// Item 5: turning reading off while Health is read saves nothing from that read.
+    func testTurningReadingOffDuringARefreshSavesNothing() async throws {
+        client.foods = [food(8, "com.example.tracker")]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods.append(food(12, "com.example.tracker"))
+        client.onRead = { history.turnOff(.foods) }
+        await history.refresh()
+        XCTAssertEqual(workspace.nutrition.entries.count, 1)
+    }
 }
 
+/// Health as a list of samples. An anchored read returns what was added
+/// since the anchor and, as deletions, what's gone; a revoked one returns
+/// nothing at all, as HealthKit does.
 final class FakeHistoryClient: HealthHistoryClient, @unchecked Sendable {
     var available = true
     var foods: [HealthFoodReading] = []
     var workouts: [HealthWorkoutReading] = []
     var weightReadings: [(weight: HealthWeight, source: String)] = []
+    var revoked = false
     var workoutReads = 0
+    var anchorsSeen: [Data?] = []
     /// Runs while Health is read, before it answers.
     var onRead: (@MainActor () -> Void)?
+    private var seen: [Data: Set<UUID>] = [:]
 
     var isAvailable: Bool { available }
     func requestAccess(_ kind: HealthHistoryKind) async throws {}
 
-    func foods() async throws -> [HealthFoodReading] {
-        await onRead?()
-        return foods
+    private func changes<T>(_ all: [T], id: (T) -> UUID, after anchor: Data?) -> HealthChanges<T> {
+        let next = Data(UUID().uuidString.utf8)
+        guard !revoked else { return HealthChanges(anchor: next) }
+        let before = anchor.flatMap { seen[$0] } ?? []
+        let now = Set(all.map(id))
+        seen[next] = now
+        return HealthChanges(added: all.filter { !before.contains(id($0)) }, deleted: Array(before.subtracting(now)), anchor: next)
     }
 
-    func workouts() async throws -> [HealthWorkoutReading] {
+    func foods(after anchor: Data?) async throws -> HealthChanges<HealthFoodReading> {
+        anchorsSeen.append(anchor)
+        await onRead?()
+        return changes(foods, id: \.id, after: anchor)
+    }
+
+    func workouts(after anchor: Data?) async throws -> HealthChanges<HealthWorkoutReading> {
         workoutReads += 1
         await onRead?()
-        return workouts
+        return changes(workouts, id: \.id, after: anchor)
     }
+
+    func foods(_ ids: Set<UUID>) async throws -> [HealthFoodReading] { revoked ? [] : foods.filter { ids.contains($0.id) } }
 
     func weights() async throws -> [(weight: HealthWeight, source: String)] { weightReadings }
 }
@@ -268,17 +436,25 @@ final class FakeActivityStore: HealthActivityStore {
     var states: [String: Bool] = [:]
     /// In the account, read by `readActivities`.
     var remote: [String: Bool] = [:]
+    /// Each activity's fingerprint; a change to one is an edit.
+    var prints: [String: String] = [:]
+    var reachable = true
     var saved: [(request: ActivityRequest, clientID: String)] = []
     var deleted: [String] = []
+    var restored: [String] = []
     var read: [ClosedRange<LocalDate>] = []
 
     init(today: LocalDate) { days = today.adding(days: -3650)...today }
 
     func activityStates(_ ids: Set<String>) -> [String: Bool] { states.filter { ids.contains($0.key) } }
 
-    func readActivities(_ days: ClosedRange<LocalDate>) async {
+    func activityFingerprint(_ clientID: String) -> String? { states[clientID] == false ? prints[clientID, default: "as imported"] : nil }
+
+    func readActivities(_ days: ClosedRange<LocalDate>) async -> Bool {
         read.append(days)
+        guard reachable else { return false }
         states.merge(remote) { local, _ in local }
+        return true
     }
 
     func saveImportedActivity(_ request: ActivityRequest, clientID: String) throws {
@@ -289,5 +465,10 @@ final class FakeActivityStore: HealthActivityStore {
     func deleteImportedActivity(clientID: String) throws {
         deleted.append(clientID)
         states[clientID] = true
+    }
+
+    func restoreImportedActivity(clientID: String) throws {
+        restored.append(clientID)
+        states[clientID] = false
     }
 }

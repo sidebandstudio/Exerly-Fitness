@@ -510,6 +510,32 @@ final class SyncEngine: ObservableObject {
             revision: editing?.revision, createdAt: editing?.createdAt)
     }
 
+    /// An activity's fingerprint as it's saved now (`HealthImport.fingerprint`),
+    /// nil when there's none or it was deleted.
+    func activityFingerprint(_ clientID: String) -> String? {
+        guard let resource = try? ownedResources().first(where: { $0.kind == "activity" && $0.entityID == clientID }), !resource.tombstoned,
+              let fields = try? object(resource.payload) else { return nil }
+        return HealthImport.fingerprint(activity: fields)
+    }
+
+    /// Reads the account's activities on these days from the server and
+    /// keeps them here. False when the server couldn't be reached, even if a
+    /// saved copy was read instead.
+    func refreshActivities(from: String, to: String) async -> Bool {
+        guard let owner = accountID, let path = try? collectionPath("activity") else { return false }
+        var page = 1
+        do {
+            while true {
+                let data = try await read("\(path)?from=\(from)&to=\(to)&include_deleted=true&limit=500&page=\(page)")
+                guard accountID == owner, !isOffline,
+                      let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return false }
+                for row in rows { try adoptLog(row, kind: "activity") }
+                if rows.count < 500 { return true }
+                page += 1
+            }
+        } catch { return false }
+    }
+
     /// Which of these activities this phone has for the account, each true
     /// if it was deleted.
     func activityStates(_ clientIDs: Set<String>) -> [String: Bool] {

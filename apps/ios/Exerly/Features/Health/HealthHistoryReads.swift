@@ -4,9 +4,11 @@ import HealthKit
 
 // Food, workouts and weigh-ins other apps saved to Health, imported only after
 // a preview says what would be added, what's already in Exerly, and what
-// source priority sets aside. After that, Health is read again as the screen
-// opens, all of it, so a better source saved later, or a record deleted while
-// reading was off, is caught up with. Weigh-ins then go through the Read
+// source priority sets aside. After that, Health's changes are read from an
+// anchor as the screen opens: new records, and the ones Health deleted. A
+// record missing from a read is never taken out for it, as a read Health
+// revoked looks the same as one with no data; Check everything again lists
+// those, for the person to choose. Weigh-ins then go through the Read
 // weigh-ins switch (HealthSync), with the readings reviewed.
 
 enum HealthHistoryKind: String, CaseIterable, Identifiable {
@@ -41,13 +43,21 @@ enum HealthHistoryKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// What changed in Health since an anchor: everything, with no deletions,
+/// from none.
+struct HealthChanges<Reading> {
+    var added: [Reading] = []
+    var deleted: [UUID] = []
+    var anchor: Data?
+}
+
 protocol HealthHistoryClient: AnyObject, Sendable {
     var isAvailable: Bool { get }
     func requestAccess(_ kind: HealthHistoryKind) async throws
-    /// Every food another app saved, as Health has them now.
-    func foods() async throws -> [HealthFoodReading]
-    /// Every workout another app or device saved.
-    func workouts() async throws -> [HealthWorkoutReading]
+    func foods(after anchor: Data?) async throws -> HealthChanges<HealthFoodReading>
+    func workouts(after anchor: Data?) async throws -> HealthChanges<HealthWorkoutReading>
+    /// These foods, those Health still has, to put one back.
+    func foods(_ ids: Set<UUID>) async throws -> [HealthFoodReading]
     /// Every weigh-in another source saved, with its source's name.
     func weights() async throws -> [(weight: HealthWeight, source: String)]
 }
@@ -89,27 +99,45 @@ final class HealthKitHistoryClient: HealthHistoryClient, @unchecked Sendable {
         (sample.metadata?[HKMetadataKeyTimeZone] as? String).flatMap(TimeZone.init(identifier:))
     }
 
-    func foods() async throws -> [HealthFoodReading] {
-        let samples = try await HKSampleQueryDescriptor(predicates: [.correlation(type: HKCorrelationType(.food))],
-                                                        sortDescriptors: [SortDescriptor(\.startDate)]).result(for: store)
-        return samples.filter { !Self.isExerly($0) }.map { food in
-            var nutrients = NutrientAmounts()
-            for nutrient in Nutrient.healthWritable {
-                guard let identifier = nutrient.healthType else { continue }
-                let samples = food.objects(for: HKQuantityType(HKQuantityTypeIdentifier(rawValue: identifier))).compactMap { $0 as? HKQuantitySample }
-                guard !samples.isEmpty else { continue }
-                nutrients[nutrient] = samples.reduce(0) { $0 + $1.quantity.doubleValue(for: HealthKitService.unit(nutrient.healthUnit)) }
-            }
-            return HealthFoodReading(id: food.uuid, at: food.startDate, name: food.metadata?[HKMetadataKeyFoodType] as? String,
-                                     nutrients: nutrients, source: food.sourceRevision.source.bundleIdentifier,
-                                     sourceName: food.sourceRevision.source.name, timeZone: Self.zone(food))
-        }
+    private static func archive(_ anchor: HKQueryAnchor) throws -> Data {
+        try NSKeyedArchiver.archivedData(withRootObject: anchor, requiringSecureCoding: true)
     }
 
-    func workouts() async throws -> [HealthWorkoutReading] {
-        let samples = try await HKSampleQueryDescriptor(predicates: [.workout()], sortDescriptors: [SortDescriptor(\.startDate)])
-            .result(for: store)
-        return samples.filter { !Self.isExerly($0) }.map { workout in
+    private static func unarchive(_ data: Data?) -> HKQueryAnchor? {
+        data.flatMap { try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0) }
+    }
+
+    func foods(after anchor: Data?) async throws -> HealthChanges<HealthFoodReading> {
+        let result = try await HKAnchoredObjectQueryDescriptor(predicates: [.correlation(type: HKCorrelationType(.food))],
+                                                               anchor: Self.unarchive(anchor)).result(for: store)
+        return HealthChanges(added: result.addedSamples.filter { !Self.isExerly($0) }.map(Self.food),
+                             deleted: result.deletedObjects.map(\.uuid), anchor: try Self.archive(result.newAnchor))
+    }
+
+    func foods(_ ids: Set<UUID>) async throws -> [HealthFoodReading] {
+        guard !ids.isEmpty else { return [] }
+        let samples = try await HKSampleQueryDescriptor(predicates: [.correlation(type: HKCorrelationType(.food),
+                                                                                  predicate: HKQuery.predicateForObjects(with: ids))],
+                                                        sortDescriptors: []).result(for: store)
+        return samples.filter { !Self.isExerly($0) }.map(Self.food)
+    }
+
+    private static func food(_ food: HKCorrelation) -> HealthFoodReading {
+        var nutrients = NutrientAmounts()
+        for nutrient in Nutrient.healthWritable {
+            guard let identifier = nutrient.healthType else { continue }
+            let samples = food.objects(for: HKQuantityType(HKQuantityTypeIdentifier(rawValue: identifier))).compactMap { $0 as? HKQuantitySample }
+            guard !samples.isEmpty else { continue }
+            nutrients[nutrient] = samples.reduce(0) { $0 + $1.quantity.doubleValue(for: HealthKitService.unit(nutrient.healthUnit)) }
+        }
+        return HealthFoodReading(id: food.uuid, at: food.startDate, name: food.metadata?[HKMetadataKeyFoodType] as? String,
+                                 nutrients: nutrients, source: food.sourceRevision.source.bundleIdentifier,
+                                 sourceName: food.sourceRevision.source.name, timeZone: zone(food))
+    }
+
+    func workouts(after anchor: Data?) async throws -> HealthChanges<HealthWorkoutReading> {
+        let result = try await HKAnchoredObjectQueryDescriptor(predicates: [.workout()], anchor: Self.unarchive(anchor)).result(for: store)
+        let added = result.addedSamples.filter { !Self.isExerly($0) }.map { workout in
             HealthWorkoutReading(id: workout.uuid, start: workout.startDate, end: workout.endDate,
                                  activity: Self.name(workout.workoutActivityType),
                                  kilocalories: workout.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?
@@ -117,6 +145,7 @@ final class HealthKitHistoryClient: HealthHistoryClient, @unchecked Sendable {
                                  source: workout.sourceRevision.source.bundleIdentifier, sourceName: workout.sourceRevision.source.name,
                                  timeZone: Self.zone(workout))
         }
+        return HealthChanges(added: added, deleted: result.deletedObjects.map(\.uuid), anchor: try Self.archive(result.newAnchor))
     }
 
     func weights() async throws -> [(weight: HealthWeight, source: String)] {
@@ -161,25 +190,53 @@ protocol HealthActivityStore: AnyObject {
     /// Which of these activities this phone has for the account, each true
     /// if it was deleted.
     func activityStates(_ ids: Set<String>) -> [String: Bool]
-    /// Reads the account's activities on these days, as after a reinstall.
-    func readActivities(_ days: ClosedRange<LocalDate>) async
+    /// An activity's fingerprint as it's saved now, nil when it isn't.
+    func activityFingerprint(_ clientID: String) -> String?
+    /// Reads the account's activities on these days. False when the account
+    /// couldn't be reached.
+    func readActivities(_ days: ClosedRange<LocalDate>) async -> Bool
     func saveImportedActivity(_ request: ActivityRequest, clientID: String) throws
     func deleteImportedActivity(clientID: String) throws
+    /// Takes back Exerly's own deletion of an activity it imported.
+    func restoreImportedActivity(clientID: String) throws
+}
+
+/// This install of Exerly, as Health imports name their owner. Kept in the
+/// app's defaults, so a reinstall is a new install whose imports start as
+/// another's until it adopts them.
+enum HealthImportInstall {
+    static let key = "healthImport.install"
+
+    static func id(_ defaults: UserDefaults = .standard) -> String {
+        if let id = defaults.string(forKey: key) { return id }
+        let id = UUID().uuidString
+        defaults.set(id, forKey: key)
+        return id
+    }
 }
 
 /// The history switches and their preview for the open account. Kept per
 /// server and account. Everything read is bound to the account it was read
-/// for: when another account opens while Health is read, nothing is saved.
+/// for, and to the switch: turning it off, or another account opening,
+/// while Health is read saves nothing.
 @MainActor
 final class HealthHistoryModel: ObservableObject {
     struct Pending: Identifiable {
         var kind: HealthHistoryKind
         var preview: HealthHistoryPreview
-        var foods: HealthHistoryPlan<HealthFoodReading>?
-        var workouts: HealthHistoryPlan<HealthWorkoutReading>?
+        var foods: HealthImportPlan<HealthFoodReading>?
+        var workouts: HealthImportPlan<HealthWorkoutReading>?
+        /// What was read, to claim entries with no record.
+        var readings: [UUID: HealthFoodReading] = [:]
+        var workoutReadings: [UUID: HealthWorkoutReading] = [:]
         /// The weigh-ins shown, which are all that may be imported.
         var weights: Set<UUID> = []
-        /// Why this preview was shown again.
+        var anchor: Data?
+        var generation = 0
+        /// Their choices for what a full read found: off unless they turn them on.
+        var removeMissing = false
+        var adopt = false
+        /// Why this preview was shown again, or what waits.
         var note: String?
         var id: String { kind.rawValue }
     }
@@ -193,6 +250,7 @@ final class HealthHistoryModel: ObservableObject {
     @Published private(set) var lastImport: [HealthHistoryKind: String] = [:]
 
     private let accountID: String
+    private let install: String
     private let client: HealthHistoryClient
     private let defaults: UserDefaults
     private let key: String
@@ -201,16 +259,19 @@ final class HealthHistoryModel: ObservableObject {
     private let isCurrent: @MainActor (String) -> Bool
     private let enableWeights: @MainActor (Set<UUID>) async -> Bool
     private let activities: @MainActor () -> HealthActivityStore
+    /// Bumped as a switch turns off, so a read already under way saves nothing.
+    private var generation: [HealthHistoryKind: Int] = [:]
 
     /// `enableWeights` turns Read weigh-ins on with the readings reviewed,
     /// and is false when Health has others, which need a new preview.
     init(accountID: String, timeZone: TimeZone = .current, client: HealthHistoryClient = HealthKitHistoryClient.shared,
-         namespace: String = APIClient.shared.storageNamespace, defaults: UserDefaults = .standard,
+         namespace: String = APIClient.shared.storageNamespace, defaults: UserDefaults = .standard, install: String? = nil,
          workspace: @escaping @MainActor () -> TrainingWorkspace? = { HealthSync.shared.workspace },
          isCurrent: @escaping @MainActor (String) -> Bool = { SyncEngine.shared.isConfigured(for: $0) },
          enableWeights: @escaping @MainActor (Set<UUID>) async -> Bool = { await HealthSync.shared.enableReadingWeights(reviewed: $0) },
          activities: @escaping @MainActor () -> HealthActivityStore = { SyncEngine.shared }) {
         self.accountID = accountID
+        self.install = install ?? HealthImportInstall.id(defaults)
         key = "healthHistory.\(namespace).\(accountID)"
         self.client = client
         self.defaults = defaults
@@ -225,9 +286,21 @@ final class HealthHistoryModel: ObservableObject {
 
     var isAvailable: Bool { client.isAvailable }
 
-    /// Asks Health for the kind, reads all of it, and shows what importing
-    /// would do. Nothing is saved until `confirm`.
+    /// Asks Health for the kind and shows what importing would do: what's
+    /// changed since the last read when there was one, else everything.
+    /// Nothing is saved until `confirm`.
     func begin(_ kind: HealthHistoryKind, note: String? = nil) async {
+        await preview(kind, full: kind == .weights || anchor(kind) == nil, note: note)
+    }
+
+    /// Reads everything Health has of the kind again, for a preview that also
+    /// lists what's no longer in Health, and what this iPhone could keep as
+    /// its own imports.
+    func checkEverythingAgain(_ kind: HealthHistoryKind) async {
+        await preview(kind, full: true, note: nil)
+    }
+
+    private func preview(_ kind: HealthHistoryKind, full: Bool, note: String?) async {
         messages[kind] = nil
         guard client.isAvailable else {
             messages[kind] = "Apple Health isn't available on this device."
@@ -236,11 +309,12 @@ final class HealthHistoryModel: ObservableObject {
         guard let workspace = open() else { return }
         requesting = kind
         defer { if requesting == kind { requesting = nil } }
+        let started = generation[kind, default: 0]
         do {
             try await client.requestAccess(kind)
-            guard owns(workspace) else { return }
-            guard var pending = try await plan(kind, in: workspace), requesting == kind else { return }
-            pending.note = note
+            guard owns(workspace), generation[kind, default: 0] == started else { return }
+            guard var pending = try await read(kind, full: full, in: workspace, generation: started), requesting == kind else { return }
+            pending.note = note ?? pending.note
             self.pending = pending
         } catch {
             guard owns(workspace) else { return }
@@ -248,9 +322,10 @@ final class HealthHistoryModel: ObservableObject {
         }
     }
 
-    /// Imports what the preview showed, and turns the kind on.
-    func confirm() async {
-        guard let pending, let workspace = open() else { return }
+    /// Imports what the preview showed, with their choices, and turns the kind on.
+    func confirm(removeMissing: Bool = false, adopt: Bool = false) async {
+        guard var pending, let workspace = open() else { return }
+        (pending.removeMissing, pending.adopt) = (removeMissing, adopt)
         self.pending = nil
         if pending.kind == .weights {
             let matched = await enableWeights(pending.weights)
@@ -262,8 +337,9 @@ final class HealthHistoryModel: ObservableObject {
             lastImport[.weights] = "Added \(HealthHistoryKind.weights.count(pending.preview.adding))."
             return
         }
+        guard generation[pending.kind, default: 0] == pending.generation else { return }
         do {
-            try apply(pending, in: workspace)
+            guard try await apply(pending, in: workspace) else { return }
         } catch {
             messages[pending.kind] = "Nothing was imported. Try again."
             return
@@ -275,23 +351,25 @@ final class HealthHistoryModel: ObservableObject {
 
     func cancel() { pending = nil }
 
-    /// Stops reading the kind. What it imported stays, and is still tracked,
-    /// so turning it on again catches up with deletions made meanwhile.
+    /// Stops reading the kind, and drops any read under way. The anchor
+    /// stays, so turning it on again catches up with Health's deletions.
     func turnOff(_ kind: HealthHistoryKind) {
+        generation[kind, default: 0] += 1
         enabled.remove(kind)
         saveEnabled()
     }
 
-    /// Reads everything again for the switches that are on, with the same
-    /// source priority, and nothing for those that are off.
+    /// Reads what changed in Health for the switches that are on, and
+    /// nothing for those that are off.
     func refresh() async {
         guard client.isAvailable else { return }
         for kind in [HealthHistoryKind.foods, .workouts] where enabled.contains(kind) {
             guard let workspace = open() else { return }
+            let started = generation[kind, default: 0]
             do {
-                guard let pending = try await plan(kind, in: workspace) else { return }
-                try apply(pending, in: workspace)
-                messages[kind] = nil
+                guard let pending = try await read(kind, full: false, in: workspace, generation: started) else { continue }
+                guard try await apply(pending, in: workspace) else { continue }
+                messages[kind] = pending.note
             } catch {
                 guard owns(workspace) else { return }
                 messages[kind] = "Health couldn't be read. Exerly will try again."
@@ -312,93 +390,201 @@ final class HealthHistoryModel: ObservableObject {
         !accountID.isEmpty && !Task.isCancelled && workspace.accountID == accountID && self.workspace() === workspace && isCurrent(accountID)
     }
 
-    /// Everything Health has of a kind, planned against what's in Exerly. Nil
-    /// when the account changed while Health was read.
-    private func plan(_ kind: HealthHistoryKind, in workspace: TrainingWorkspace) async throws -> Pending? {
-        var pending = Pending(kind: kind, preview: HealthHistoryPreview())
+    /// Still this account, and the switch wasn't turned off since `started`.
+    private func current(_ kind: HealthHistoryKind, _ workspace: TrainingWorkspace, since started: Int) -> Bool {
+        owns(workspace) && generation[kind, default: 0] == started
+    }
+
+    private func anchor(_ kind: HealthHistoryKind) -> Data? { defaults.data(forKey: key + ".anchor." + kind.rawValue) }
+
+    /// Health's changes of a kind, or everything, planned against the
+    /// account's records. Nil when the account changed or the switch was
+    /// turned off while Health was read.
+    private func read(_ kind: HealthHistoryKind, full: Bool, in workspace: TrainingWorkspace, generation started: Int) async throws -> Pending? {
+        var pending = Pending(kind: kind, preview: HealthHistoryPreview(), generation: started)
         switch kind {
         case .weights:
             let readings = try await client.weights()
-            guard owns(workspace) else { return nil }
+            guard current(kind, workspace, since: started) else { return nil }
             pending.preview = HealthHistory.weights(readings, existing: Set(workspace.nutrition.weights.map(\.id)), timeZone: timeZone)
             pending.weights = Set(readings.map(\.weight.id))
         case .foods:
-            let readings = try await client.foods()
-            guard owns(workspace) else { return nil }
-            let imported = workspace.nutrition.entries.filter { $0.food.foodID.hasPrefix(HealthHistory.foodIDPrefix) }
-            let plan = HealthHistory.foods(readings, existing: Set(imported.map(\.id)), imported: tracked(.foods),
-                                           locked: Set(imported.filter { $0.food.edited == true }.map(\.id)), timeZone: timeZone)
-            (pending.preview, pending.foods) = (plan.preview, plan)
+            let changes = try await client.foods(after: full ? nil : anchor(kind))
+            guard current(kind, workspace, since: started) else { return nil }
+            let plan = foodPlan(changes, full: full, in: workspace)
+            (pending.preview, pending.foods, pending.anchor) = (plan.preview, plan, changes.anchor)
+            pending.readings = Dictionary(changes.added.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         case .workouts:
-            let readings = try await client.workouts()
-            guard owns(workspace) else { return nil }
-            let store = activities()
-            // Each workout's activity has an ID of its own, so one already in the account is found.
-            var health: [String: UUID] = [:]
-            for id in tracked(.workouts).union(readings.map(\.id)) { health[HealthHistory.activityID(for: id, accountID: accountID)] = id }
-            func planned() -> HealthHistoryPlan<HealthWorkoutReading> {
-                let states = store.activityStates(Set(health.keys))
-                // One deleted in Exerly isn't added back.
-                return HealthHistory.workouts(readings, existing: Set(states.filter { !$0.value }.keys.compactMap { health[$0] }),
-                                              imported: tracked(.workouts).union(states.filter(\.value).keys.compactMap { health[$0] }),
-                                              timeZone: timeZone, within: store.days)
-            }
-            var plan = planned()
-            // Before adding any, the account's own on those days, which this phone may not have yet.
-            let days = plan.adding.map { LocalDate($0.start, in: $0.timeZone ?? timeZone) }
+            let changes = try await client.workouts(after: full ? nil : anchor(kind))
+            guard current(kind, workspace, since: started) else { return nil }
+            var plan = workoutPlan(changes, full: full, in: workspace)
+            var keepAnchor = false
+            // Before adding any, the account's own on those days, which a phone just installed may not
+            // have yet; and the days of imports whose activity this phone hasn't read.
+            let records = workspace.healthImports.records(.workout).filter { $0.state != .removed }
+            let states = activities().activityStates(Set(records.map(\.target)))
+            let days = plan.adding.map { LocalDate($0.start, in: $0.timeZone ?? timeZone) } + records.filter { states[$0.target] == nil }.map(\.day)
             if let first = days.min(), let last = days.max() {
-                await store.readActivities(first...last)
-                guard owns(workspace) else { return nil }
-                plan = planned()
+                let reached = await activities().readActivities(first...last)
+                guard current(kind, workspace, since: started) else { return nil }
+                plan = workoutPlan(changes, full: full, in: workspace)
+                if !reached {
+                    // Unsure what the account has, add none, nor set aside anything for them:
+                    // the next read, from the same anchor and online, will.
+                    (plan.preview.adding, plan.adding, plan.preview.displacing, plan.displacing) = (0, [], 0, [])
+                    pending.note = "Workouts from Health will be added once Exerly can reach your account."
+                    keepAnchor = true
+                }
             }
             (pending.preview, pending.workouts) = (plan.preview, plan)
+            pending.anchor = keepAnchor ? anchor(kind) : changes.anchor
+            pending.workoutReadings = Dictionary(changes.added.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         }
         return pending
     }
 
-    /// Makes a plan's changes in the account it was read for, and records
-    /// what's imported as each change is saved.
-    private func apply(_ pending: Pending, in workspace: TrainingWorkspace) throws {
-        guard owns(workspace) else { throw CancellationError() }
+    private func foodPlan(_ changes: HealthChanges<HealthFoodReading>, full: Bool, in workspace: TrainingWorkspace) -> HealthImportPlan<HealthFoodReading> {
+        var records = workspace.healthImports.records(.food)
+        if !full {
+            // Only the days Health's changes touch: a screen opening with nothing new does no work.
+            let deleted = Set(changes.deleted)
+            let days = Set(changes.added.map { HealthHistory.item($0, timeZone: timeZone).day } + records.filter { deleted.contains($0.id) }.map(\.day))
+            records = records.filter { days.contains($0.day) }
+        }
+        let entries = Dictionary(workspace.nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var live = Set<UUID>(), changed = Set<UUID>()
+        for record in records {
+            guard let id = UUID(uuidString: record.target), let entry = entries[id] else { continue }
+            live.insert(record.id)
+            if HealthImport.fingerprint(entry) != record.fingerprint { changed.insert(record.id) }
+        }
+        let known = Set(records.map(\.id))
+        let untracked = Set(changes.added.map(\.id).filter { entries[$0] != nil && !known.contains($0) })
+        return HealthHistory.plan(added: changes.added, deleted: Set(changes.deleted), full: full, records: records, install: install,
+                                  live: live, changed: changed, untracked: untracked, grouping: .day) { HealthHistory.item($0, timeZone: timeZone) }
+    }
+
+    private func workoutPlan(_ changes: HealthChanges<HealthWorkoutReading>, full: Bool,
+                             in workspace: TrainingWorkspace) -> HealthImportPlan<HealthWorkoutReading> {
+        let store = activities()
+        var records = workspace.healthImports.records(.workout)
+        if !full {
+            // Only the times Health's changes touch, a day either side for runs of overlaps.
+            let deleted = Set(changes.deleted)
+            let spans = changes.added.map { ($0.start, $0.end) } + records.filter { deleted.contains($0.id) }.map { ($0.start, $0.end) }
+            if let start = spans.map(\.0).min(), let end = spans.map(\.1).max() {
+                records = records.filter { $0.end >= start.addingTimeInterval(-86400) && $0.start <= end.addingTimeInterval(86400) }
+            } else {
+                records = []
+            }
+        }
+        let derived = Dictionary(changes.added.map { (HealthHistory.activityID(for: $0.id, accountID: accountID), $0.id) },
+                                 uniquingKeysWith: { first, _ in first })
+        let states = store.activityStates(Set(records.map(\.target)).union(derived.keys))
+        var live = Set<UUID>(), changed = Set<UUID>()
+        for record in records where states[record.target] == false {
+            live.insert(record.id)
+            if store.activityFingerprint(record.target) != record.fingerprint { changed.insert(record.id) }
+        }
+        let known = Set(records.map(\.id))
+        // An activity already in the account with no record: synced before its record, or deleted there. Never added again.
+        let untracked = Set(derived.filter { states[$0.key] != nil && !known.contains($0.value) }.values)
+        return HealthHistory.plan(added: changes.added, deleted: Set(changes.deleted), full: full, records: records, install: install,
+                                  live: live, changed: changed, untracked: untracked, grouping: .overlap, within: store.days) {
+            HealthHistory.item($0, timeZone: timeZone)
+        }
+    }
+
+    /// Makes a plan's changes in the account it was read for, checking each
+    /// again as it's saved. False when the account changed or the switch
+    /// was turned off first.
+    private func apply(_ pending: Pending, in workspace: TrainingWorkspace) async throws -> Bool {
+        let kind = pending.kind
+        guard current(kind, workspace, since: pending.generation) else { return false }
+        let imports = workspace.healthImports
         if let plan = pending.foods {
-            try workspace.nutrition.importHealthFoods(plan.adding, deleted: plan.removing, timeZone: timeZone)
-            track(.foods, plan.imported)
+            var changes = HealthFoodChanges()
+            changes.adding = plan.adding
+            changes.removing = plan.removing + (pending.removeMissing ? plan.missing : [])
+            changes.displacing = plan.displacing
+            if pending.adopt {
+                changes.adopting = plan.adoptable.filter { imports.records[$0] != nil }
+                changes.claiming = plan.adoptable.compactMap { imports.records[$0] == nil ? pending.readings[$0] : nil }
+            }
+            if !plan.restoring.isEmpty {
+                changes.restoring = try await client.foods(Set(plan.restoring))
+                guard current(kind, workspace, since: pending.generation) else { return false }
+            }
+            try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
         }
         if let plan = pending.workouts {
-            let store = activities()
-            var imported = plan.imported.union(plan.removing).subtracting(plan.adding.map(\.id))
-            defer { track(.workouts, imported) }
-            for id in plan.removing {
-                try store.deleteImportedActivity(clientID: HealthHistory.activityID(for: id, accountID: accountID))
-                imported.remove(id)
+            try applyWorkouts(plan, pending, imports: imports)
+        }
+        defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
+        return true
+    }
+
+    /// Workouts' changes, each checked again just before it's made: only this
+    /// install's records, and only activities still as they were imported.
+    private func applyWorkouts(_ plan: HealthImportPlan<HealthWorkoutReading>, _ pending: Pending, imports: HealthImportStore) throws {
+        let store = activities()
+        var changed: [HealthImport] = []
+        defer { try? imports.save(changed) }
+        let removals = (plan.removing + (pending.removeMissing ? plan.missing : [])).map { ($0, HealthImport.State.removed) }
+            + plan.displacing.map { ($0, HealthImport.State.displaced) }
+        for (id, state) in removals {
+            guard var record = imports.records[id], record.owner == install, record.state != .removed else { continue }
+            if record.state == .imported, store.activityStates([record.target])[record.target] == false {
+                // Changed since it was imported: theirs now.
+                guard store.activityFingerprint(record.target) == record.fingerprint else { continue }
+                try store.deleteImportedActivity(clientID: record.target)
             }
-            for workout in plan.adding {
-                let minutes = min(1440, max(0.1, (workout.minutes * 10).rounded() / 10))
-                try store.saveImportedActivity(ActivityRequest(type: workout.activity, duration: minutes,
-                                                       calories: workout.kilocalories.map { min(20000, max(0, $0.rounded())) },
-                                                       intensity: nil,
-                                                       entryDate: LocalDate(workout.start, in: workout.timeZone ?? timeZone).description,
-                                                       category: "health"),
-                                       clientID: HealthHistory.activityID(for: workout.id, accountID: accountID))
-                imported.insert(workout.id)
+            record.state = state
+            record.updatedAt = Date()
+            changed.append(record)
+        }
+        for id in plan.restoring {
+            guard var record = imports.records[id], record.owner == install, record.state == .displaced else { continue }
+            try store.restoreImportedActivity(clientID: record.target)
+            record.state = .imported
+            record.fingerprint = store.activityFingerprint(record.target) ?? record.fingerprint
+            record.updatedAt = Date()
+            changed.append(record)
+        }
+        for workout in plan.adding where imports.records[workout.id] == nil {
+            let clientID = HealthHistory.activityID(for: workout.id, accountID: accountID)
+            let minutes = min(1440, max(0.1, (workout.minutes * 10).rounded() / 10))
+            try store.saveImportedActivity(ActivityRequest(type: workout.activity, duration: minutes,
+                                                           calories: workout.kilocalories.map { min(20000, max(0, $0.rounded())) },
+                                                           intensity: nil,
+                                                           entryDate: LocalDate(workout.start, in: workout.timeZone ?? timeZone).description,
+                                                           category: "health"),
+                                           clientID: clientID)
+            changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: store.activityFingerprint(clientID) ?? "",
+                                        owner: install, timeZone: timeZone))
+        }
+        if pending.adopt {
+            for id in plan.adoptable {
+                if var record = imports.records[id] {
+                    record.owner = install
+                    record.updatedAt = Date()
+                    changed.append(record)
+                } else if let workout = pending.workoutReadings[id] {
+                    let clientID = HealthHistory.activityID(for: id, accountID: accountID)
+                    guard let print = store.activityFingerprint(clientID) else { continue }
+                    changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: print, owner: install, timeZone: timeZone))
+                }
             }
         }
     }
 
     /// "Added 3 foods. Took out 1 food." from a confirmed preview.
     private static func summary(_ pending: Pending) -> String {
-        var parts = ["Added \(pending.kind.count(pending.preview.adding))."]
-        if pending.preview.removing > 0 { parts.append("Took out \(pending.kind.count(pending.preview.removing)).") }
+        let preview = pending.preview
+        var parts = ["Added \(pending.kind.count(preview.adding + preview.restoring))."]
+        let out = preview.removing + preview.displacing + (pending.removeMissing ? preview.missing : 0)
+        if out > 0 { parts.append("Took out \(pending.kind.count(out)).") }
         return parts.joined(separator: " ")
-    }
-
-    /// The Health IDs this install imported, still in Health or Exerly.
-    private func tracked(_ kind: HealthHistoryKind) -> Set<UUID> {
-        Set((defaults.stringArray(forKey: key + ".imported." + kind.rawValue) ?? []).compactMap(UUID.init(uuidString:)))
-    }
-
-    private func track(_ kind: HealthHistoryKind, _ ids: Set<UUID>) {
-        defaults.set(ids.map(\.uuidString).sorted(), forKey: key + ".imported." + kind.rawValue)
     }
 
     private func saveEnabled() { defaults.set(HealthHistoryKind.allCases.filter(enabled.contains).map(\.rawValue), forKey: key + ".enabled") }
@@ -410,11 +596,13 @@ extension SyncEngine: HealthActivityStore {
         return last.adding(days: -3650)...last
     }
 
-    func readActivities(_ days: ClosedRange<LocalDate>) async {
-        _ = try? await activityEntries(from: days.lowerBound.description, to: days.upperBound.description)
+    func readActivities(_ days: ClosedRange<LocalDate>) async -> Bool {
+        await refreshActivities(from: days.lowerBound.description, to: days.upperBound.description)
     }
 
     func saveImportedActivity(_ request: ActivityRequest, clientID: String) throws { try saveActivity(request, clientID: clientID) }
 
     func deleteImportedActivity(clientID: String) throws { try deleteActivity(clientID: clientID) }
+
+    func restoreImportedActivity(clientID: String) throws { try undoActivityDeletion(entityID: clientID) }
 }

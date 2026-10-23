@@ -2733,3 +2733,47 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   the pairing read's included, immediately before saving. It used to
   check and clear the set after the first query, so a reading the pairing
   read found beside a reviewed one was imported unseen.
+- Decision 1, absence is never deletion. HealthKit makes a revoked read
+  look like no data, so nothing imported is ever taken out for being
+  missing from a read. Reads are anchored again: each returns what's new
+  and Health's deletions, and only a deletion takes an import out. Check
+  everything again is a deliberate full read; what it no longer finds is
+  listed as "No longer in Health", with "Remove these" off until chosen.
+  Turning a switch off keeps its anchor, so turning it on again catches
+  up with deletions made meanwhile.
+- Decision 2, ownership is explicit and synced. Each import is a
+  `health_import` document (one per Health sample, ID the sample's UUID):
+  its kind, the entry or activity it became, the install that owns it,
+  its source and time, a fingerprint, and whether it's imported,
+  displaced or removed. `import_provenance` didn't fit: it's written once
+  per file import and never changes. The install is a UUID in the app's
+  defaults, so a reinstall is a new install. Only the owner takes a record
+  out, or sets it aside for a better source's; a day or time held by
+  another install's record, or one they changed, is left as it is, and
+  nothing is added beside it. Adopting is a choice in Check everything
+  again: "Keep these as imported from Health on this iPhone", off until
+  chosen. Matching UUIDs never makes an install the owner.
+- Decision 3, any change locks an entry. The fingerprint is a hash of the
+  entry's canonical JSON as imported (amount, portion, day, meal,
+  nutrients, name, note), or of an activity's saved fields with numbers
+  compared by value. Once it differs, nothing automatic removes or
+  replaces it. Food removals are checked again inside the write
+  transaction; an activity's, just before it's deleted.
+- A record set aside for a better source's is `displaced`, not deleted
+  by the person, and comes back when that one goes: an activity through
+  the activity log's restore, a food read from Health again by its UUID.
+  A record never imported because it was set aside isn't remembered, so a
+  day's other source isn't added when the best one goes.
+- A switch turned off while Health is read drops that read: a generation
+  per kind is checked after each wait and before saving.
+- Food imports and their records are published once per batch
+  (`prepareWrites`). On the SE simulator, three years of synthetic history
+  (4,380 foods) imported in 15.6 s of main-actor time before and 1.6 s
+  after; reopening the screen with nothing new took 0.05 s before (a full
+  read of the stub) and 0.02 s after (an anchored read that touches only
+  changed days). Real HealthKit query time isn't in these numbers.
+- Workouts aren't added while the account can't be reached. A strict read
+  of the account's activities on those days runs first; offline, the
+  preview says they'll be added later and the anchor stays, so nothing is
+  sent twice and shows as needing attention. Online, one already in the
+  account is found, and only new ones are added.

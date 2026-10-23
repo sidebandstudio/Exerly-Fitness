@@ -13,6 +13,8 @@ final class TrainingWorkspace: ObservableObject {
     let programs: ProgramStore
     let gyms: GymStore
     let provenance: ProvenanceStore
+    /// What was imported from Apple Health, by whom, and what's become of it.
+    let healthImports: HealthImportStore
     let nutrition: NutritionStore
     /// Barcodes this account resolved, scanned, or scanned offline.
     let barcodes: BarcodeLibrary
@@ -46,6 +48,7 @@ final class TrainingWorkspace: ObservableObject {
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
         provenance = try ProvenanceStore(persistence: persistence)
+        healthImports = try HealthImportStore(persistence: persistence)
         barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
         conflicts = SyncConflictStore(state: persistence, hosts: [store, programs, nutrition, gyms, agent],
@@ -79,7 +82,7 @@ final class TrainingWorkspace: ObservableObject {
         accountAPI = api
         // A new build compares every document once; after that, only those written since.
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api,
+        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance, healthImports], state: persistence, api: api,
                                      conflicts: conflicts, appVersion: build)
     }
 
