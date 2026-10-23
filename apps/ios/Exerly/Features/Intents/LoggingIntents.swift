@@ -69,15 +69,18 @@ struct FoodEntityQuery: EntityStringQuery {
     }
 }
 
-/// A food chosen in Spotlight. A usual or recent food is logged with the
-/// portion one tap logs on Today, which then opens; another, such as a saved
-/// food or recipe never logged, opens its portion sheet on Today, so the
-/// portion is checked before one tap logs it.
+/// A food chosen in Spotlight, or named to Siri. A usual or recent food is
+/// logged with the portion one tap logs on Today, which then opens on its
+/// confirmation, with Undo; another, such as a saved food or recipe never
+/// logged, opens its portion sheet on Today, so the portion is checked
+/// before one tap logs it. It's the Log a food App Shortcut, which Spotlight
+/// shows as a food's top hit: `LogFoodIntent` ran there in place, leaving
+/// nothing to undo it with. That stays an action for Shortcuts.
 struct OpenFoodIntent: OpenIntent {
     static let title: LocalizedStringResource = "Open a food"
     static let description = IntentDescription("Logs one of your usual foods with the portion you last had, or opens another ready to log.")
 
-    @Parameter(title: "Food") var target: FoodEntity
+    @Parameter(title: "Food", requestValueDialog: "Which food?") var target: FoodEntity
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -328,8 +331,8 @@ struct ExerlyShortcuts: AppShortcutsProvider {
     static let shortcutTileColor: ShortcutTileColor = .purple
 
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(intent: LogFoodIntent(), phrases: [
-            "Log \(\.$food) in \(.applicationName)",
+        AppShortcut(intent: OpenFoodIntent(), phrases: [
+            "Log \(\.$target) in \(.applicationName)",
             "Log a food in \(.applicationName)",
             "Log my usual food in \(.applicationName)",
         ], shortTitle: "Log a food", systemImageName: "fork.knife")

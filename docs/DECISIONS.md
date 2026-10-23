@@ -2712,3 +2712,11 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   the account it started for. After each wait for Health it checks the
   account is still signed in with the same data open, and the task isn't
   cancelled; otherwise nothing is saved or shown.
+- Correction to 2026-10-21: Spotlight can show a food as the Log a food
+  App Shortcut's top hit, and that ran `LogFoodIntent` in place: the entry
+  was logged under Spotlight's answer sheet, the app never opened, and
+  there was nothing to undo it with. The earlier UI test found the entry
+  but not where it was shown. The Log a food App Shortcut (and its Siri
+  phrases) now runs `OpenFoodIntent`, so every Spotlight tap opens Today on
+  the confirmation with Undo. `LogFoodIntent` stays a Shortcuts action, for
+  shortcuts and automations that shouldn't open the app.
