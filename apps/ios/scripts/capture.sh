@@ -27,5 +27,6 @@ TEST_RUNNER_EXERLY_DESIGN_CAPTURE="${CAPTURE:-1}" TEST_RUNNER_EXERLY_UI_FIXTURE_
 TEST_RUNNER_EXERLY_SCREEN_DIR="$OUT" TEST_RUNNER_EXERLY_TEST_APPEARANCE="${APPEARANCE:-dark}" \
 TEST_RUNNER_EXERLY_TEST_LARGEST_TYPE="${LARGEST_TYPE:-0}" \
   xcodebuild "${args[@]}" -resultBundlePath "$result" "${only[@]}" test-without-building > "$OUT/test.log" 2>&1 || status=$?
-grep -E "Test Case .*(passed|failed)|error:|XCTAssert" "$OUT/test.log" | head -40
+# The summary never decides the exit status: a long one or an empty one is still the tests' result.
+grep -m 40 -E "Test Case .*(passed|failed)|error:|XCTAssert" "$OUT/test.log" || true
 exit $status
