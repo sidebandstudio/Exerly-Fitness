@@ -220,7 +220,8 @@ public enum HealthHistory {
         let sorted = { (ids: [UUID]) in ids.sorted { $0.uuidString < $1.uuidString } }
         var preview = HealthHistoryPreview()
         preview.adding = adding.count
-        preview.alreadyIn = held.filter { $0.state == .imported }.count + untracked.intersection(present).count
+        preview.alreadyIn = held.filter { $0.state == .imported && (!full || present.contains($0.id)) }.count
+            + untracked.intersection(present).count
         preview.leftOut = leftOut.count
         preview.removing = removing.count
         preview.displacing = displacing.count

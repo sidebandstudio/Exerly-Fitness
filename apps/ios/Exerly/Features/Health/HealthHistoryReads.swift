@@ -238,6 +238,8 @@ final class HealthHistoryModel: ObservableObject {
         var adopt = false
         /// Why this preview was shown again, or what waits.
         var note: String?
+        /// Checking everything again, with the switch already on.
+        var isCheck = false
         var id: String { kind.rawValue }
     }
 
@@ -315,6 +317,7 @@ final class HealthHistoryModel: ObservableObject {
             guard owns(workspace), generation[kind, default: 0] == started else { return }
             guard var pending = try await read(kind, full: full, in: workspace, generation: started), requesting == kind else { return }
             pending.note = note ?? pending.note
+            pending.isCheck = full && enabled.contains(kind)
             self.pending = pending
         } catch {
             guard owns(workspace) else { return }

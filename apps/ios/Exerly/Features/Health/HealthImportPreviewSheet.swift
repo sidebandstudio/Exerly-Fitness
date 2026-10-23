@@ -61,7 +61,7 @@ struct HealthImportPreviewSheet: View {
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
                 Button { onImport(removeMissing, adopt) } label: {
                     Text(preview.adding > 0 ? "Import \(pending.kind.count(preview.adding))"
-                        : preview.isEmpty && !removeMissing && !adopt ? "Turn on" : "Update")
+                        : !preview.isEmpty || removeMissing || adopt ? "Update" : pending.isCheck ? "Done" : "Turn on")
                 }
                     .buttonStyle(ExActionStyle()).accessibilityIdentifier("health.preview.import")
             }
