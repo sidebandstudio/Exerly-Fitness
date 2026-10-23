@@ -231,10 +231,18 @@ final class LoggingIntentsTests: XCTestCase {
         try store.log(oats, grams: 80, on: today.adding(days: -1), meal: "Breakfast")
 
         let before = Set(store.entries.map(\.id))
-        XCTAssertEqual(try LoggingActions.open(oats.id, in: account, now: time(8)), ExerlyLinks.today)
+        let link = try LoggingActions.open(oats.id, in: account, now: time(8))
         let entry = try XCTUnwrap(store.entries.first { !before.contains($0.id) })
         XCTAssertEqual(entry.grams, 80)
         XCTAssertEqual(entry.date, today)
+        // Today opens on its confirmation, whose Undo takes back this entry, for this account only.
+        let toast = try XCTUnwrap(TodayView.confirmation(for: link, in: account.workspace))
+        XCTAssertEqual(toast.message, "Logged Synthetic oats to Breakfast")
+        XCTAssertEqual(toast.undo, .remove([entry]))
+        XCTAssertNil(TodayView.confirmation(for: ExerlyLinks.logged(entry.id, accountID: "someone-else"), in: account.workspace),
+                     "Another account's link says nothing here")
+        XCTAssertNil(TodayView.confirmation(for: ExerlyLinks.logged(UUID(), accountID: "intents"), in: account.workspace),
+                     "Nor one for an entry that's gone")
         let count = store.entries.count
         XCTAssertEqual(try LoggingActions.open(soup.id, in: account, now: time(8)), ExerlyLinks.food(soup.id))
         XCTAssertEqual(store.entries.count, count, "Its portion is checked first")

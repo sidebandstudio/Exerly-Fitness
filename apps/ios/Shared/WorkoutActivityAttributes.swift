@@ -84,4 +84,18 @@ enum ExerlyLinks {
         guard url.scheme == "exerly", url.host == "food" else { return nil }
         return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value
     }
+
+    /// Today, confirming an entry an account just logged, with Undo.
+    static func logged(_ entry: UUID, accountID: String) -> URL {
+        var link = URLComponents(string: "exerly://logged")!
+        link.queryItems = [URLQueryItem(name: "entry", value: entry.uuidString), URLQueryItem(name: "account", value: accountID)]
+        return link.url!
+    }
+    static func logged(in url: URL) -> (entry: UUID, accountID: String)? {
+        guard url.scheme == "exerly", url.host == "logged",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let entry = items.first(where: { $0.name == "entry" })?.value.flatMap(UUID.init(uuidString:)),
+              let accountID = items.first(where: { $0.name == "account" })?.value else { return nil }
+        return (entry, accountID)
+    }
 }

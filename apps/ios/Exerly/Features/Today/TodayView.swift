@@ -369,8 +369,19 @@ struct TodayView: View {
                   let portion = LoggingActions.portion(of: id, in: IntentAccess.Account(workspace: workspace, unit: unit, timeZone: timeZone)) {
             date = today
             destination = .log(FoodSuggestion(portion, meal: currentMeal))
+        } else if let confirmation = Self.confirmation(for: link, in: workspace) {
+            date = today
+            show(confirmation.message, undo: confirmation.undo)
         }
         self.link = nil
+    }
+
+    /// A food Spotlight logged: its confirmation, with Undo, when it's this
+    /// account's and still logged.
+    static func confirmation(for link: URL, in workspace: TrainingWorkspace) -> Toast? {
+        guard let logged = ExerlyLinks.logged(in: link), logged.accountID == workspace.accountID,
+              let entry = workspace.nutrition.entries.first(where: { $0.id == logged.entry }) else { return nil }
+        return Toast(message: "Logged \(entry.food.name) to \(entry.meal)", undo: .remove([entry]))
     }
 
     // MARK: Header

@@ -2672,3 +2672,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   again also checks the account is still signed in with reminders on
   before and after adding it, so one still being added when that changes
   is removed once it lands.
+- A usual food logged from Spotlight now opens Today on the same
+  confirmation, with Undo, as a Log again chip. `OpenFoodIntent` hands the
+  app `exerly://logged` with the entry and its account; Today shows it only
+  for that account and while the entry is still logged. The UI test checks
+  Today is in front with the confirmation, and that Undo takes it back.

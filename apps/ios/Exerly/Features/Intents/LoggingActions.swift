@@ -170,11 +170,12 @@ enum LoggingActions {
     }
 
     /// A food chosen in Spotlight: a usual or recent one is logged with its
-    /// remembered portion and Today opens; another opens its portion sheet.
+    /// remembered portion and Today opens on its confirmation, with Undo;
+    /// another opens its portion sheet.
     static func open(_ foodID: String, in account: IntentAccess.Account, now: Date = .now) throws -> URL {
         guard usualFoods(in: account, now: now).contains(where: { $0.id == foodID }) else { return ExerlyLinks.food(foodID) }
-        _ = try logFood(foodID, servings: nil, in: account, now: now)
-        return ExerlyLinks.today
+        let entry = try logEntry(foodID, servings: nil, in: account, now: now)
+        return ExerlyLinks.logged(entry.id, accountID: account.workspace.accountID)
     }
 
     /// Today's first Log again chip for a time of day, logged into `meal`:
@@ -191,6 +192,13 @@ enum LoggingActions {
     /// else multiples of the usual amount.
     static func logFood(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
                         now: Date = .now) throws -> String {
+        let entry = try logEntry(foodID, servings: servings, meal: meal, in: account, now: now)
+        return sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(entry.meal).",
+                         left(account.store, entry.date))
+    }
+
+    private static func logEntry(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
+                                 now: Date) throws -> FoodEntry {
         guard var portion = portion(of: foodID, in: account, now: now) else {
             throw LoggingIntentError.invalid("That food isn't in your recent or saved foods. Search for it in Exerly.")
         }
@@ -205,9 +213,7 @@ enum LoggingActions {
         }
         let store = account.store, today = LocalDate(now, in: account.timeZone)
         let meal = meal ?? store.suggestedMeal(at: now, timeZone: account.timeZone)
-        let entry = try store.log(portion, on: today, meal: meal)
-        return sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(meal).",
-                         left(store, today))
+        return try store.log(portion, on: today, meal: meal)
     }
 
     /// The first of their foods matching a name, as Log a food finds it

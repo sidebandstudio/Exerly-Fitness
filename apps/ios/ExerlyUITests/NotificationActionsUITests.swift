@@ -279,8 +279,8 @@ final class NotificationActionsUITests: ExerlyUITestCase {
     }
 
     /// A food logged before is offered as the Log a food shortcut, so choosing
-    /// it logs the remembered portion; a saved food never logged opens its
-    /// portion sheet.
+    /// it logs the remembered portion, with Undo on Today; a saved food never
+    /// logged opens its portion sheet.
     func testSpotlightLogsAUsualFoodAndOpensANewOnesPortion() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "notify-spotlight", units: "imperial")
@@ -301,11 +301,16 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         XCTAssertTrue(usual.waitForExistence(timeout: 45), spotlight.debugDescription)
         capture(spotlight, "notify-spotlight-usual")
         usual.tap()
-        // Logged with its usual portion, and Today opens on it.
+        // Logged with its usual portion, and Today opens in front on its confirmation, whose Undo takes it back.
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "Today opens")
         let yogurtEntry = todayEntries(app).matching(NSPredicate(format: "label BEGINSWITH %@", "Greek yogurt, plain")).firstMatch
         XCTAssertTrue(yogurtEntry.waitForExistence(timeout: 15), app.debugDescription)
+        let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged Greek yogurt, plain")).firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(app.navigationBars["Log food"].exists, "No portion sheet for a usual food")
         capture(app, "notify-spotlight-usual-logged")
+        app.buttons["today.undo"].tap()
+        XCTAssertTrue(yogurtEntry.waitForNonExistence(timeout: 10), "Undo takes back the entry Spotlight logged")
         search(spotlight, for: "cottage cheese")
         let saved = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 45), spotlight.debugDescription)
@@ -318,7 +323,6 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         let entries = todayEntries(app)
         let cottageEntry = entries.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
         XCTAssertTrue(cottageEntry.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(entries.matching(NSPredicate(format: "label BEGINSWITH %@", "Greek yogurt, plain")).firstMatch.exists)
         capture(app, "notify-spotlight-after")
         // When Spotlight ran the Log a food shortcut itself, its answer stays up until closed.
         XCUIDevice.shared.press(.home)

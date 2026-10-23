@@ -168,7 +168,7 @@ struct MainTabView: View {
             } else {
                 sharedExportUnreadable = true
             }
-        case _ where ExerlyLinks.foodID(in: url) != nil:
+        case _ where ExerlyLinks.foodID(in: url) != nil || ExerlyLinks.logged(in: url) != nil:
             selectedTab = .today
             todayLink = url
         default: break
