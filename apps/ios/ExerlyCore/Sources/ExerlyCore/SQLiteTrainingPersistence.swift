@@ -15,7 +15,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         case invalidAccountID(String)
     }
 
-    public nonisolated static let currentSchemaVersion = 4
+    public nonisolated static let currentSchemaVersion = 5
 
     /// Rows that could not be decoded, as `table/id`. They stay in the file
     /// untouched so a later version can read them.
@@ -125,6 +125,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             PRIMARY KEY (kind, id)
         );
         """,
+        "ALTER TABLE sync_bases ADD COLUMN previous BLOB;",
     ]
 
     private func migrate() throws { try Self.migrate(database) }

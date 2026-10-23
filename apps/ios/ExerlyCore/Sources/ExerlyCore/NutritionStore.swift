@@ -713,20 +713,34 @@ extension NutritionStore: DocumentHost {
     /// against the version both devices last agreed on, and stays deleted.
     /// The device holding the entry logged again does this when the other
     /// comes back, so every device ends with the one entry.
-    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]? {
+    /// A field both changed differently takes `prefer`'s value and waits in
+    /// a conflict about the entry logged again with the other value.
+    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, preferring prefer: Merge.Preference,
+                          agreed: (String) -> Data?) throws -> Reconciliation? {
         guard kind == Self.entryKind else { return nil }
         let decoder = ExerlyJSON.decoder
         let entry = try decoder.decode(FoodEntry.self, from: payload)
         guard isBack, let standIn = replacement(kind: kind, id: id).flatMap(UUID.init),
               let target = entries.first(where: { $0.id == standIn }) else { return nil }
-        let merged = try merge(kind: kind, base: agreed(entry.id.uuidString), local: ExerlyJSON.canonical(target),
-                               remote: payload, preferring: .remote).merged
-        var folded = try decoder.decode(FoodEntry.self, from: merged)
-        folded.id = target.id
+        // The original as the entry logged again, so only what was changed differs.
+        func asTarget(_ data: Data) throws -> Data {
+            var version = try decoder.decode(FoodEntry.self, from: data)
+            version.id = target.id
+            return try ExerlyJSON.canonical(version)
+        }
+        let base = try agreed(entry.id.uuidString).map(asTarget), mine = try ExerlyJSON.canonical(target), theirs = try asTarget(payload)
+        let folded = try merge(kind: kind, base: base, local: mine, remote: theirs, preferring: prefer)
         let link = EntryLink(id: target.id, replaces: (links[target.id]?.replaces ?? []) + (links[entry.id]?.replaces ?? []) + [entry.id])
-        return [DocumentWrite(kind: kind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(folded)),
-                DocumentWrite(kind: Self.linkKind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(link)),
-                DocumentWrite(kind: kind, id: id, payload: nil)]
+        var clashes: [Reconciliation.Clash] = []
+        if !folded.conflicts.isEmpty {
+            let other = try merge(kind: kind, base: base, local: mine, remote: theirs, preferring: prefer == .local ? .remote : .local)
+            clashes = [Reconciliation.Clash(kind: kind, id: target.id.uuidString, base: base, local: folded.merged, remote: other.merged,
+                                            fields: folded.conflicts)]
+        }
+        return Reconciliation(writes: [DocumentWrite(kind: kind, id: target.id.uuidString, payload: folded.merged),
+                                       DocumentWrite(kind: Self.linkKind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(link)),
+                                       DocumentWrite(kind: kind, id: id, payload: nil)],
+                              clashes: clashes)
     }
 
     /// Hiding a food again elsewhere, or linking an entry, needs no review.

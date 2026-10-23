@@ -2360,3 +2360,14 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   bad link; a server from before the kind refuses it with 400 as well, and the app keeps the
   link and tries again next sync, as for conflicts. The branch never shipped, so `replaces`
   is simply removed from `FoodEntry`.
+- Folding an original that comes back into the entry logged again from its scan took the
+  original's value for every field both changed and dropped the clash, so 80 g logged again
+  on the phone became the tablet's 60 g with nothing holding 80 g. `DocumentHost.reconcile`
+  now returns its clashes with the writes (`Reconciliation`), and the caller stages each as a
+  conflict about the entry logged again in the same transaction. Sync keeps that entry's
+  value and offers the original's; a resolution that brings the original back keeps the
+  person's choice and offers the entry's value, and Undo of that resolution removes the
+  conflict it made. The fold needs the version both devices agreed on, which sync used to
+  forget once the Undo's deletion was pushed, so every field differing from the relog (its
+  time too) clashed. A tombstone's base now keeps the version agreed on before it
+  (`SyncBase.previous`, SQLite schema 5 adds the column), and the fold merges against it.

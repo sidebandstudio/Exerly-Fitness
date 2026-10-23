@@ -199,6 +199,7 @@ public final class SyncConflictStore {
         let current = try host.payload(kind: kind, id: documentID)
         var writes: [DocumentWrite] = []
         var undoEffect: (() throws -> Void)?
+        var clashes: [SyncConflict] = []
         var before: [DocumentWrite] = []
         var after: [Data?] = []
         var publishes: [() -> Void] = []
@@ -210,9 +211,14 @@ public final class SyncConflictStore {
                 if current != nil, conflict.version(choice) != nil {
                     // Already back, perhaps changed since: it stays as it is.
                 } else if let kept = conflict.version(choice)?.canonicalData {
-                    if let reconciled = try host.reconcile(kind: kind, id: documentID, payload: kept, isBack: true,
+                    // The person's choice stands; what it replaces waits for review.
+                    if let reconciled = try host.reconcile(kind: kind, id: documentID, payload: kept, isBack: true, preferring: .remote,
                                                            agreed: { agreed(kind: kind, id: $0) }) {
-                        writes = try reconciled.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+                        writes = try reconciled.writes.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+                        clashes = try reconciled.clashes.map {
+                            try found(kind: $0.kind, id: $0.id, base: $0.base, local: $0.local, remote: $0.remote, fields: $0.fields,
+                                      remoteAt: conflict.remoteAt)
+                        }
                     } else {
                         undoEffect = try effects?.bringBack(kind: kind, id: documentID, payload: kept)
                         if undoEffect == nil { writes = [DocumentWrite(kind: kind, id: documentID, payload: kept)] }
@@ -232,6 +238,7 @@ public final class SyncConflictStore {
                 after.append(try write.payload.map { try host.canonicalize(kind: write.kind, payload: $0) })
                 publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload))
             }
+            for clash in clashes { publishes.append(try stage(clash)) }
             publishes.append(try stage(resolved))
         }
         publishes.forEach { $0() }
@@ -260,6 +267,8 @@ public final class SyncConflictStore {
                     }
                     publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: payload))
                 }
+                // The choice made them; taken back, they never were.
+                for clash in clashes { publishes.append(try prepareWrite(kind: Self.kind, id: clash.id.uuidString, payload: nil)) }
                 publishes.append(try stage(reopened))
             }
             publishes.forEach { $0() }

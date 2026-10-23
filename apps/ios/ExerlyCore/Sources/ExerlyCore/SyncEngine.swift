@@ -210,16 +210,24 @@ public final class SyncEngine {
                                 fields: $0.fields, remoteAt: change.updatedAt)
         }
         // Back here after a deletion, it may be what another record now
-        // stands in for, such as an entry whose scan was logged again.
+        // stands in for, such as an entry whose scan was logged again. That
+        // record keeps what it changed, and the other value waits for review.
         let isBack = local == nil && base != nil
         var writes = write.map { [DocumentWrite(kind: change.kind, id: change.id, payload: $0)] } ?? []
+        var clashes: [SyncConflict] = []
         if case .some(let payload?) = write,
-           let reconciled = try host.reconcile(kind: change.kind, id: change.id, payload: payload, isBack: isBack, agreed: { [self] id in
-               conflicts.agreed(kind: change.kind, id: id) ?? (id == change.id ? base?.payload : nil)
+           let reconciled = try host.reconcile(kind: change.kind, id: change.id, payload: payload, isBack: isBack, preferring: .local,
+                                               agreed: { [self] id in
+               conflicts.agreed(kind: change.kind, id: id) ?? (id == change.id ? base?.payload ?? base?.previous : nil)
            }) {
-            writes = try reconciled.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+            writes = try reconciled.writes.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+            clashes = try reconciled.clashes.map {
+                try conflicts.found(kind: $0.kind, id: $0.id, base: $0.base, local: $0.local, remote: $0.remote, fields: $0.fields,
+                                    remoteAt: change.updatedAt)
+            }
         }
-        let newBase = SyncBase(kind: change.kind, id: change.id, revision: change.revision, payload: remote)
+        let newBase = SyncBase(kind: change.kind, id: change.id, revision: change.revision, payload: remote,
+                               previous: remote == nil ? base?.payload ?? base?.previous : nil)
         let remaining = rejected.filter { $0.kind != change.kind || $0.id != change.id }
         var publishes: [() -> Void] = []
         var publishConflict: () -> Void = {}
@@ -228,7 +236,8 @@ public final class SyncEngine {
             if isBack, writes.contains(where: { $0.id == change.id && $0.payload != nil }) {
                 try conflicts.effects?.broughtBack(kind: change.kind, id: change.id)
             }
-            if let conflict { publishConflict = try conflicts.stage(conflict) }
+            let staged = try ([conflict].compactMap { $0 } + clashes).map { try conflicts.stage($0) }
+            publishConflict = { staged.forEach { $0() } }
             try stateStore.saveSyncBase(newBase)
             if remaining != rejected { try stateStore.saveRejectedDocuments(remaining) }
         }
@@ -306,7 +315,8 @@ public final class SyncEngine {
             }
             switch result {
             case .applied(let revision):
-                try saveBase(SyncBase(kind: kind, id: id, revision: revision, payload: current))
+                try saveBase(SyncBase(kind: kind, id: id, revision: revision, payload: current,
+                                      previous: current == nil ? base.payload ?? base.previous : nil))
                 return true
             case .conflict(let remote?):
                 // An unreadable server version can't be merged; leave this document.

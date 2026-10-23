@@ -39,8 +39,10 @@ public protocol DocumentHost: AnyObject {
     /// for `id` or a resolution brings it back (`isBack`, gone here until
     /// now), or nil to write it as it is: an entry and the one logged again
     /// from its scan become one. `agreed` gives a document's version both
-    /// devices last agreed on, when known.
-    func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]?
+    /// devices last agreed on, when known. A field both changed differently
+    /// takes `prefer`'s value: the document here (`local`) or `payload`.
+    func reconcile(kind: String, id: String, payload: Data, isBack: Bool, preferring prefer: Merge.Preference,
+                   agreed: (String) -> Data?) throws -> Reconciliation?
     /// Persists a write, nil to delete, and returns the step that publishes it in
     /// memory. Call inside `performAtomically` and publish only after it commits.
     func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void
@@ -85,6 +87,24 @@ public struct DocumentWrite: Sendable, Hashable {
     static func canonicalID(_ id: String) -> String { UUID(uuidString: id)?.uuidString ?? id }
 }
 
+/// What `reconcile` writes, and the fields of a written document both sides
+/// changed differently, which wait for review.
+public struct Reconciliation: Sendable, Hashable {
+    public struct Clash: Sendable, Hashable {
+        public var kind: String
+        public var id: String
+        public var base: Data?
+        /// As written.
+        public var local: Data
+        /// With the other side's values in `fields`.
+        public var remote: Data
+        public var fields: [String]
+    }
+
+    public var writes: [DocumentWrite]
+    public var clashes: [Clash] = []
+}
+
 /// A merged document and the fields both sides changed differently.
 public struct MergeOutcome: Sendable, Hashable {
     public var merged: Data
@@ -114,7 +134,8 @@ extension DocumentHost {
 
     public func replacement(kind: String, id: String) -> String? { nil }
 
-    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]? {
+    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, preferring prefer: Merge.Preference,
+                          agreed: (String) -> Data?) throws -> Reconciliation? {
         nil
     }
 

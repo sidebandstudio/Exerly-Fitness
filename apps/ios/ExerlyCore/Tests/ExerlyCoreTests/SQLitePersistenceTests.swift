@@ -86,6 +86,21 @@ import Testing
         #expect(try upgraded.loadValue(forKey: "k") == Data("x".utf8))
     }
 
+    /// A version-four file gains the tombstone's agreed version, and keeps its bases.
+    @Test func aTombstoneKeepsTheVersionAgreedOnBeforeIt() throws {
+        do {
+            let store = try SQLiteTrainingPersistence(url: url)
+            try store.saveSyncBase(SyncBase(kind: "food_entry", id: "A", revision: 2, payload: Data("{}".utf8)))
+        }
+        let database = try SQLiteDatabase(url: url)
+        try database.executeScript("ALTER TABLE sync_bases DROP COLUMN previous; PRAGMA user_version = 4;")
+        let upgraded = try SQLiteTrainingPersistence(url: url)
+        #expect(try upgraded.syncBases() == [SyncBase(kind: "food_entry", id: "A", revision: 2, payload: Data("{}".utf8))])
+        let tombstone = SyncBase(kind: "food_entry", id: "A", revision: 3, previous: Data("{}".utf8))
+        try upgraded.saveSyncBase(tombstone)
+        #expect(try upgraded.syncBases() == [tombstone])
+    }
+
     @Test func storesAndRemovesSmallValues() throws {
         let store = try SQLiteTrainingPersistence(url: url)
         #expect(try store.loadValue(forKey: "training.restTimer") == nil)

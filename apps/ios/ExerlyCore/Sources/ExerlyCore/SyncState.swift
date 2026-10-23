@@ -12,6 +12,9 @@ public struct SyncBase: Sendable, Hashable {
     /// Reused when the same content is pushed again after a lost response.
     public var pushKey: String?
     public var pushHash: String?
+    /// For a tombstone, the version agreed on before it, so a record coming
+    /// back merges against what both last had.
+    public var previous: Data?
 }
 
 /// A version of a document from the server that this device couldn't read,
@@ -91,7 +94,7 @@ extension InMemoryTrainingPersistence: SyncStateStore {
 
 extension SQLiteTrainingPersistence: SyncStateStore {
     public func syncBases() throws -> [SyncBase] {
-        try database.query("SELECT kind, id, revision, payload, push_key, push_hash FROM sync_bases").compactMap { row in
+        try database.query("SELECT kind, id, revision, payload, push_key, push_hash, previous FROM sync_bases").compactMap { row in
             guard case .text(let kind) = row[0], case .text(let id) = row[1], case .integer(let revision) = row[2] else {
                 return nil
             }
@@ -99,6 +102,7 @@ extension SQLiteTrainingPersistence: SyncStateStore {
             if case .blob(let payload) = row[3] { base.payload = payload }
             if case .text(let key) = row[4] { base.pushKey = key }
             if case .text(let hash) = row[5] { base.pushHash = hash }
+            if case .blob(let previous) = row[6] { base.previous = previous }
             return base
         }
     }
@@ -106,11 +110,11 @@ extension SQLiteTrainingPersistence: SyncStateStore {
     public func saveSyncBase(_ base: SyncBase) throws {
         try database.execute(
             """
-            INSERT INTO sync_bases (kind, id, revision, payload, push_key, push_hash) VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO sync_bases (kind, id, revision, payload, push_key, push_hash, previous) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (kind, id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload,
-                push_key = excluded.push_key, push_hash = excluded.push_hash
+                push_key = excluded.push_key, push_hash = excluded.push_hash, previous = excluded.previous
             """,
-            base.kind, base.id, base.revision, base.payload, base.pushKey, base.pushHash
+            base.kind, base.id, base.revision, base.payload, base.pushKey, base.pushHash, base.previous
         )
     }
 
