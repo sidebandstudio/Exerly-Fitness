@@ -2204,3 +2204,26 @@ launch reports where Log again was laid out, and LaunchToLoggingUITests checks
 that place against the accessibility tree as each launch returns. With the
 logging cards moved last, Log again is laid out below the fold, and the figure
 for that order is the time to the frame that draws it there.
+
+## 2026-10-23: A sync finds each food entry by ID, and Today's first frame draws every card above the logging tools
+
+From finishing PARITY B03 after review round 2. With three years of history
+(11,456 food entries), half the cold launches took 30 to 40 s to launch's end,
+under XCTest and also launched directly with simctl. The 2026-10-21 entry put
+this down to an idle run loop; a sample of a slow launch showed a busy one.
+Today's first frame starts the launch's sync, and its push asks the nutrition
+store for every document's payload to compare with the server's copy. Each
+entry was found by scanning all of them, about 60 million comparisons on the
+main actor before that frame could finish. Entries are now found through an
+index by ID, dropped whenever the log changes. On the same simulator and data,
+outside XCTest, launch went from 30.6 s p50 (2.8 to 33.4 s) to 3.7 s p50 (2.8
+to 4.1 s). The launches near 4 s are still that sync: its push encodes every
+document to compare, about a second with that history. Pushing only changed
+documents would remove it; that belongs to the sync engine.
+
+A customized order could also leave a card above the ring or the shortcuts for
+the next frame, such as water fourth, above the ring, which then moved Log
+again down after launch had reported its place. The first frame now draws the
+first three cards and every card down to the last logging tool.
+LaunchToLoggingUITests launches that order too: under the earlier rule, none of
+its five launches reported Log again where it ended up.

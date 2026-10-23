@@ -8,34 +8,27 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   pinned nutrients. 2610102054: code-blind run 4 fixes; actionable reminders; Spotlight.
 - 2610110306: typed amounts, package sizes, multi-select copy/move, hidden suggestions,
   Duplicate food. 2610111702: recipe import from a link and as a file; runs 5–6 fixes.
-
-- 2610101011: Watch app; nine App Intents and four Control Center controls. 2610101238: recipes.
-- 2610101740: nutrient goals, pinned nutrients, macros leading with what's left.
-  2610102054: fixes from code-blind run 4; actionable reminders; Spotlight.
-- 2610110306: typed amounts in search, package sizes, multi-select copy/move, hidden
-  suggestions, Duplicate food, run 5 fixes. 2610111702: recipe import and sharing; run 6 fixes.
 - This landing, uploaded next:
-  - Body (PARITY S06, S07, S09, S10): weight goal with ETA, weekly checkpoints and
-    on-track standing, goal line and planned path on the chart; edit and
-    undo-delete readings, gaps drawn dashed, the trend's readings and ± explained;
-    18 measurement sites plus a visual body-fat estimate with history; front, side
-    and back photos per date with a compare slider, stored per account on device.
-  - Diary (PARITY N06, N18, N19, N20, N33): lead with "left" or "eaten"; water
-    with quick adds, Undo, a daily goal and a Log water shortcut; By time view;
-    habits calendar from the date; day status and note from a menu; hide or
-    reorder Today's cards.
-  - iOS 26's clear keyboard Done bar took taps meant for fields drawn behind it
-    (Calories in Edit food on a 17 Pro); the keyboard area is now filled, and a
-    nutrient's caption focuses its field.
-  - Found by the full suite: a preference changed while its screen was still
-    refreshing (Done tapped right after opening Your details, or a reminder switch
-    flipped at once) was dropped; a day with food in one hour lost By time's hour.
+  - Body (PARITY S06, S07, S09, S10): weight goal with ETA, weekly checkpoints and on-track
+    standing, goal line and planned path on the chart; edit and undo-delete readings, gaps drawn
+    dashed, the trend's readings and ± explained; 18 measurement sites plus a visual body-fat
+    estimate with history; front, side and back photos per date with a compare slider, stored per
+    account on device.
+  - Diary (PARITY N06, N18, N19, N20, N33): lead with "left" or "eaten"; water with quick adds,
+    Undo, a daily goal and a Log water shortcut; By time view; habits calendar from the date; day
+    status and note from a menu; hide or reorder Today's cards.
+  - iOS 26's clear keyboard Done bar took taps meant for fields drawn behind it (Calories in Edit
+    food on a 17 Pro); the keyboard area is now filled, and a nutrient's caption focuses its field.
+  - Found by the full suite: a preference changed while its screen was still refreshing (Done tapped
+    right after opening Your details, or a reminder switch flipped at once) was dropped; a day with
+    food in one hour lost By time's hour.
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
     measurements; preview, Undo, full export. Reviews 2–5 fixed: restores (validated, exact
     tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
-- claude/taps (not landed): tap budgets in CI, review rounds 1-2 fixed; B03 2.52 s p50, 5.3 s with 3 years (> 3.5 s).
+- claude/taps (not landed): tap budgets in CI; review rounds 1-2 fixed; launch timed to the committed
+  frame (2.43 s p50); a sync finds entries by ID, so 3 years launch in 3.7 s, not 30 s (B03, DECISIONS).
 
 ## Current outcome
 
@@ -52,17 +45,15 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 
 ## How to resume
 
-Work in `~/Desktop/Exerly-Fitness-claude` on `claude/next`. Fixtures:
-`EXERLY_FIXTURE_PORT=<port> node scripts/ios-fixture-api.cjs` (39140–39148); restart
-them after merging API changes. Capture: `apps/ios/scripts/capture.sh` (CAPTURE=0).
-Full suite: `OUT=<dir> apps/ios/scripts/uitest-shards.sh <udid>:<port> ...` (six
-shards stay under the 2 h background limit; include an iPhone 17 Pro, the size CI
-uses). Watch: `apps/ios/scripts/watch-uitest.sh`. Code-blind run: `drive.sh`.
-Small-phone walk: `SmallPhoneCaptureUITests` (CAPTURE=1, LARGEST_TYPE=1). Release:
-`release-in-session.sh --upload` then `node apps/ios/scripts/asc.mjs internal <build>`.
-Push with `DEVELOPER_DIR` set to Xcode 26.2, or pre-push SwiftLint crashes. In T3,
-never end a turn without background work (`sleep 1200` with run_in_background).
-Helpers can stop on the API rate limit; check their worktree for uncommitted work.
+Work in `~/Desktop/Exerly-Fitness-claude` on `claude/next`. Fixtures: `EXERLY_FIXTURE_PORT=<port>
+node scripts/ios-fixture-api.cjs` (39140–39148); restart them after merging API changes. Capture:
+`apps/ios/scripts/capture.sh` (CAPTURE=0). Full suite: `OUT=<dir> apps/ios/scripts/uitest-shards.sh
+<udid>:<port> ...` (six shards stay under the 2 h background limit; include an iPhone 17 Pro, the
+size CI uses). Watch: `apps/ios/scripts/watch-uitest.sh`. Code-blind run: `drive.sh`. Small-phone
+walk: `SmallPhoneCaptureUITests` (CAPTURE=1, LARGEST_TYPE=1). Release: `release-in-session.sh
+--upload` then `node apps/ios/scripts/asc.mjs internal <build>`. Push with `DEVELOPER_DIR` set to
+Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without background work (`sleep
+1200` with run_in_background). Helpers can stop on the API rate limit; check their worktree.
 
 ## Merge status
 
@@ -84,3 +75,5 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 - Package sizes are tested on synthetic data only, not live Open Food Facts.
 - Open Food Facts search budget is 10/min server-wide; type-ahead spends it faster.
 - Six idle "Exerly App" simulators from the Astra run are left alone per the brief.
+- B03, 3 years: 4.5 to 5.2 s p50 under XCTest (gate 3.5 s); a sync's push still encodes every
+  document on main. BarcodeScanSessionTests' row Undo fails 2 in 10: same-ms scans sort by random ID.

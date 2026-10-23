@@ -3,11 +3,13 @@ import XCTest
 /// Cold launch to logging (PARITY B03), for docs/TAP_BUDGETS.md. A signed-in
 /// person with a week of food relaunches the app 20 times from terminated.
 /// The gate is end to end: from the process starting (the kernel's clock,
-/// so loading the app's code counts) to the first frame drawn with Today and
-/// Log again, which the app reports to the fixture with where it laid Log
-/// again out (LaunchTiming); that place must hold Log again's chip in the
-/// accessibility tree, and the chip, one tap from a logged food, must be
-/// hittable by the time the launch returns. Reported beside it: XCTApplicationLaunchMetric's launch to
+/// so loading the app's code counts) to the commit of the first frame that
+/// lays out Today and Log again, once the main run loop is free again (the
+/// render server shows it at the next refresh), which the app reports to the
+/// fixture with where it laid Log again out (LaunchTiming); that place must
+/// hold Log again's chip in the accessibility tree, and the chip, one tap
+/// from a logged food, must be hittable by the time the launch returns.
+/// Reported beside it: XCTApplicationLaunchMetric's launch to
 /// a responsive first frame (in the log), the app's own interval from its
 /// start (XCTOSSignpostMetric), and the wall clock from asking for the launch
 /// to the chip being hittable, which includes XCTest's own setup. Simulator

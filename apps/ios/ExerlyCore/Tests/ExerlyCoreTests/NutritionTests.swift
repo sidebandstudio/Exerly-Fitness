@@ -45,6 +45,31 @@ enum Foods {
         #expect(close(iron.reduce(0) { $0 + $1.share }, 1))
     }
 
+    /// A sync reads every entry by ID (PARITY B03), and finds each as the
+    /// log changes: logged, edited, deleted, or written by another device.
+    @Test func everyEntrysPayloadFollowsTheLogAsItChanges() throws {
+        let nutrition = try store()
+        let kind = NutritionStore.entryKind
+        func expectPayloads(_ gone: [FoodEntry] = []) throws {
+            for entry in nutrition.entries {
+                #expect(try nutrition.payload(kind: kind, id: entry.id.uuidString) == ExerlyJSON.canonical(entry))
+            }
+            for entry in gone { #expect(try nutrition.payload(kind: kind, id: entry.id.uuidString) == nil) }
+        }
+        let oats = try nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        var milk = try nutrition.log(Foods.milk, grams: 244, on: monday, meal: "Breakfast")
+        try expectPayloads()
+        milk.grams = 300
+        try nutrition.saveEntry(milk)
+        try expectPayloads()
+        try nutrition.deleteEntry(oats.id)
+        try expectPayloads([oats])
+        let remote = try store().log(Foods.chicken, grams: 150, on: monday.adding(days: -1), meal: "Dinner")
+        try nutrition.prepareWrite(kind: kind, id: remote.id.uuidString, payload: ExerlyJSON.canonical(remote))()
+        #expect(nutrition.entries.count == 2)
+        try expectPayloads([oats])
+    }
+
     /// PARITY N25: an omega-3 total and its parts are separate fields. A day's
     /// total adds only the totals foods report, never the parts again.
     @Test func omega3TotalsAndTheirPartsAddUpSeparately() throws {

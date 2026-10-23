@@ -16,7 +16,7 @@ public final class NutritionStore {
 
     public private(set) var foods: [Food] = []
     /// Oldest first.
-    public private(set) var entries: [FoodEntry] = []
+    public private(set) var entries: [FoodEntry] = [] { didSet { entryPositions = nil } }
     public private(set) var days: [LocalDate: NutritionDay] = [:]
     /// Oldest first.
     public private(set) var weights: [WeightEntry] = []
@@ -32,6 +32,10 @@ public final class NutritionStore {
     nonisolated static let planKind = "nutrition_plan"
     nonisolated static let hiddenKind = "hidden_suggestion"
 
+    /// Each entry's place in `entries` by ID, built when first needed after
+    /// they change: a sync looks every entry up, and a scan for each took 30 s
+    /// on the main actor with three years of food (PARITY B03).
+    @ObservationIgnored private var entryPositions: [String: Int]?
     @ObservationIgnored let persistence: TrainingPersistence & DocumentPersistence
     @ObservationIgnored let now: () -> Date
 
@@ -563,13 +567,20 @@ extension NutritionStore: DocumentHost {
     public func payload(kind: String, id: String) throws -> Data? {
         switch kind {
         case Self.foodKind: return try food(id).map(ExerlyJSON.canonical)
-        case Self.entryKind: return try entries.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
+        case Self.entryKind: return try entry(id).map(ExerlyJSON.canonical)
         case Self.dayKind: return try LocalDate(id).flatMap { days[$0] }.map(ExerlyJSON.canonical)
         case Self.weightKind: return try weights.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.planKind: return try plans.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.hiddenKind: return try hiddenSuggestions.first { $0.id == id }.map(ExerlyJSON.canonical)
         default: return nil
         }
+    }
+
+    private func entry(_ id: String) -> FoodEntry? {
+        if entryPositions == nil {
+            entryPositions = Dictionary(entries.indices.map { (entries[$0].id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        return entryPositions?[id].map { entries[$0] }
     }
 
     public func canonicalize(kind: String, payload: Data) throws -> Data {
