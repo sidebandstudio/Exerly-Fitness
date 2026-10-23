@@ -222,10 +222,6 @@ public struct FoodEntry: Sendable, Codable, Hashable, Identifiable {
     /// True when the time of day isn't known, as for a day's total or a row
     /// imported without a time: `loggedAt` is a stand-in, not when it was eaten.
     public var timeUnknown: Bool?
-    /// Entries Undo removed whose offline scans this one logged again. It
-    /// syncs, so any device bringing one of them back changes this entry
-    /// instead, and the scan is logged once.
-    public var replaces: [UUID]?
 
     public init(id: UUID = UUID(), date: LocalDate, meal: String, loggedAt: Date, food: FoodSnapshot, grams: Double,
                 serving: Serving? = nil, quantity: Double? = nil) {
@@ -258,6 +254,32 @@ public struct FoodEntry: Sendable, Codable, Hashable, Identifiable {
         }
         if let quantity, !(quantity.isFinite && quantity > 0) { problems.append("the quantity must be positive") }
         return problems
+    }
+}
+
+/// The entries Undo removed whose offline scans one entry logged again,
+/// synced as a document of its own with that entry's ID. Any device bringing
+/// one of them back changes that entry instead, so the scan is logged once.
+/// It isn't a field of the entry because an app from before it drops fields
+/// it doesn't know whenever it saves an entry. See docs/DECISIONS.md, 2026-10-23.
+public struct EntryLink: Codable, Hashable, Sendable {
+    /// Undo and logging again repeatedly keeps the first entry, the one other
+    /// devices most likely hold, and the latest ones.
+    public static let limit = 8
+
+    public var id: UUID
+    /// Oldest first, never `id` itself, at most `limit`.
+    public var replaces: [UUID]
+
+    public init(id: UUID, replaces: [UUID]) {
+        self.id = id
+        self.replaces = Self.bounded(replaces, for: id)
+    }
+
+    static func bounded(_ ids: [UUID], for id: UUID) -> [UUID] {
+        var seen: Set<UUID> = [id]
+        let unique = ids.filter { seen.insert($0).inserted }
+        return unique.count > limit ? Array(unique.prefix(1) + unique.suffix(limit - 1)) : unique
     }
 }
 

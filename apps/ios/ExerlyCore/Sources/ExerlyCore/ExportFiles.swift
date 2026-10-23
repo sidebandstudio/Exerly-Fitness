@@ -90,6 +90,7 @@ public struct ExerlyExportFile: Sendable {
         case "weight_entry": "Weigh-ins"
         case "nutrition_plan": "Nutrition targets"
         case "hidden_suggestion": "Hidden suggestions"
+        case "food_entry_link": "Scans logged again"
         case "workout_session": "Workouts"
         case "custom_exercise": "Custom exercises"
         case "program": "Programs"

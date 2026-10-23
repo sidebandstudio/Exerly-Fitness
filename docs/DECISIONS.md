@@ -2344,3 +2344,19 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   Undo runs the library's step only while the entry is still exactly that; changed or
   deleted since, the entry and its scan's log stay, as Undo keeps any record changed since a
   resolution, and the conflict reopens.
+- An entry logged again from an undone scan named the entries it stands in for in its own
+  `replaces` field. An app from before that field decodes entries with synthesized coding,
+  drops it, and pushes the whole entry when the person edits it, so the link vanished and a
+  device bringing the original back logged the scan twice. Of the three options the review
+  named, the link is now a document of its own, kind `food_entry_link`, with the entry's ID:
+  an older app has no host for the kind and skips it, so it can never rewrite it; it needs no
+  server-side field preservation, which would have to guess which missing fields are
+  "unknown"; and the barcode library's provenance is device-only by design. Links sync before
+  entries, merge as a union, raise no conflict and are never deleted (a link whose entry is
+  gone stands in for nothing). A link never names its own entry, names each entry once, and
+  keeps at most eight: the first, which other devices most likely hold, and the latest seven.
+  Logging again after another Undo inherits the undone entry's list, so a chain stays one
+  list with its first entry first. The server checks the same rules and returns 400 for a
+  bad link; a server from before the kind refuses it with 400 as well, and the app keeps the
+  link and tries again next sync, as for conflicts. The branch never shipped, so `replaces`
+  is simply removed from `FoodEntry`.

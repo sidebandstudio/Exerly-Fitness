@@ -739,6 +739,30 @@ test('sync conflicts sync as documents, both versions kept', async () => {
   assert.equal(bare.status, 400);
 });
 
+test('an entry logged again links the entries it stands in for, in canonical form', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const replaced = randomUUID();
+  const saved = await api.put(
+    `/v1/documents/food_entry_link/${id}`,
+    { payload: { id, replaces: [replaced] }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/food_entry_link/${id}`, { token });
+  assert.deepEqual(read.body.payload, { id, replaces: [replaced.toUpperCase()] });
+  const other = randomUUID().toUpperCase();
+  const many = Array.from({ length: 9 }, () => randomUUID().toUpperCase());
+  for (const replaces of [[other], [replaced, replaced], many, ['oats']]) {
+    const refused = await api.put(
+      `/v1/documents/food_entry_link/${other}`,
+      { payload: { id: other, replaces }, base_revision: 0 },
+      { token, headers: key() }
+    );
+    assert.equal(refused.status, 400, JSON.stringify(replaces));
+  }
+});
+
 test('legacy food logs and saved foods stay in their own feeds', async () => {
   const { token } = await signUp(api);
   await api.post('/api/food', { name: 'Logged oats', calories: 300 }, { token });

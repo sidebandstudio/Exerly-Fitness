@@ -951,6 +951,8 @@ components:
           - gym_profile
           - hidden_suggestion
           - import_provenance
+          - sync_conflict
+          - food_entry_link
           - proposal
           - audit_event
       description: |

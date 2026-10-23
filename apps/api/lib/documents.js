@@ -101,6 +101,15 @@ const KINDS = {
       : [
           'a conflict needs the kind and ID of its record, when it was found and changed, and its fields',
         ],
+  // The entries Undo removed that one entry, logged again from their scan,
+  // stands in for: its ID the entry's, never naming itself, at most eight.
+  food_entry_link: (p) =>
+    Array.isArray(p.replaces) &&
+    p.replaces.length <= 8 &&
+    p.replaces.every((id) => typeof id === 'string' && UUID_RE.test(id) && id !== p.id) &&
+    new Set(p.replaces).size === p.replaces.length
+      ? []
+      : ['a link names up to eight other entries by ID, each once'],
   proposal: proposalProblems,
   audit_event: auditEventProblems,
 };
@@ -165,6 +174,8 @@ function canonicalPayload(kind, payload) {
     document = mapKey(document, 'program', (ref) => mapKey(ref, 'programID', canonicalID));
   } else if (kind === 'food_entry') {
     document = mapKey(document, 'food', (ref) => mapKey(ref, 'foodID', canonicalID));
+  } else if (kind === 'food_entry_link') {
+    document = mapKey(document, 'replaces', mapEach(canonicalID));
   } else if (kind === 'metric_entry') {
     document = mapKey(document, 'metricID', canonicalID);
   }

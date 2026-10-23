@@ -53,6 +53,8 @@ public final class SyncEngine {
     @ObservationIgnored private var bases: [String: SyncBase] = [:]
 
     private static let maxAttempts = 4
+    /// Kinds a server deployed before them refuses, kept here until it takes them.
+    private static let newerKinds: Set<String> = [SyncConflictStore.kind, NutritionStore.linkKind]
 
     /// `hosts` are synced in order, kind by kind, so a host's earlier kinds
     /// (custom exercises) arrive before the ones that use them (sessions).
@@ -298,8 +300,8 @@ public final class SyncEngine {
                 try stateStore.removeSyncBase(kind: kind, id: id)
                 bases[Self.key(kind, id)] = nil
                 return false
-            } catch APIError.server(status: 400, _) where kind == SyncConflictStore.kind {
-                // A server from before conflicts sync: keep it here and try next time.
+            } catch APIError.server(status: 400, _) where Self.newerKinds.contains(kind) {
+                // A server from before this kind: keep it here and try next time.
                 return false
             }
             switch result {

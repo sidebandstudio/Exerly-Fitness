@@ -378,6 +378,89 @@ private struct ModelRandom {
         #expect(phoneSync.conflicts.conflict(conflict.id)?.isResolved == false)
     }
 
+    /// A food entry as the app decoded it before conflict review: an older
+    /// app saving an entry writes back only these fields.
+    struct BaseFoodEntry: Codable {
+        var id: UUID
+        var date: LocalDate
+        var meal: String
+        var loggedAt: Date
+        var food: FoodSnapshot
+        var grams: Double
+        var serving: Serving?
+        var quantity: Double?
+        var amountChanged: Bool?
+        var timeUnknown: Bool?
+    }
+
+    /// Review round 2, finding 3: an older app on a third device changes the
+    /// entry logged again, writing back only the fields it knows. The link
+    /// to the entry it stands in for survives, so the tablet bringing that
+    /// one back still changes the entry logged again, and the scan is logged once.
+    @Test func anOlderAppEditingTheEntryLoggedAgainKeepsItsLink() async throws {
+        let server = FakeDocumentServer()
+        let phoneDisk = InMemoryTrainingPersistence(), tabletDisk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: phoneDisk)
+        let phone = try NutritionStore(persistence: phoneDisk), tablet = try NutritionStore(persistence: tabletDisk)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneDisk, api: server)
+        phoneSync.conflicts.effects = ScanConflictEffects(library: library, store: phone)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server)
+        let code = Self.codes[1]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        let first = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var edited = try #require(tablet.entries.first)
+        edited.grams = 60
+        try tablet.saveEntry(edited)
+        try await tabletSync.sync()
+        try library.undo(Set(first.map(\.id)), from: phone)
+        let again = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+
+        let id = again[0].id.uuidString
+        var old = try ExerlyJSON.decoder.decode(BaseFoodEntry.self, from: try #require(server.stored("food_entry", id)?.payload))
+        old.grams = 45
+        server.inject(kind: "food_entry", id: id, payload: try ExerlyJSON.canonical(old))
+        try await phoneSync.sync()
+        #expect(phone.entries.map(\.grams) == [45])
+        server.inject(kind: "food_entry", id: first[0].id.uuidString, payload: try ExerlyJSON.canonical(edited))
+        try await phoneSync.sync()
+        #expect(phone.entries.map(\.id) == again.map(\.id), "The scan is logged once, not as \(phone.entries.map(\.grams)) g")
+        #expect(library.pending.isEmpty)
+    }
+
+    /// Undo and logging the scan again, over and over, keeps the link
+    /// bounded, with the first entry first, and never naming itself.
+    @Test func repeatedUndoAndLoggingAgainKeepsTheLinkBounded() async throws {
+        let disk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: disk)
+        let store = try NutritionStore(persistence: disk)
+        let code = Self.codes[0]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        var logged = try library.log(plate, consuming: [[scan.id]], to: store, on: scan.date, meal: scan.meal)
+        let original = logged[0].id
+        for _ in 0..<12 {
+            try library.undo([logged[0].id], from: store)
+            logged = try library.log(plate, consuming: [[scan.id]], to: store, on: scan.date, meal: scan.meal)
+        }
+        let link = try #require(store.links[logged[0].id])
+        #expect(link.replaces.count == EntryLink.limit && link.replaces.first == original && !link.replaces.contains(link.id))
+        #expect(try NutritionStore(persistence: disk).links == store.links, "Links are kept on disk")
+        let looping = EntryLink(id: original, replaces: [original, logged[0].id, logged[0].id])
+        #expect(looping.replaces == [logged[0].id])
+        #expect(throws: DocumentError.self) {
+            try store.validate(kind: NutritionStore.linkKind, id: original.uuidString,
+                               payload: Data(#"{"id":"\#(original.uuidString)","replaces":["\#(original.uuidString)"]}"#.utf8))
+        }
+    }
+
     @Test func oneTransactionNeedsOneStore() async throws {
         let library = BarcodeLibrary(persistence: InMemoryTrainingPersistence())
         let store = try NutritionStore(persistence: InMemoryTrainingPersistence())

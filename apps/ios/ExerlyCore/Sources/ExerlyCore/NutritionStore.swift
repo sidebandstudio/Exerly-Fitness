@@ -24,6 +24,8 @@ public final class NutritionStore {
     public private(set) var plans: [NutritionPlan] = []
     /// Foods the person asked not to be suggested, the latest first.
     public private(set) var hiddenSuggestions: [HiddenSuggestion] = []
+    /// The entries each entry logged from an undone scan stands in for, by its ID.
+    public private(set) var links: [UUID: EntryLink] = [:]
 
     nonisolated static let foodKind = "saved_food"
     nonisolated static let entryKind = "food_entry"
@@ -31,6 +33,7 @@ public final class NutritionStore {
     nonisolated static let weightKind = "weight_entry"
     nonisolated static let planKind = "nutrition_plan"
     nonisolated static let hiddenKind = "hidden_suggestion"
+    nonisolated static let linkKind = "food_entry_link"
 
     /// Each entry's place in `entries` by ID, built when first needed after
     /// they change: a sync looks every entry up, and a scan for each took 30 s
@@ -55,6 +58,8 @@ public final class NutritionStore {
             .sorted(by: Self.planOrder)
         hiddenSuggestions = try persistence.loadDocuments(kind: Self.hiddenKind)
             .map { try decoder.decode(HiddenSuggestion.self, from: $0) }.sorted(by: Self.hiddenOrder)
+        links = Dictionary(try persistence.loadDocuments(kind: Self.linkKind)
+            .map { try decoder.decode(EntryLink.self, from: $0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /// Starts from documents already read and decoded off the main actor
@@ -264,11 +269,14 @@ public final class NutritionStore {
             }
         }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
-        for (index, replaced) in replacing.enumerated() where !replaced.isEmpty { logged[index].replaces = replaced }
         var seen = Set<String>()
         let invalid = logged.flatMap(\.problems).filter { seen.insert($0).inserted }
         guard invalid.isEmpty else { throw StoreError.invalid(invalid) }
-        let publish = try logged.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+        var publish = try logged.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+        for (entry, replaced) in zip(logged, replacing) where !replaced.isEmpty {
+            let link = EntryLink(id: entry.id, replaces: replaced)
+            publish.append(try prepareWrite(kind: Self.linkKind, id: entry.id.uuidString, payload: ExerlyJSON.canonical(link)))
+        }
         return (logged, { publish.forEach { $0() } })
     }
 
@@ -543,6 +551,12 @@ public final class NutritionStore {
         case Self.hiddenKind:
             let added = try canonical.map { try decoder.decode(HiddenSuggestion.self, from: $0) }
             return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { kept($0.id) } + added).sorted(by: Self.hiddenOrder) }
+        case Self.linkKind:
+            let added = try canonical.map { try decoder.decode(EntryLink.self, from: $0) }
+            return { [self] in
+                for id in removed { if let id = UUID(uuidString: id) { links[id] = nil } }
+                for link in added { links[link.id] = link }
+            }
         default:
             throw DocumentError(message: "Unknown kind \(kind)")
         }
@@ -557,7 +571,10 @@ public final class NutritionStore {
 }
 
 extension NutritionStore: DocumentHost {
-    public var documentKinds: [String] { [Self.foodKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind, Self.hiddenKind] }
+    /// Links arrive before entries, so an entry coming back finds what stands in for it.
+    public var documentKinds: [String] {
+        [Self.foodKind, Self.linkKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind, Self.hiddenKind]
+    }
 
     public func documentIDs(kind: String) -> [String] {
         switch kind {
@@ -567,6 +584,7 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: weights.map(\.id.uuidString)
         case Self.planKind: plans.map(\.id.uuidString)
         case Self.hiddenKind: hiddenSuggestions.map(\.id)
+        case Self.linkKind: links.keys.map(\.uuidString)
         default: []
         }
     }
@@ -579,6 +597,7 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: return try weights.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.planKind: return try plans.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.hiddenKind: return try hiddenSuggestions.first { $0.id == id }.map(ExerlyJSON.canonical)
+        case Self.linkKind: return try UUID(uuidString: id).flatMap { links[$0] }.map(ExerlyJSON.canonical)
         default: return nil
         }
     }
@@ -599,6 +618,10 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: return try ExerlyJSON.canonical(decoder.decode(WeightEntry.self, from: payload))
         case Self.planKind: return try ExerlyJSON.canonical(decoder.decode(NutritionPlan.self, from: payload))
         case Self.hiddenKind: return try ExerlyJSON.canonical(decoder.decode(HiddenSuggestion.self, from: payload))
+        case Self.linkKind:
+            // Bounded and never naming itself, whatever another device sent.
+            let link = try decoder.decode(EntryLink.self, from: payload)
+            return try ExerlyJSON.canonical(EntryLink(id: link.id, replaces: link.replaces))
         default: throw DocumentError(message: "Unknown kind \(kind)")
         }
     }
@@ -625,6 +648,10 @@ extension NutritionStore: DocumentHost {
         case Self.hiddenKind:
             let hidden = try decoder.decode(HiddenSuggestion.self, from: payload)
             problems = (hidden.id == id ? [] : ["the ID doesn't match"]) + hidden.problems
+        case Self.linkKind:
+            let link = try decoder.decode(EntryLink.self, from: payload)
+            problems = (link.id.uuidString == id ? [] : ["the ID doesn't match"])
+                + (link.replaces == EntryLink.bounded(link.replaces, for: link.id) ? [] : ["a link names itself, twice or too many"])
         default:
             throw DocumentError(message: "Unknown kind \(kind)")
         }
@@ -644,6 +671,10 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: return try whole(WeightEntry.self)
         case Self.planKind: return try whole(NutritionPlan.self)
         case Self.hiddenKind: return try whole(HiddenSuggestion.self)
+        case Self.linkKind:
+            // Everything either side links stays linked.
+            let mine = try decoder.decode(EntryLink.self, from: local), theirs = try decoder.decode(EntryLink.self, from: remote)
+            return try ExerlyJSON.canonical(EntryLink(id: mine.id, replaces: mine.replaces + theirs.replaces))
         case Self.dayKind:
             let original = try base.map { try decoder.decode(NutritionDay.self, from: $0) }
             var merged = try decoder.decode(NutritionDay.self, from: local)
@@ -673,7 +704,8 @@ extension NutritionStore: DocumentHost {
     /// The entry logged again from the scan of `id`, an entry Undo removed.
     public func replacement(kind: String, id: String) -> String? {
         guard kind == Self.entryKind, let entry = UUID(uuidString: id) else { return nil }
-        return entries.first { $0.id != entry && $0.replaces?.contains(entry) == true }?.id.uuidString
+        let standIns = links.values.filter { $0.replaces.contains(entry) }.map(\.id)
+        return standIns.isEmpty ? nil : entries.first { standIns.contains($0.id) }?.id.uuidString
     }
 
     /// An entry and the one logged again from its scan never both stand:
@@ -685,23 +717,20 @@ extension NutritionStore: DocumentHost {
         guard kind == Self.entryKind else { return nil }
         let decoder = ExerlyJSON.decoder
         let entry = try decoder.decode(FoodEntry.self, from: payload)
-        func fold(_ source: FoodEntry, into target: FoodEntry) throws -> FoodEntry {
-            let merged = try merge(kind: kind, base: agreed(source.id.uuidString), local: ExerlyJSON.canonical(target),
-                                   remote: ExerlyJSON.canonical(source), preferring: .remote).merged
-            var folded = try decoder.decode(FoodEntry.self, from: merged)
-            folded.id = target.id
-            folded.replaces = Array(Set((target.replaces ?? []) + (source.replaces ?? []) + [source.id]).subtracting([target.id]))
-                .sorted { $0.uuidString < $1.uuidString }
-            return folded
-        }
         guard isBack, let standIn = replacement(kind: kind, id: id).flatMap(UUID.init),
               let target = entries.first(where: { $0.id == standIn }) else { return nil }
-        return [DocumentWrite(kind: kind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(fold(entry, into: target))),
+        let merged = try merge(kind: kind, base: agreed(entry.id.uuidString), local: ExerlyJSON.canonical(target),
+                               remote: payload, preferring: .remote).merged
+        var folded = try decoder.decode(FoodEntry.self, from: merged)
+        folded.id = target.id
+        let link = EntryLink(id: target.id, replaces: (links[target.id]?.replaces ?? []) + (links[entry.id]?.replaces ?? []) + [entry.id])
+        return [DocumentWrite(kind: kind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(folded)),
+                DocumentWrite(kind: Self.linkKind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(link)),
                 DocumentWrite(kind: kind, id: id, payload: nil)]
     }
 
-    /// Hiding a food again elsewhere needs no review.
-    public func reviewsConflicts(kind: String) -> Bool { kind != Self.hiddenKind }
+    /// Hiding a food again elsewhere, or linking an entry, needs no review.
+    public func reviewsConflicts(kind: String) -> Bool { kind != Self.hiddenKind && kind != Self.linkKind }
 
     /// Field by field: an entry's amount (grams, serving, quantity) and a
     /// weigh-in's time and day each change together. A day without a common
@@ -710,7 +739,7 @@ extension NutritionStore: DocumentHost {
         switch kind {
         case Self.entryKind, Self.weightKind:
             return try fieldMerge(kind: kind, base: base, local: local, remote: remote, groups: fieldGroups(kind: kind), preferring: prefer)
-        case Self.hiddenKind:
+        case Self.hiddenKind, Self.linkKind:
             return MergeOutcome(merged: try merge(kind: kind, base: base, local: local, remote: remote), conflicts: [])
         case Self.dayKind:
             let decoder = ExerlyJSON.decoder
@@ -739,6 +768,7 @@ extension NutritionStore: DocumentHost {
                 case Self.weightKind: weights.removeAll { $0.id.uuidString == id }
                 case Self.planKind: plans.removeAll { $0.id.uuidString == id }
                 case Self.hiddenKind: hiddenSuggestions.removeAll { $0.id == id }
+                case Self.linkKind: if let id = UUID(uuidString: id) { links[id] = nil }
                 default: break
                 }
             }
@@ -764,6 +794,9 @@ extension NutritionStore: DocumentHost {
         case Self.hiddenKind:
             let hidden = try decoder.decode(HiddenSuggestion.self, from: canonical)
             return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { $0.id != id } + [hidden]).sorted(by: Self.hiddenOrder) }
+        case Self.linkKind:
+            let link = try decoder.decode(EntryLink.self, from: canonical)
+            return { [self] in links[link.id] = link }
         default:
             let plan = try decoder.decode(NutritionPlan.self, from: canonical)
             return { [self] in plans = (plans.filter { $0.id != plan.id } + [plan]).sorted(by: Self.planOrder) }

@@ -266,8 +266,11 @@ public final class BarcodeLibrary {
             guard consumed.count == ids.count else { throw LogError.alreadyLogged(ids.subtracting(consumed.map(\.id))) }
             try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: stored.filter { !ids.contains($0.id) })), forKey: Self.key)
             let undone = try storedValue([String: [Pending]].self, Self.undoneKey) ?? [:]
+            // Each undone entry with what it already stood in for first, so a
+            // chain of Undo and logging again keeps the first entry first.
             let replacing = scans.map { own in
                 undone.filter { $0.value.contains { own.contains($0.id) } }.keys.compactMap(UUID.init).sorted { $0.uuidString < $1.uuidString }
+                    .flatMap { (store.links[$0]?.replaces ?? []) + [$0] }
             }
             let written = try store.writeLog(plate, on: date, meal: meal, at: time, replacing: replacing)
             var provenance = try storedProvenance()
