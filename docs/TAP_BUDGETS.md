@@ -26,8 +26,8 @@ MacroFactor's are counted from its public material only. Checked 2026-10-20.
   count is used: a toolbar shortcut is assumed set up, a date defaults to
   today, a field is assumed focused, a paste option is assumed in view.
 - **The barcode scan** counts as one action in both. The simulator has no
-  camera, so Exerly's test types the digits into the scanner's manual field
-  and looks them up; on a phone the camera reads them.
+  camera, so Exerly's test shows the code to the scanner's stand-in camera
+  (the fixture's barcode feed); on a phone the camera reads it.
 
 ## Side by side
 

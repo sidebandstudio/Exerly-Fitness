@@ -11,13 +11,13 @@ extension ExerlyUITestCase {
     /// A person with last week's food and weigh-ins, a two-day program with
     /// last Upper A logged, signed in on Today. Their breakfast habit is
     /// around now, so Breakfast is the meal Log again fills at any hour.
-    func budgetHome(prefix: String) async throws -> (XCUIApplication, (email: String, token: String)) {
+    func budgetHome(prefix: String, environment: [String: String] = [:]) async throws -> (XCUIApplication, (email: String, token: String)) {
         try await control([:])
         let person = try await createAccount(prefix: prefix, units: "imperial")
         try await seedLoggingWeek(token: person.token)
         try await deleteSetupWeight(token: person.token)
         try await seedTwoDayPlan(token: person.token)
-        let app = launch(resetSession: true)
+        let app = launch(resetSession: true, environment: environment)
         signIn(app, email: person.email)
         settleAfterSignIn(app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 20))

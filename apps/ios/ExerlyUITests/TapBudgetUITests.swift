@@ -86,20 +86,20 @@ final class TapBudgetUITests: ExerlyUITestCase {
     }
 
 
-    /// Scan, the barcode, Log. The simulator has no camera, so the barcode
-    /// builder's seam, its digits typed and looked up, stands in for the scan
-    /// and counts as one action. Budget 3.
+    /// Scan, the scan, Log. The simulator has no camera, so its stand-in
+    /// camera is shown the code (BarcodeTestFeed), which counts as one
+    /// action, and the food found lands on the plate. Budget 3.
     func testBarcodeToLoggedTakesThreeTaps() async throws {
-        let (app, person) = try await budgetHome(prefix: "budget-barcode")
+        _ = try await request("POST", "/__test/barcode-feed", body: [:])
+        let (app, person) = try await budgetHome(prefix: "budget-barcode", environment: ["EXERLY_TEST_BARCODE_FEED": "1"])
         startCounting()
         tap(app.buttons["nutrition.scanBarcodeDirect"], in: app)
-        let field = app.textFields["nutrition.barcodeDigits"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        let before = tapCount
-        replace(field, with: "0012345678905", in: app)
-        tap(app.buttons["nutrition.lookupBarcode"], in: app)
-        tapCount = before + 1
-        tap(app.buttons["nutrition.saveEntry"], in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["nutrition.scannerReady"].waitForExistence(timeout: 10), "The camera is watching")
+        _ = try await request("POST", "/__test/barcode-feed", body: ["payload": "ean13:0012345678905"])
+        tapCount += 1
+        let log = app.buttons["nutrition.scanLogAll"]
+        XCTAssertTrue(log.waitForExistence(timeout: 10), "The food found is on the plate")
+        tap(log, in: app)
         XCTAssertLessThanOrEqual(tapCount, 3, "Budget: 3")
         XCTAssertEqual(tapCount, 3, "Scan, the scan, Log")
         XCTAssertEqual(scrollCount, 0)
