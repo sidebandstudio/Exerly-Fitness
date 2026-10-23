@@ -167,3 +167,58 @@ import Testing
         #expect(history < .seconds(1), "indexing took \(history)")
     }
 }
+
+/// Review round 3, finding 1: a write and the record that sync must push it
+/// are one unit, for every kind of write, with no transaction around them.
+@MainActor
+@Suite struct ChangeRecordTests {
+    struct Crash: Error {}
+
+    @Test(arguments: [false, true])
+    func aWriteAndItsChangeRecordPersistTogetherOrNotAtAll(sqlite: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let memory = InMemoryTrainingPersistence()
+        let disk: TrainingPersistence & DocumentPersistence & SyncStateStore = sqlite ? try SQLiteTrainingPersistence(url: url) : memory
+        func crashing(_ on: Bool) {
+            let hook: (() throws -> Void)? = on ? { throw Crash() } : nil
+            if let store = disk as? SQLiteTrainingPersistence { store.beforeRecordingChange = hook } else { memory.beforeRecordingChange = hook }
+        }
+        try disk.trustChanges(token: "t")
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        let exercise = Exercise(id: "custom-synthetic-sled-push", name: "Synthetic Sled Push", aliases: [], metric: .weightReps,
+                                mechanics: .compound, region: .lower, muscles: [.quads: 1], equipment: [.sled], support: [])
+        let writes: [(name: String, write: () throws -> Void, exists: () throws -> Bool, ref: DocumentRef)] = [
+            ("session", { try disk.save(session) }, { try disk.loadSessions().contains { $0.id == session.id } },
+             DocumentRef(kind: TrainingStore.sessionKind, id: session.id.uuidString)),
+            ("exercise", { try disk.save(exercise) }, { try disk.loadCustomExercises().contains { $0.id == exercise.id } },
+             DocumentRef(kind: TrainingStore.exerciseKind, id: exercise.id.rawValue)),
+            ("document", { try disk.saveDocument(kind: "food_entry", id: "A", payload: Data("{}".utf8)) },
+             { try !disk.loadDocuments(kind: "food_entry").isEmpty }, DocumentRef(kind: "food_entry", id: "A")),
+        ]
+        for item in writes {
+            crashing(true)
+            #expect(throws: Crash.self) { try item.write() }
+            #expect(try !item.exists() && disk.changedDocuments(token: "t")?.contains(item.ref) == false,
+                    "\(item.name): a write survived without its change record")
+            crashing(false)
+            try item.write()
+            #expect(try item.exists() && disk.changedDocuments(token: "t")?.contains(item.ref) == true)
+            try disk.markUnchanged(kind: item.ref.kind, id: item.ref.id)
+        }
+        let deletions: [(name: String, delete: () throws -> Void, exists: () throws -> Bool, ref: DocumentRef)] = [
+            ("session", { try disk.deleteSession(session.id) }, writes[0].exists, writes[0].ref),
+            ("document", { try disk.deleteDocument(kind: "food_entry", id: "A") }, writes[2].exists, writes[2].ref),
+        ]
+        for item in deletions {
+            crashing(true)
+            #expect(throws: Crash.self) { try item.delete() }
+            #expect(try item.exists(), "\(item.name): a deletion survived without its change record")
+            crashing(false)
+            try item.delete()
+            #expect(try !item.exists() && disk.changedDocuments(token: "t")?.contains(item.ref) == true)
+        }
+    }
+}

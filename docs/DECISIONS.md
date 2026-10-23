@@ -2431,3 +2431,11 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   sets ("Barbell Row: 3 sets", "… and 12 more"); other whole records read as their values.
   `EXERLY_SYNC_CONFLICT_SEED=removed` seeds a removed-set clash and a conflict too large to
   sync, for `testARemovedSetAndATooLargeConflictSayWhatTheyDo` and the screenshots.
+
+## 2026-10-23: Conflict review, round 3
+
+- A write and the record of its change were separate statements, and most callers pass no
+  transaction, so a crash between them left a saved edit that later syncs never compared.
+  Every persistence mutation (a session, a custom exercise or a document, saved or
+  deleted) now runs with its change record in one transaction of its own, nested in the
+  caller's when there is one, on disk and in memory, so no caller can forget it.

@@ -26,6 +26,8 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     public private(set) var isClosed = false
+    /// Tests: runs between a write and the record of its change, as a crash could.
+    var beforeRecordingChange: (() throws -> Void)?
 
     /// Every persistence opened in this process, so deleting a file can close
     /// the ones still using it.
@@ -188,38 +190,50 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         try load(Exercise.self, table: "custom_exercises", order: "id")
     }
 
+    // Each write and the record of its change are one transaction, nested
+    // in the caller's when there is one, so neither persists without the other.
+
     public func save(_ session: WorkoutSession) throws {
-        try database.execute(
-            """
-            INSERT INTO sessions (id, started_at, ended_at, payload, updated_at) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at,
-                payload = excluded.payload, updated_at = excluded.updated_at
-            """,
-            session.id.uuidString, session.startedAt, session.endedAt, try encoder.encode(session), Date()
-        )
-        try recordChange(TrainingStore.sessionKind, session.id.uuidString)
+        let payload = try encoder.encode(session)
+        try database.transaction {
+            try database.execute(
+                """
+                INSERT INTO sessions (id, started_at, ended_at, payload, updated_at) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at,
+                    payload = excluded.payload, updated_at = excluded.updated_at
+                """,
+                session.id.uuidString, session.startedAt, session.endedAt, payload, Date()
+            )
+            try recordChange(TrainingStore.sessionKind, session.id.uuidString)
+        }
     }
 
     public func deleteSession(_ id: UUID) throws {
-        try database.execute("DELETE FROM sessions WHERE id = ?", id.uuidString)
-        try recordChange(TrainingStore.sessionKind, id.uuidString)
+        try database.transaction {
+            try database.execute("DELETE FROM sessions WHERE id = ?", id.uuidString)
+            try recordChange(TrainingStore.sessionKind, id.uuidString)
+        }
     }
 
     /// Sync pushes only documents changed since they matched the server;
     /// recorded in the write's own transaction, a crash can't lose one.
     func recordChange(_ kind: String, _ id: String) throws {
+        try beforeRecordingChange?()
         try database.execute("INSERT OR IGNORE INTO sync_changes (kind, id) VALUES (?, ?)", kind, DocumentWrite.canonicalID(id))
     }
 
     public func save(_ exercise: Exercise) throws {
-        try database.execute(
-            """
-            INSERT INTO custom_exercises (id, payload, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
-            """,
-            exercise.id.rawValue, try encoder.encode(exercise), Date()
-        )
-        try recordChange(TrainingStore.exerciseKind, exercise.id.rawValue)
+        let payload = try encoder.encode(exercise)
+        try database.transaction {
+            try database.execute(
+                """
+                INSERT INTO custom_exercises (id, payload, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+                """,
+                exercise.id.rawValue, payload, Date()
+            )
+            try recordChange(TrainingStore.exerciseKind, exercise.id.rawValue)
+        }
     }
 
     public func loadValue(forKey key: String) throws -> Data? {
@@ -266,15 +280,19 @@ extension SQLiteTrainingPersistence: DocumentPersistence {
     }
 
     public func saveDocument(kind: String, id: String, payload: Data) throws {
-        try database.execute(
-            "INSERT INTO documents (kind, id, payload) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET payload = excluded.payload",
-            kind, id, payload
-        )
-        try recordChange(kind, id)
+        try database.transaction {
+            try database.execute(
+                "INSERT INTO documents (kind, id, payload) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET payload = excluded.payload",
+                kind, id, payload
+            )
+            try recordChange(kind, id)
+        }
     }
 
     public func deleteDocument(kind: String, id: String) throws {
-        try database.execute("DELETE FROM documents WHERE kind = ? AND id = ?", kind, id)
-        try recordChange(kind, id)
+        try database.transaction {
+            try database.execute("DELETE FROM documents WHERE kind = ? AND id = ?", kind, id)
+            try recordChange(kind, id)
+        }
     }
 }

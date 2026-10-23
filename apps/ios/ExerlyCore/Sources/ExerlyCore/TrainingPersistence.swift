@@ -35,6 +35,13 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     var documents: [String: [String: Data]] = [:]
     /// Documents written since sync last found them matching their base.
     var changed: Set<DocumentRef> = []
+    /// Tests: runs between a write and the record of its change, as a crash could.
+    var beforeRecordingChange: (() throws -> Void)?
+
+    private func recordChange(_ kind: String, _ id: String) throws {
+        try beforeRecordingChange?()
+        changed.insert(DocumentRef(kind: kind, id: id))
+    }
 
     public init(sessions: [WorkoutSession] = [], customExercises: [Exercise] = []) {
         for session in sessions { self.sessions[session.id] = session }
@@ -45,17 +52,24 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     public func loadCustomExercises() throws -> [Exercise] {
         customExercises.values.sorted { $0.id < $1.id }
     }
+    // Each write and the record of its change are one unit, as on disk.
     public func save(_ session: WorkoutSession) throws {
-        sessions[session.id] = session
-        changed.insert(DocumentRef(kind: TrainingStore.sessionKind, id: session.id.uuidString))
+        try performAtomically {
+            sessions[session.id] = session
+            try recordChange(TrainingStore.sessionKind, session.id.uuidString)
+        }
     }
     public func deleteSession(_ id: UUID) throws {
-        sessions[id] = nil
-        changed.insert(DocumentRef(kind: TrainingStore.sessionKind, id: id.uuidString))
+        try performAtomically {
+            sessions[id] = nil
+            try recordChange(TrainingStore.sessionKind, id.uuidString)
+        }
     }
     public func save(_ exercise: Exercise) throws {
-        customExercises[exercise.id] = exercise
-        changed.insert(DocumentRef(kind: TrainingStore.exerciseKind, id: exercise.id.rawValue))
+        try performAtomically {
+            customExercises[exercise.id] = exercise
+            try recordChange(TrainingStore.exerciseKind, exercise.id.rawValue)
+        }
     }
     public func loadValue(forKey key: String) throws -> Data? { values[key] }
     public func saveValue(_ value: Data?, forKey key: String) throws { values[key] = value }
@@ -96,11 +110,15 @@ extension InMemoryTrainingPersistence: DocumentPersistence {
     }
 
     public func saveDocument(kind: String, id: String, payload: Data) throws {
-        documents[kind, default: [:]][id] = payload
-        changed.insert(DocumentRef(kind: kind, id: id))
+        try performAtomically {
+            documents[kind, default: [:]][id] = payload
+            try recordChange(kind, id)
+        }
     }
     public func deleteDocument(kind: String, id: String) throws {
-        documents[kind]?[id] = nil
-        changed.insert(DocumentRef(kind: kind, id: id))
+        try performAtomically {
+            documents[kind]?[id] = nil
+            try recordChange(kind, id)
+        }
     }
 }
