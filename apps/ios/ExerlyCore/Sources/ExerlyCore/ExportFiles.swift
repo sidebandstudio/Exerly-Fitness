@@ -100,6 +100,7 @@ public struct ExerlyExportFile: Sendable {
         case "custom_metric": "Custom metrics"
         case "metric_entry": "Custom metric values"
         case "experiment": "Experiments"
+        case "health_import": "Apple Health imports"
         default: kind.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }

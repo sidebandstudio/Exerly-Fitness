@@ -168,8 +168,9 @@ final class TrainingWorkspace: ObservableObject {
         HistoryImporter(hosts: documentHosts, persistence: persistence, measurements: measurements)
     }
 
-    /// Every store whose records are documents: what imports write and exports hold.
-    var documentHosts: [DocumentHost] { [store, programs, nutrition, gyms, agent, provenance] }
+    /// Every store whose records are documents: what imports write and exports hold,
+    /// Health's import records among them, with their owners and generations.
+    var documentHosts: [DocumentHost] { [store, programs, nutrition, gyms, agent, provenance, healthImports] }
 
     func supportsChanges(in proposal: Proposal) -> Bool {
         let kinds = store.documentKinds + programs.documentKinds + nutrition.documentKinds + gyms.documentKinds

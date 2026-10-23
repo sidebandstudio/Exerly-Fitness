@@ -390,6 +390,8 @@ final class HealthHistoryReadsTests: XCTestCase {
 
     // MARK: Review 3
 
+    /// Item 2: a phone that adopted another's import keeps it, even when the
+    /// first phone, offline meanwhile, reads Health's deletion of it with
     /// its old ownership and later comes back online.
     func testAStaleOwnerNeverRemovesWhatAnotherPhoneAdopted() async throws {
         let server = MemoryDocumentServer()
@@ -430,6 +432,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(phoneA.healthImports.records[soup.id]?.owner, "phone-b")
     }
 
+    /// Item 3: a crash between saving a workout's activity and its record,
     /// adding it or taking it out, leaves nothing half done once Exerly opens again.
     func testACrashBetweenAnActivityAndItsRecordIsFinishedOnTheNextOpen() async throws {
         let run = workout()
@@ -458,6 +461,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(workspace.healthImports.records[run.id]?.state, .removed)
     }
 
+    /// Item 4: an entry changed while its day's preview is open holds the day
     /// as it is: confirming adds nothing beside it and shows the preview again.
     func testAnEntryChangedWhileItsPreviewIsOpenHoldsItsDay() async throws {
         let diary = food(8, "com.example.diary")
@@ -500,6 +504,8 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(history.pending?.preview.adding, 0)
     }
 
+    /// Item 5: a food set aside for a better one, then deleted in Health, is
+    /// gone for good: it doesn't come back when the better one goes, and
     /// doesn't keep a lower-ranked app's food out of its day.
     func testADisplacedFoodDeletedInHealthNeverComesBackNorHoldsItsDay() async throws {
         let diary = food(8, "com.example.diary"), watch = food(9, "com.apple.health.watch"), other = food(10, "com.example.zapp")
@@ -521,6 +527,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(workspace.nutrition.entries.map(\.id), [other.id], "A lower-ranked app's food can still count")
     }
 
+    /// Item 6: a workout they chose to remove stays removed, even when the same
     /// confirmation found a better one over it, and that one goes later.
     func testAWorkoutChosenForRemovalStaysRemovedWhenItsBetterOneGoes() async throws {
         let run = workout(source: "com.example.runs")
@@ -542,6 +549,26 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertTrue(activities.restored.isEmpty)
     }
 
+    /// Item 7: an export holds the account's Health import records, and
+    /// restoring it brings each back with its owner, generation, fingerprint and state.
+    func testAnExportKeepsHealthImportRecordsAndRestoringBringsThemBack() async throws {
+        let soup = food(12, "com.example.tracker"), toast = food(8, "com.example.tracker", daysAgo: 2)
+        client.foods = [soup, toast]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods = [soup]
+        await history.refresh()
+        let records = workspace.healthImports.records
+        XCTAssertEqual(records[toast.id]?.state, .removed)
+        let export = try workspace.export(server: nil)
+        let restored = try TrainingWorkspace(accountID: "restored", root: temporaryRoot())
+        let options = HistoryImportReader.Options(timeZone: zone, unit: .kilograms)
+        let parsed = try HistoryImportReader.read([("exerly-export.json", export)], options: options, library: restored.store.library)
+        let plan = try HistoryImportReader.plan(parsed, files: ["exerly-export.json"], options: options, hosts: restored.documentHosts)
+        try restored.importer.commit(plan)
+        XCTAssertEqual(restored.healthImports.records, records)
+    }
 }
 
 /// Health as a list of samples. An anchored read returns what was added
