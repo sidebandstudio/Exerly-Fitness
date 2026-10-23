@@ -70,11 +70,12 @@ extension View {
     }
 
     /// A floating confirmation's surface: opaque, so the list under it never
-    /// reads through, lifted off it by a border and a shadow.
-    func exToastSurface<S: InsettableShape>(_ shape: S) -> some View {
+    /// reads through, lifted off it by a border and a shadow. One set in a
+    /// card has no `shadow`.
+    func exToastSurface<S: InsettableShape>(_ shape: S, shadow: Bool = true) -> some View {
         background(Color.exSurface2, in: shape)
             .overlay { shape.strokeBorder(Color.exBorder.opacity(0.6), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
+            .shadow(color: .black.opacity(shadow ? 0.3 : 0), radius: 14, y: 6)
     }
 }
 

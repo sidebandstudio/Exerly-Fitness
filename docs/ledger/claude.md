@@ -28,7 +28,7 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 - claude/polish6 (not landed): run 7 and reviews. Gain or Maintain for a passed goal weight; liquids
   by density, drained cans; Customize Today and the water goal kept offline, sent alone, one writer
   per session, replays reconciled (QuickPreferences); Next in each form's order (iPad layout test);
-  weigh-ins read with time, fat, source; water's Undo over the water card's header, not its chips.
+  weigh-ins read with time, fat, source; water's Undo in a row under its chips, which never move.
 
 ## Current outcome
 
@@ -62,7 +62,7 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 | Branch      | Unlanded               | Last landed                             |
 | ----------- | ---------------------- | --------------------------------------- |
 | claude/next | nothing                | this commit                             |
-| polish6     | 18 commits on b3981833 | not yet: fast-forwards onto claude/next |
+| polish6     | 20 commits on b3981833 | not yet: fast-forwards onto claude/next |
 
 ## Risks
 
@@ -71,7 +71,7 @@ Helpers can stop on the API rate limit; check their worktree for uncommitted wor
 - Watch, App Intents and reminders: unverified on hardware, with a passcode, from
   the Action button, and when an action relaunches a terminated app.
 - Recipe import matched 16 of 47 real lines (all correct); USDA table lacks salt, flour, spices, oils.
-- Other toasts still cover the bottom of Today for 6 s, as water's did (Log again chips, meals).
+- Other toasts still cover Today's bottom for 6 s; water's row is unseen if its card sits at the bottom.
 - Progress photos: camera capture and moving a real older store unverified; kept on device.
 - Hide's swipe is a custom pan, checked only by XCTest. At the largest text Progress scrolls only
   beside the trend chart, whose scrub takes drags (tests drag in the margin). Package sizes: synthetic.

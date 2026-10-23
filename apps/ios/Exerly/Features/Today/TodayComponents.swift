@@ -369,8 +369,8 @@ struct TodayToast: View {
     var failed = false
     let undo: (() -> Void)?
     var undoIdentifier = "today.undo"
-    /// From the screen's edges; none over a card's own content.
-    var horizontalPadding = ExSpacing.page
+    /// A row in a card, flat and edge to edge, rather than floating over the screen.
+    var inline = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -392,9 +392,9 @@ struct TodayToast: View {
             }
         }
         .padding(.leading, ExSpacing.content).padding(.trailing, ExSpacing.tight).padding(.vertical, 4)
-        .frame(minHeight: 52)
-        .exToastSurface(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .padding(.horizontal, horizontalPadding)
+        .frame(maxWidth: inline ? .infinity : nil, minHeight: 52, alignment: .leading)
+        .exToastSurface(RoundedRectangle(cornerRadius: 26, style: .continuous), shadow: !inline)
+        .padding(.horizontal, inline ? 0 : ExSpacing.page)
         .accessibilityElement(children: .contain)
     }
 }

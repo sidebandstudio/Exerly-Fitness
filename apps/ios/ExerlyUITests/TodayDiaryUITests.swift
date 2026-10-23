@@ -23,7 +23,8 @@ final class TodayDiaryUITests: ExerlyUITestCase {
     /// A glass of water is one tap from Today, Undo takes it back, and Other
     /// removes some. Its confirmation never covers the chips: at the bottom
     /// of the screen it did, and Other tapped straight after a bottle landed
-    /// on it and didn't open (confirming review).
+    /// on it and didn't open (confirming review). It's a row in the water
+    /// card, under chips that stay put, and the card above doesn't change.
     func testAGlassOfWaterLogsInOneTapAndCanBeUndone() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "today-water", units: "imperial")
@@ -33,10 +34,13 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         reveal(row, in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 20))
         XCTAssertTrue((row.value as? String ?? "").hasPrefix("0 fl oz logged"), row.value as? String ?? "")
+        let undo = app.buttons["today.undoWater"]
+        // The whole card in view, as a person scrolls to it, so its
+        // confirmation shows under the chips rather than under the tab bar.
+        reveal(app.staticTexts["Lunch"], in: app)
         tapCount = 0
         tap(app.buttons["today.water.glass"], in: app)
         XCTAssertEqual(tapCount, 1)
-        let undo = app.buttons["today.undoWater"]
         XCTAssertTrue(undo.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Added 8 fl oz of water"].exists)
         await fulfillment(of: [expectation(for: NSPredicate(format: "value BEGINSWITH %@", "8 fl oz logged"), evaluatedWith: row)], timeout: 10)
@@ -46,13 +50,12 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         await fulfillment(of: [expectation(for: NSPredicate(format: "value BEGINSWITH %@", "0 fl oz logged"), evaluatedWith: row)], timeout: 10)
         try await waitForWater(0, token: person.token)
 
+        reveal(app.buttons["today.water.bottle"], in: app)
+        let before = waterLayout(app)
         tap(app.buttons["today.water.bottle"], in: app)
         let added = app.staticTexts["Added 16.9 fl oz of water"]
         XCTAssertTrue(added.waitForExistence(timeout: 5))
-        for chip in ["glass", "bottle", "other"] {
-            let frame = app.buttons["today.water.\(chip)"].frame
-            XCTAssertFalse(frame.intersects(added.frame) || frame.intersects(undo.frame), "\(chip) is covered")
-        }
+        checkWaterConfirmation(added, undo: undo, against: before, in: app)
         capture(app, "water-bottle-added")
         tap(app.buttons["today.water.other"], in: app)
         tap(app.buttons["Remove"], in: app)
@@ -61,6 +64,28 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         XCTAssertTrue(app.staticTexts["Removed 8 fl oz of water"].waitForExistence(timeout: 5))
         await fulfillment(of: [expectation(for: NSPredicate(format: "value BEGINSWITH %@", "8.9 fl oz logged"), evaluatedWith: row)], timeout: 10)
         try await waitForWater(263, token: person.token)
+    }
+
+    /// Where the water chips and the card above water are, before a change.
+    private func waterLayout(_ app: XCUIApplication) -> (chips: [String: CGRect], above: CGRect) {
+        let chips = ["glass", "bottle", "other"].map { ($0, app.buttons["today.water.\($0)"].frame) }
+        return (Dictionary(uniqueKeysWithValues: chips), app.otherElements["weightCard"].frame)
+    }
+
+    /// The confirmation and its Undo sit inside the water card, over no chip;
+    /// the chips haven't moved and the card above is as it was.
+    private func checkWaterConfirmation(_ message: XCUIElement, undo: XCUIElement,
+                                        against before: (chips: [String: CGRect], above: CGRect), in app: XCUIApplication) {
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 0.5)
+        let card = app.otherElements["today.waterCard"].frame
+        XCTAssertTrue(card.contains(message.frame) && card.contains(undo.frame), "\(message.frame), \(undo.frame) in \(card)")
+        for (chip, frame) in before.chips {
+            let now = app.buttons["today.water.\(chip)"].frame
+            XCTAssertEqual(now, frame, "\(chip) moved")
+            XCTAssertFalse(now.intersects(message.frame) || now.intersects(undo.frame), "\(chip) is covered")
+        }
+        XCTAssertEqual(app.otherElements["weightCard"].frame, before.above, "The card above changed")
     }
 
     /// Run 7 looked for "lead with what's eaten" in Customize Today before

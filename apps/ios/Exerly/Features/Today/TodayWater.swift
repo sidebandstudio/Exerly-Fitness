@@ -25,8 +25,8 @@ struct TodayWaterCard: View {
     let imperial: Bool
     /// Millilitres a day, from Your details.
     let goal: Int?
-    /// Today's confirmation of a change, with Undo. It sits on the header,
-    /// growing upward when it's taller, so the chips stay uncovered.
+    /// Today's confirmation of a change, with Undo, in its own row under the
+    /// chips: the card grows while it shows, and the chips stay where they are.
     var confirmation: AnyView?
     /// A change queued, in millilitres, for Today's toast and Undo.
     let changed: (Int) -> Void
@@ -50,8 +50,6 @@ struct TodayWaterCard: View {
             .buttonStyle(TodayPressStyle())
             .accessibilityHint("Opens water, to add another amount or remove some")
             .accessibilityIdentifier("today.water")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .anchorPreference(key: HeaderBounds.self, value: .bounds) { $0 }
             if let goal = day.goal { ExProgressBar(value: day.drinks, total: goal, color: .exSecondary) }
             let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
                 : AnyLayout(HStackLayout(spacing: ExSpacing.small))
@@ -66,6 +64,7 @@ struct TodayWaterCard: View {
                     .accessibilityLabel("Add or remove another amount of water")
                     .accessibilityIdentifier("today.water.other")
             }
+            if let confirmation { confirmation }
             if day.food >= 1 {
                 Text("Plus \(Self.amount(day.food, imperial: imperial)) in logged food and drinks, not counted toward your goal")
                     .font(.exSmall).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
@@ -76,29 +75,14 @@ struct TodayWaterCard: View {
                     .font(.exSmall).foregroundStyle(Color.exTextMuted)
             }
         }
-        // Outside the card, which clips: the confirmation's bottom meets the
-        // header's, and a taller one grows up over the card above.
-        .overlayPreferenceValue(HeaderBounds.self) { header in
-            if let header, let confirmation {
-                GeometryReader { proxy in
-                    let frame = proxy[header]
-                    confirmation.fixedSize(horizontal: false, vertical: true)
-                        .frame(width: frame.width, height: frame.maxY, alignment: .bottom)
-                        .offset(x: frame.minX)
-                }
-            }
-        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("today.waterCard")
         .task(id: "\(date)-\(sync.changeToken)") { await load() }
         .sheet(isPresented: $editing) {
             TodayWaterSheet(date: date, water: current, store: store, imperial: imperial, goal: goal) { change in
                 apply(change)
             }
         }
-    }
-
-    private struct HeaderBounds: PreferenceKey {
-        static var defaultValue: Anchor<CGRect>?
-        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
     }
 
     private func header(_ day: WaterDay) -> some View {
@@ -110,15 +94,23 @@ struct TodayWaterCard: View {
                 Image(systemName: "drop.fill").font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.exSecondary)
                     .frame(width: 36, height: 36).background(Color.exSecondary.opacity(0.14), in: Circle()).accessibilityHidden(true)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
-                    Spacer(minLength: ExSpacing.small)
-                    Text("\(figure)\(rest)").monospacedDigit().lineLimit(1)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
-                    Text("\(figure)\(rest)").monospacedDigit()
+            let stacked = VStack(alignment: .leading, spacing: 2) {
+                Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
+                Text("\(figure)\(rest)").monospacedDigit()
+            }
+            // Stacked from the start at the largest sizes: the first glass
+            // made the figure too wide for one line, and the header's new
+            // line pushed the chips down under the finger.
+            if typeSize.isAccessibilitySize {
+                stacked
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Water").font(.exH3).foregroundStyle(Color.exTextPrimary)
+                        Spacer(minLength: ExSpacing.small)
+                        Text("\(figure)\(rest)").monospacedDigit().lineLimit(1)
+                    }
+                    stacked
                 }
             }
             Image(systemName: "chevron.right").font(.exCaption.weight(.semibold)).foregroundStyle(Color.exTextMuted).accessibilityHidden(true)

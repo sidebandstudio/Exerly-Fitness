@@ -112,9 +112,9 @@ struct TodayView: View {
         let undo: Undo?
         var failed = false
 
-        /// Water's shows on the water card, over its header and above it: at
-        /// the bottom of the screen it covered the chips just tapped, so a
-        /// second glass tapped straight after the first landed on it.
+        /// Water's shows in the water card, under its chips: at the bottom of
+        /// the screen it covered the chips just tapped, so a second glass
+        /// tapped straight after the first landed on it.
         var isWater: Bool { if case .water = undo { true } else { false } }
     }
 
@@ -377,7 +377,7 @@ struct TodayView: View {
             if date <= today {
                 let confirmation = toast.flatMap { toast in
                     toast.isWater ? AnyView(TodayToast(message: toast.message, undo: { undo(toast) },
-                                                       undoIdentifier: undoIdentifier(toast.undo), horizontalPadding: 0)
+                                                       undoIdentifier: undoIdentifier(toast.undo), inline: true)
                         .transition(.opacity)
                         .task(id: toast.id) { await expire(toast) }) : nil
                 }
