@@ -383,6 +383,50 @@ final class HealthHistoryReadsTests: XCTestCase {
         await history.refresh()
         XCTAssertEqual(workspace.nutrition.entries.count, 1)
     }
+
+    // MARK: Review 3
+
+    /// doesn't keep a lower-ranked app's food out of its day.
+    func testADisplacedFoodDeletedInHealthNeverComesBackNorHoldsItsDay() async throws {
+        let diary = food(8, "com.example.diary"), watch = food(9, "com.apple.health.watch"), other = food(10, "com.example.zapp")
+        client.foods = [diary]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods = [diary, watch]
+        await history.refresh()
+        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), [watch.id])
+        client.foods = [watch]
+        await history.refresh()
+        XCTAssertEqual(workspace.healthImports.records[diary.id]?.state, .removed)
+        client.foods = []
+        await history.refresh()
+        XCTAssertTrue(workspace.nutrition.entries.isEmpty, "Neither comes back")
+        client.foods = [other]
+        await history.refresh()
+        XCTAssertEqual(workspace.nutrition.entries.map(\.id), [other.id], "A lower-ranked app's food can still count")
+    }
+
+    /// confirmation found a better one over it, and that one goes later.
+    func testAWorkoutChosenForRemovalStaysRemovedWhenItsBetterOneGoes() async throws {
+        let run = workout(source: "com.example.runs")
+        client.workouts = [run]
+        let history = model()
+        await history.begin(.workouts)
+        await history.confirm()
+        var watch = workout(source: "com.apple.health.watch")
+        watch.start = run.start.addingTimeInterval(60)
+        client.workouts = [watch]
+        await history.checkEverythingAgain(.workouts)
+        XCTAssertEqual(history.pending?.preview.missing, 1)
+        XCTAssertEqual(history.pending?.preview.displacing, 1)
+        await history.confirm(removeMissing: true)
+        XCTAssertEqual(workspace.healthImports.records[run.id]?.state, .removed)
+        client.workouts = []
+        await history.refresh()
+        XCTAssertEqual(activities.states[HealthHistory.activityID(for: run.id, accountID: "history")], true, "The removed run stays out")
+        XCTAssertTrue(activities.restored.isEmpty)
+    }
 }
 
 /// Health as a list of samples. An anchored read returns what was added

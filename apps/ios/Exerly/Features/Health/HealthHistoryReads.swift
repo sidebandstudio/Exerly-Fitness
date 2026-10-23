@@ -533,10 +533,9 @@ final class HealthHistoryModel: ObservableObject {
         let store = activities()
         var changed: [HealthImport] = []
         defer { try? imports.save(changed) }
-        let removals = (plan.removing + (pending.removeMissing ? plan.missing : [])).map { ($0, HealthImport.State.removed) }
-            + plan.displacing.map { ($0, HealthImport.State.displaced) }
+        let removals = HealthImport.outcomes(removing: plan.removing + (pending.removeMissing ? plan.missing : []), displacing: plan.displacing)
         for (id, state) in removals {
-            guard var record = imports.records[id], record.owner == install, record.state != .removed else { continue }
+            guard var record = imports.records[id], record.owner == install, record.allows(state) else { continue }
             if record.state == .imported, store.activityStates([record.target])[record.target] == false {
                 // Changed since it was imported: theirs now.
                 guard store.activityFingerprint(record.target) == record.fingerprint else { continue }

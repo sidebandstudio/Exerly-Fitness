@@ -196,18 +196,16 @@ extension HealthImportStore {
         var entries: [DocumentWrite] = [], changed: [HealthImport] = [], added = 0, removed = 0
         let current = Dictionary(nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         try persistence.performAtomically {
-            for (ids, state) in [(changes.removing, HealthImport.State.removed), (changes.displacing, .displaced)] {
-                for id in ids {
-                    guard var record = records[id], record.kind == .food, record.owner == install, record.state == .imported else { continue }
-                    if let entry = current[id] {
-                        guard HealthImport.fingerprint(entry) == record.fingerprint else { continue }
-                        entries.append(DocumentWrite(kind: NutritionStore.entryKind, id: id.uuidString, payload: nil))
-                        removed += 1
-                    }
-                    record.state = state
-                    record.updatedAt = now
-                    changed.append(record)
+            for (id, state) in HealthImport.outcomes(removing: changes.removing, displacing: changes.displacing) {
+                guard var record = records[id], record.kind == .food, record.owner == install, record.allows(state) else { continue }
+                if let entry = current[id] {
+                    guard record.state == .imported, HealthImport.fingerprint(entry) == record.fingerprint else { continue }
+                    entries.append(DocumentWrite(kind: NutritionStore.entryKind, id: id.uuidString, payload: nil))
+                    removed += 1
                 }
+                record.state = state
+                record.updatedAt = now
+                changed.append(record)
             }
             for reading in changes.adding where current[reading.id] == nil && records[reading.id] == nil {
                 let entry = NutritionStore.entry(for: reading, timeZone: timeZone)
@@ -243,6 +241,23 @@ extension HealthImportStore {
 }
 
 extension HealthImport {
+    /// One outcome per record, in a stable order: a removal, Health's or
+    /// theirs, wins over setting the same record aside, so a removed record
+    /// never comes back when the better source goes.
+    public static func outcomes(removing: [UUID], displacing: [UUID]) -> [(UUID, State)] {
+        var outcome: [UUID: State] = [:]
+        for id in displacing { outcome[id] = .displaced }
+        for id in removing { outcome[id] = .removed }
+        return outcome.sorted { $0.key.uuidString < $1.key.uuidString }.map { ($0.key, $0.value) }
+    }
+
+    /// Whether the record can become `state` on its own: one in Exerly can be
+    /// taken out or set aside, and one set aside can still be taken out, as
+    /// when Health deletes it, so it's never a better source again.
+    public func allows(_ state: State) -> Bool {
+        self.state == .imported || (self.state == .displaced && state == .removed)
+    }
+
     /// The record of a food just imported.
     init(food reading: HealthFoodReading, entry: FoodEntry, owner: String, now: Date) {
         self.init(id: reading.id, kind: .food, target: entry.id.uuidString, owner: owner, source: reading.source,
