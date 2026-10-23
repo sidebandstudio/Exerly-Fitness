@@ -381,8 +381,25 @@ final class TodayDiaryUITests: ExerlyUITestCase {
         tap(app.buttons["Profile"], in: app)
         tap(app.buttons["profile.details"], in: app)
         XCTAssertTrue(app.navigationBars["Your details"].waitForExistence(timeout: 10))
-        tap(app.buttons["preferences.nutritionDisplay"], in: app)
-        tap(app.buttons[choice], in: app)
+        // Under load the menu can still be opening when its item is tapped, or
+        // the tap is lost and the menu stays open, and saving then closes it
+        // unchosen, so Today never changed (3 of 6 runs on 2026-10-23, at load
+        // averages over 60). Save only once the picker shows the choice,
+        // choosing again if the first tap was lost.
+        let picker = app.buttons["preferences.nutritionDisplay"]
+        reveal(picker, in: app)
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), app.debugDescription)
+        let chosen = NSPredicate(format: "label ENDSWITH %@", choice)
+        for _ in 0..<2 where !chosen.evaluate(with: picker) {
+            tap(picker, in: app)
+            // The menu may still be opening: tap its item once it can take the tap.
+            let item = app.buttons[choice]
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: item)
+            XCTAssertEqual(XCTWaiter().wait(for: [ready], timeout: 10), .completed, app.debugDescription)
+            item.tap()
+            _ = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: chosen, object: picker)], timeout: 5)
+        }
+        XCTAssertTrue(chosen.evaluate(with: picker), "The picker shows \(choice): \(picker.label)")
         tap(app.buttons["preferences.save"], in: app)
         XCTAssertTrue(app.navigationBars["Your details"].waitForNonExistence(timeout: 15))
         tap(app.buttons["Today"], in: app)

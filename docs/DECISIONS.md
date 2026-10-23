@@ -2228,6 +2228,7 @@ again down after launch had reported its place. The first frame now draws the
 first three cards and every card down to the last logging tool.
 LaunchToLoggingUITests launches that order too: under the earlier rule, none of
 its five launches reported Log again where it ended up.
+
 ## 2026-10-21: Two devices' changes to one record merge by field, and real conflicts wait for the person
 
 PARITY I03 and N08. Foods, entries, weigh-ins, plans, programs, gyms and metrics merged as
@@ -2533,3 +2534,12 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   the entry (agreed at 60 g) waits in the deletion's conflict and comes back as 40 g on
   both. Both passed as written: merges compare with the last version both devices agreed
   on, never with older ones.
+- TodayDiary's eaten-and-back test failed often on 2026-10-23, on `claude/next` as on this
+  branch: 0 of 10 runs alone on `claude/next` first, then, alternating the two builds under
+  the same load, 3 of 4 on `claude/next` and 3 of 3 here, and 6 of 10 here alone at load
+  averages of 20 to 65. Every failure but one was the same: Your details' menu still
+  opening, or its item's tap lost, so the choice never took (the picker still read "What
+  you've eaten"), and Save closed the menu unchosen. The test now waits for the menu item
+  to take a tap and saves only once the picker shows the choice, choosing again if the tap
+  was lost; 10 of 10 passed after it, with the second choice never needed. The app wasn't
+  at fault: a person's tap lands on an open menu.

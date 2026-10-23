@@ -28,8 +28,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   a goal weight; liquids by density, drained cans; Customize Today and water goal kept offline, sent
   alone, one writer per session, replays reconciled (QuickPreferences); Next in each form's order;
   weigh-ins read with time, fat, source; water's Undo in a row under its chips, which never move.
-- claude/taps (not landed, rebased on polish6): tap budgets in CI; reviews 1-6 fixed; launch gated at
-  1.10x an empty account's in the same run and 3.25 s p50; 3 years in 3.7 s, not 30 s (B03).
+- claude/taps (landed): tap budgets in CI; reviews 1-6 fixed; launch gated at 1.10x an empty
+  account's in the same run and 3.25 s p50; 3 years in 3.7 s, not 30 s (B03).
 
 ## Current outcome
 
@@ -57,10 +57,10 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 
 ## Merge status
 
-| Branch      | Unlanded               | Last landed                             |
-| ----------- | ---------------------- | --------------------------------------- |
-| claude/next | nothing                | this commit                             |
-| taps        | 33 commits on 48f64e6d | not yet: fast-forwards onto claude/next |
+| Branch      | Unlanded                                       | Last landed |
+| ----------- | ---------------------------------------------- | ----------- |
+| claude/next | nothing                                        | this commit |
+| sync        | conflict review, rounds 1-4 fixed, on 2f7b53b5 | not yet     |
 
 ## Risks
 
@@ -72,8 +72,8 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 - Hide's swipe is a custom pan, checked only by XCTest. At the largest text Progress scrolls only
   beside the trend chart, whose scrub takes drags (tests drag in the margin). Package sizes: synthetic.
 - Open Food Facts search: 10/min server-wide, type-ahead spends it. Idle "Exerly App" sims: left alone.
-- Flaky: BarcodeScanSessionTests' row Undo; TodayDiary's eaten-and-back under load averages over 100.
-- B03: 3 years take 4.5 to 7.5 s p50 under XCTest (by load), failing its 3.5 s gate until the sync slice
-  pushes only changed documents. Launch now ends once the logging controls stay put (3 of 200 moved).
+- Flaky: BarcodeScanSessionTests' row Undo. TodayDiary's eaten-and-back: fixed in the test (DECISIONS).
+- B03: 3 years miss the 3.5 s gate: p50 4.50 s (p95 4.68) vs 5.08 s on claude/next; sync encodes nothing.
+- Sync: ship the API (`food_entry_link`) with the app; bump `syncEncodingVersion` on encoding changes.
 - Intents open a workspace synchronously (LoggingActions.swift:66): an older file's migration lock can
   hold the main actor up to 5 s. Left for the nutrition builder's change to that workspace.
