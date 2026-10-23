@@ -73,6 +73,57 @@ final class SyncConflictUITests: ExerlyUITestCase {
         XCTAssertFalse(app.staticTexts["None"].exists, "No version reads as None")
     }
 
+    /// Review round 2: a set clash whose set was removed here since says
+    /// so and offers to bring it back or leave it removed; a conflict too
+    /// large to sync says it's only on this iPhone.
+    func testARemovedSetAndATooLargeConflictSayWhatTheyDo() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "sync-removed", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "removed"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.conflicts"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertEqual(row.value as? String, "2 changes to check")
+        tap(row, in: app)
+        // The card's identifier is its children's too, so they're found by what they say.
+        let now = app.staticTexts["Showing now: Barbell Bench Press: set removed"]
+        XCTAssertTrue(now.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Showing now,")).firstMatch.exists,
+                       "Neither version is marked as shown")
+        XCTAssertTrue(app.buttons["Bring the set back as this iPhone's"].exists)
+        let leave = app.buttons["Leave it removed"]
+        reveal(leave, in: app)
+        tap(leave, in: app)
+        XCTAssertTrue(app.buttons["conflicts.undo"].waitForExistence(timeout: 5))
+        XCTAssertFalse(now.exists, "The removed set's card is settled")
+        let note = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@",
+                                                                        "Too large to sync, so it's only on this iPhone.")).firstMatch
+        reveal(note, in: app)
+        XCTAssertTrue(note.exists, app.debugDescription)
+    }
+
+    /// Opt-in screenshots of round 2's cards: the removed set and the
+    /// conflict too large to sync.
+    func testRemovedSetAndTooLargeCapture() async throws {
+        guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else {
+            throw XCTSkip("Opt-in visual review of the conflict review")
+        }
+        try await control([:])
+        let person = try await createAccount(prefix: "sync-removed-capture", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "removed"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.conflicts"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        tap(row, in: app)
+        XCTAssertTrue(app.staticTexts["Showing now: Barbell Bench Press: set removed"].waitForExistence(timeout: 10))
+        capture(app, "sync-round2-01-review")
+        reveal(app.buttons["Leave it removed"], in: app)
+        capture(app, "sync-round2-02-removed-set")
+        reveal(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Too large to sync")).firstMatch, in: app)
+        for _ in 0..<2 { app.swipeUp() }
+        capture(app, "sync-round2-03-too-large")
+    }
+
     /// Opt-in screenshots of the review, as the capture script runs them
     /// in light and dark, at default and largest text: every kind of value,
     /// then the Undo bar with the list scrolled to its end.

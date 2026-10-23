@@ -243,12 +243,21 @@ private struct ConflictResolvedToast: View {
 /// entry whose amount another device changed, and a weigh-in deleted here
 /// that another device changed, as real conflicts in the account's store.
 /// With "all", also a workout set and a plan's goal both devices changed.
+/// With "removed", only a set clash whose set was removed here since, and a
+/// workout's conflict too large to sync.
 @MainActor
 enum ConflictSeed {
     static func seedIfAsked(_ workspace: TrainingWorkspace, timeZone: TimeZone) {
         let asked = ProcessInfo.processInfo.environment["EXERLY_SYNC_CONFLICT_SEED"]
-        guard asked == "1" || asked == "all", workspace.conflicts.conflicts.isEmpty else { return }
+        guard asked == "1" || asked == "all" || asked == "removed", workspace.conflicts.conflicts.isEmpty else { return }
         do {
+            if asked == "removed" {
+                for conflict in try removedSetAndTooLarge(workspace, at: Date().addingTimeInterval(-180), device: workspace.conflicts.device) {
+                    try workspace.conflicts.prepareWrite(kind: SyncConflictStore.kind, id: conflict.id.uuidString,
+                                                         payload: ExerlyJSON.canonical(conflict))()
+                }
+                return
+            }
             let today = LocalDate(Date(), in: timeZone)
             let food = Food(id: "seed-conflict-yogurt", name: "Synthetic Greek yogurt",
                             per100g: NutrientAmounts([.energy: 97, .protein: 9, .carbohydrate: 4, .fat: 5]), servings: [], createdAt: Date())
@@ -314,6 +323,37 @@ enum ConflictSeed {
                          remoteAt: at.addingTimeInterval(-300), base: planBase,
                          local: try ExerlyCore.JSONValue(encoding: plan),
                          remote: try ExerlyCore.JSONValue(encoding: maintain), fields: ["goal"]),
+        ]
+    }
+
+    /// Yesterday's workout whose second set clashed and was removed here
+    /// since, and a long workout changed here, deleted elsewhere, whose
+    /// conflict is too large to sync.
+    private static func removedSetAndTooLarge(_ workspace: TrainingWorkspace, at: Date, device: SyncDevice) throws -> [SyncConflict] {
+        let sets = (0..<3).map { index in
+            PerformedSet(efforts: [Effort(reps: 5, load: .kg(100))], completedAt: at.addingTimeInterval(-86_400 + Double(index) * 180))
+        }
+        let session = WorkoutSession(name: "Synthetic push day", startedAt: at.addingTimeInterval(-86_400 - 600),
+                                     endedAt: at.addingTimeInterval(-86_400 + 1_800),
+                                     exercises: [PerformedExercise(exerciseID: "barbell-bench-press", sets: sets)])
+        try workspace.store.importSessions([session])
+        var heavier = session, more = session
+        heavier.exercises[0].sets[1].efforts[0].load = .kg(102.5)
+        more.exercises[0].sets[1].efforts[0].reps = 6
+        var removed = heavier
+        removed.exercises[0].sets.remove(at: 1)
+        try workspace.store.saveSession(removed)
+        let path = "exercises[\(session.exercises[0].id.uuidString)].sets[\(sets[1].id.uuidString)].efforts"
+        let long = WorkoutSession(name: "Synthetic long session", startedAt: at.addingTimeInterval(-2 * 86_400),
+                                  endedAt: at.addingTimeInterval(-2 * 86_400 + 5_400),
+                                  exercises: [PerformedExercise(exerciseID: "barbell-row", sets: sets)])
+        return [
+            SyncConflict(kind: "workout_session", documentID: session.id.uuidString, device: device, detectedAt: at,
+                         remoteAt: at.addingTimeInterval(-200), base: try ExerlyCore.JSONValue(encoding: session),
+                         local: try ExerlyCore.JSONValue(encoding: heavier), remote: try ExerlyCore.JSONValue(encoding: more), fields: [path]),
+            SyncConflict(kind: "workout_session", documentID: long.id.uuidString, device: device, detectedAt: at.addingTimeInterval(-10),
+                         remoteAt: at.addingTimeInterval(-400), base: nil, local: try ExerlyCore.JSONValue(encoding: long), remote: nil,
+                         fields: [], tooLarge: true),
         ]
     }
 }

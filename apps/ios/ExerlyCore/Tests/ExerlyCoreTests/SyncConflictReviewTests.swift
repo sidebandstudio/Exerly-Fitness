@@ -290,6 +290,8 @@ final class TrainingDevice {
         #expect(conflict.tooLarge == true && server.stored(SyncConflictStore.kind, conflict.id.uuidString) == nil)
         let summary = phone.conflicts.summary(of: conflict, unit: .kilograms, timeZone: .gmt)
         #expect(summary.note == "Too large to sync, so it's only on this iPhone.")
+        #expect(summary.local.value.hasPrefix("Barbell Bench Press: 2 sets, Barbell Row: 20 sets, Barbell Row: 20 sets and "),
+                "A whole workout reads as its exercises, not \(summary.local.value)")
         var renamed = try #require(phone.session(other.id))
         renamed.name = "Legs"
         try phone.store.saveSession(renamed)

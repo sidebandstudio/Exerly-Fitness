@@ -234,6 +234,17 @@ private struct ConflictWords {
             case .lose: return "Lose \(rate)% a week" + target
             case .gain: return "Gain \(rate)% a week" + target
             }
+        case ("workout_session", "*"):
+            // A whole workout, as a deletion shows it: its first exercises and their sets.
+            let exercises: [String] = (fields["exercises"]?.arrayValue ?? []).compactMap(\.objectValue).map { exercise in
+                let count = exercise["sets"]?.arrayValue?.count ?? 0
+                return "\(exerciseName(exercise)): \(count == 1 ? "1 set" : "\(count) sets")"
+            }
+            guard !exercises.isEmpty else { return "No exercises" }
+            let more = exercises.count - 3
+            return exercises.prefix(3).joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+        case (_, "*"):
+            return plain(version)
         default:
             return plain(fields[field])
         }
@@ -344,4 +355,5 @@ private extension JSONValue {
     var objectValue: [String: JSONValue]? { if case .object(let value) = self { value } else { nil } }
     var stringValue: String? { if case .string(let value) = self { value } else { nil } }
     var numberValue: Double? { if case .number(let value) = self { value } else { nil } }
+    var arrayValue: [JSONValue]? { if case .array(let value) = self { value } else { nil } }
 }

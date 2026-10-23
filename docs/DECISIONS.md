@@ -2426,3 +2426,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   finished, so an interrupted one starts again. One difference: a stored row this device
   can't read, which sync takes for a deletion, is pushed as one only by such a full
   comparison, not by every sync as before.
+- A workout's deletion conflict showed its kept version as "None", since a whole record fell
+  through to the plain-field wording. It now reads as its first three exercises and their
+  sets ("Barbell Row: 3 sets", "… and 12 more"); other whole records read as their values.
+  `EXERLY_SYNC_CONFLICT_SEED=removed` seeds a removed-set clash and a conflict too large to
+  sync, for `testARemovedSetAndATooLargeConflictSayWhatTheyDo` and the screenshots.
