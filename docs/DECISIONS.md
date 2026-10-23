@@ -2660,3 +2660,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - Log by JSON refuses `true` and `false` for a nutrient or a serving's
   amount or weight. Foundation reads them as the numbers 1 and 0, so
   `"energy": true` logged 1 kcal.
+- A night of sleep counts for the morning you wake, with samples ending
+  from 6 PM on counted for the next night. That's now read from the clock
+  where the sample was recorded, rather than adding six hours, which put
+  an evening nap on the wrong night where clocks change at midnight
+  (Santiago, for one). Tests cover nights across spring-forward and
+  fall-back, whose hours are the real ones.

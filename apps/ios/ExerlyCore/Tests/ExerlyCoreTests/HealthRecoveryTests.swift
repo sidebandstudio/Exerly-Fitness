@@ -41,6 +41,35 @@ import Testing
         #expect(days.map(\.sleepHours) == [nil, 8])
     }
 
+    /// A local time, in `zone`.
+    func local(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0, in zone: TimeZone) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    @Test func aNightAcrossAClockChangeCountsItsRealHoursForTheMorningYouWake() {
+        // 22:00 to 06:30 by the clock: an hour shorter when clocks go forward, an hour longer when they go back.
+        let spring = [asleep(local(2026, 3, 7, 22, in: newYork), local(2026, 3, 8, 6, 30, in: newYork), watch)]
+        #expect(HealthRecovery.days([LocalDate("2026-03-07")!, LocalDate("2026-03-08")!], sleep: spring, hrv: [], restingHeartRate: [],
+                                    timeZone: newYork).map(\.sleepHours) == [nil, 7.5])
+        let fall = [asleep(local(2026, 10, 31, 22, in: newYork), local(2026, 11, 1, 6, 30, in: newYork), watch)]
+        #expect(HealthRecovery.days([LocalDate("2026-10-31")!, LocalDate("2026-11-01")!], sleep: fall, hrv: [], restingHeartRate: [],
+                                    timeZone: newYork).map(\.sleepHours) == [nil, 9.5])
+    }
+
+    @Test func anEveningNapCountsForTheNextNightEvenWhereClocksChangeAtMidnight() {
+        // Santiago's clocks go back at midnight on 4 April 2026, and forward at midnight on 6 September.
+        let santiago = TimeZone(identifier: "America/Santiago")!
+        for (day, month) in [(4, 4), (5, 9)] {
+            let nap = asleep(local(2026, month, day, 18, in: santiago), local(2026, month, day, 18, 30, in: santiago), watch, zone: santiago)
+            let before = asleep(local(2026, month, day, 17, in: santiago), local(2026, month, day, 17, 30, in: santiago), watch, zone: santiago)
+            let dates = [LocalDate(year: 2026, month: month, day: day)!, LocalDate(year: 2026, month: month, day: day + 1)!]
+            #expect(HealthRecovery.days(dates, sleep: [nap], hrv: [], restingHeartRate: [], timeZone: newYork).map(\.sleepHours) == [nil, 0.5])
+            #expect(HealthRecovery.days(dates, sleep: [before], hrv: [], restingHeartRate: [], timeZone: newYork).map(\.sleepHours) == [0.5, nil])
+        }
+    }
+
     @Test func eachNightUsesItsBestSourceOnly() {
         let sleep = [
             asleep(at(11, 23), at(12, 7), watch), asleep(at(11, 22, 30), at(12, 7, 15), sleepApp),

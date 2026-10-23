@@ -79,9 +79,13 @@ public enum HealthRecovery {
     /// The day a night counts for: the day you wake up. A night runs from
     /// 6 PM to 6 PM, by when each sample ends, in the time zone it was
     /// recorded in (else `timeZone`), so a flight doesn't split one night in
-    /// two and an evening nap counts for that evening's night.
+    /// two and an evening nap counts for that evening's night. By the clock,
+    /// not six hours later, which is off by one where clocks change at midnight.
     public static func night(of end: Date, recordedIn zone: TimeZone?, timeZone: TimeZone) -> LocalDate {
-        LocalDate(end.addingTimeInterval(6 * 3600), in: zone ?? timeZone)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone ?? timeZone
+        let day = LocalDate(end, in: calendar.timeZone)
+        return calendar.component(.hour, from: end) >= 18 ? day.adding(days: 1) : day
     }
 
     /// One `RecoveryDay` for each date in `dates`, missing values left nil:
