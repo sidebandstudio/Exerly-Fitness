@@ -366,7 +366,9 @@ test("an import's body is read only for the signed-in app", async () => {
 
 // Review round 2's probes of the restore of older tables, as tests.
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Yesterday in UTC has begun in every account's time zone. The server refuses
+// days after the account's own today, which trails UTC's in the Americas.
+const today = () => new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 const legacyExport = (rows) => ({ exported_at: new Date().toISOString(), documents: [], ...rows });
 
 test('a weigh-in on a day the account already has is kept, not a 500', async () => {
