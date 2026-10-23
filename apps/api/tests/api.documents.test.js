@@ -763,6 +763,40 @@ test('an entry logged again links the entries it stands in for, in canonical for
   }
 });
 
+test('a Health import record syncs with its owner and state, and needs them', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const record = {
+    id,
+    kind: 'workout',
+    target: randomUUID().toLowerCase(),
+    owner: randomUUID().toUpperCase(),
+    source: 'com.example.runs',
+    sourceName: 'Runs',
+    start: '2026-10-20T07:00:00.000Z',
+    end: '2026-10-20T07:30:00.000Z',
+    day: '2026-10-20',
+    fingerprint: 'f',
+    state: 'imported',
+    updatedAt: '2026-10-20T08:00:00.000Z',
+  };
+  const saved = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: record, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/health_import/${id}`, { token });
+  assert.deepEqual(read.body.payload, record);
+  const otherID = randomUUID().toUpperCase();
+  const ownerless = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...record, id: otherID, owner: undefined }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(ownerless.status, 400);
+});
+
 test('legacy food logs and saved foods stay in their own feeds', async () => {
   const { token } = await signUp(api);
   await api.post('/api/food', { name: 'Logged oats', calories: 300 }, { token });

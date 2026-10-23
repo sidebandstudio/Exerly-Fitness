@@ -80,6 +80,15 @@ const KINDS = {
     typeof p.name === 'string' && p.name.trim() && typeof p.hiddenAt === 'string'
       ? []
       : ['a hidden suggestion needs the food name and when it was hidden'],
+  // One record imported from Apple Health: the install that owns it, its
+  // entry or activity, and whether it's in, set aside or taken out.
+  health_import: (p) =>
+    ['food', 'workout'].includes(p.kind) &&
+    typeof p.target === 'string' &&
+    typeof p.owner === 'string' &&
+    ['imported', 'displaced', 'removed'].includes(p.state)
+      ? []
+      : ['a Health import needs a kind, a target, an owner and a state'],
   // Where imported records came from: written with them, never changed.
   import_provenance: (p) =>
     typeof p.source === 'string' &&
