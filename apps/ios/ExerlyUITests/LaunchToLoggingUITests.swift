@@ -138,8 +138,8 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
             placed = seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
         }
         var detail = "seen at y \(seen.map { "\($0.minY)-\($0.maxY)" } ?? "none"), reported \(place.map { "\($0)" } ?? "none")"
-        if !placed {
-            // What moved it: Today as it settled, beside the run's other output.
+        if !placed, control == "logAgain" {
+            // What moved Log again: Today as it settled, beside the run's other output.
             let shot = app.screenshot()
             let attachment = XCTAttachment(screenshot: shot)
             attachment.name = "misplaced launch"

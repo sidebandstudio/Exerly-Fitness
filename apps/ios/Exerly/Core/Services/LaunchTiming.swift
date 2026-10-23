@@ -4,15 +4,15 @@ import os
 
 /// Cold launch to logging (PARITY B03). Two figures, both ending once the
 /// frame that lays out Today's logging controls (Log again, or the shortcuts
-/// when there's no Log again) has been committed: layout gives them their
-/// place on screen, and this ends once the run loop has handed that frame to
-/// the render server, which shows it at the next refresh (`NextFrame`). The
-/// places are reported too, so the UI tests can check them against the
-/// accessibility tree as the launch returns:
+/// when there's no Log again) where they stay has been committed: layout
+/// gives them their place on screen, and this ends once the run loop has
+/// handed that frame to the render server, which shows it at the next
+/// refresh (`NextFrame`). The places are reported too, so the UI tests can
+/// check them against the accessibility tree as the launch returns:
 /// - from the process starting, read from the kernel, so it includes loading
 ///   the app's code: the end-to-end number LaunchToLoggingUITests gates on;
-/// - a signpost interval from the app's own start, for Instruments and
-///   XCTOSSignpostMetric, as a diagnostic.
+/// - from the app's own start, also as a signpost interval for Instruments,
+///   which closes when the controls have settled, a quarter second after.
 /// Only the first Today of a launch ends them. Both are logged, to read on a
 /// phone in Console; a Debug build run by the UI tests also reports them to
 /// its fixture API.
@@ -31,6 +31,8 @@ enum LaunchTiming {
     /// Where each logging control was laid out, in window points, as of the
     /// committed frame: `logAgain` and `shortcuts`.
     private static var frames: [String: CGRect] = [:]
+    /// When the frame that last moved a logging control was committed.
+    private static var placedAt: Date?
 
     static func begin() {
         guard interval == nil, started == nil else { return }
@@ -39,24 +41,42 @@ enum LaunchTiming {
         mark("app init")
     }
 
-    /// A logging control has been laid out at `frame`: ends once the frame
-    /// that places it has been committed. A later layout before then moves
-    /// the place reported.
+    /// A logging control has been laid out at `frame`: ends at the commit of
+    /// the frame that put the logging controls where they stay. A launch whose
+    /// first frame came before the bars above Today had settled drew them all
+    /// 126 pt higher, then moved them (3 in 200 launches, 2026-10-23), so the
+    /// end waits until none has moved for `settling`. A change of size where
+    /// it stands, as Log again's chips after a sync, doesn't move it.
     static func loggingLaidOut(_ control: String, at frame: CGRect, entries: Int) {
         guard interval != nil, !frame.isEmpty else { return }
+        let moved = frames[control].map { $0.origin != frame.origin } ?? true
         frames[control] = frame
         Self.entries = entries
-        guard !committing else { return }
+        guard moved, !committing else { return }
         committing = true
         mark("\(control) laid out")
-        NextFrame { finish() }
+        NextFrame { committed() }
     }
 
-    private static func finish() {
+    /// How long the logging controls must stay put after a frame places them.
+    private static let settling: Duration = .milliseconds(250)
+
+    /// The frame placing them is with the render server: launch ends there
+    /// unless a later frame moves them first.
+    private static func committed() {
+        committing = false
+        let at = Date()
+        placedAt = at
+        Task { @MainActor in
+            try? await Task.sleep(for: settling)
+            if placedAt == at { finish(at: at) }
+        }
+    }
+
+    private static func finish(at now: Date) {
         guard let interval, let started else { return }
         signposter.endInterval(name, interval)
         Self.interval = nil
-        let now = Date()
         let process = now.timeIntervalSince(processStart) * 1000, app = now.timeIntervalSince(started) * 1000
         log.info("launch: logging on screen \(Int(process)) ms after the process started, \(Int(app)) ms after the app's, \(entries) entries")
         report(processMs: process, appMs: app)

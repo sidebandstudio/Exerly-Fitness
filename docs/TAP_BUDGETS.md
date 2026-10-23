@@ -81,47 +81,55 @@ Exerly is fewer or equal on every row.
   1.002 to 1.032 (p95 of the pairs 1.065 to 1.154), with the week at 2.377 to
   2.498 s p50 and the empty account at 2.336 to 2.425 s p50; the three runs at
   loads of 72 to 142 were no higher than the others. Log again was hittable in
-  all 160 week launches and where reported in 159. A ninth run, after rebasing
-  onto polish6, missed once more (2 in 180): the chip was about 185 pt lower
-  than the frame launch reported, so something above Log again grew after that
-  frame. Each miss fails its run; the report says where the chip was seen and
-  reported, and saves a screenshot of Today as it settled, to find what moved
-  it. The ceiling lets a week add about 0.17 s over an empty launch beyond the
-  highest median seen. A slowdown of every launch alike, such as more work
-  before Today, passes the ratio, so the week's own p50 has an absolute
-  ceiling beside it: 3.25 s, about 0.8 s over its 2.428 s median when set. It
-  holds only on the configuration it was measured on, an iPhone 17 Pro Max
-  simulator (iPhone18,2, iOS 26.2, Debug, M1 Max host), which the test stores
-  with the empty account's 2.357 s and the week's 2.428 s medians from the
-  eight runs; on another device the seconds are reported, not checked.
-  Changing the ceiling, the stored medians or the configuration takes a
-  deliberate commit with new measurements here; a run that fails reports the
-  machine's load average, and a failure under heavy load is reported, not met
-  by loosening the ceiling. Before the pairing, on an iPhone 17 Pro Max
-  simulator (iOS 26.2, M1 Max, Debug), on a machine loaded by other builds
-  (load average 270 to 1,000), on 2026-10-23: 2.43 s p50 and 3.22 s p95 over
-  21 cold launches with a week of food, under the 2.55 s gate; 1.49 s p50 from
-  the app's own start; Log again hittable and where launch reported it in all
-  21 (the 2.55 s gate this replaced). With Today's logging cards moved last,
-  2.79 s p50; with water above the ring, 2.77 s p50 (5 launches each, Log
-  again laid out below the fold and reported where it was). With the shortcuts
-  hidden and the meal being eaten now logged, so Log again is the rest of the
-  day on its own row, 2.40 s p50 (5 launches, reported where it was). With
-  three years of history (11,456 food entries), 4.50 and 5.21 s p50 (5.29 and
-  5.53 s p95) in two runs of 10 launches under XCTest, Log again or the
-  shortcuts hittable and where reported in all 20, still over that test's 3.5
-  s ceiling; launched outside XCTest with simctl on the same data, 3.74 s p50
-  and 4.07 s p95 over 10 launches, against 30.6 s p50 before a sync's push
-  found entries by index rather than by scanning them all (DECISIONS.md,
-  2026-10-23). The three-years ceiling is deferred, not met: B03 stays
-  Partial, and that test keeps failing its gate until the sync slice, now
-  under way, pushes only changed documents instead of encoding every one to
-  compare. About 0.9 s of each launch passes before the app's own code runs
-  (loading a Debug build's libraries in the simulator). Earlier figures, on
-  2026-10-20 and 21 (2.41 to 2.52 s p50 with a week of food), ended at
-  `onAppear` or at display-link ticks instead. PARITY B03's target, under 1 s
-  on a phone, is not yet measured or met. MacroFactor publishes no launch time
-  to compare; the counted comparison is the taps from launch to a logged food.
+  all 160 week launches and where reported in 159. After rebasing onto
+  polish6, each of three runs missed once (3 in 200 in all). The fixture's
+  record of one of them, the fastest launch of its run, showed why: both
+  logging controls were reported 126 pt higher than where they settled (the
+  other two put Log again at the same place), so the first frame had come
+  before the bars above Today were in place, and everything below them moved.
+  Launch now ends at the commit of the frame that puts the logging controls
+  where they stay: once a frame places them, it waits a quarter second for
+  none to move, and a move makes the frame that moved them the end instead. A
+  change of size where a control stands, as Log again's chips after a sync,
+  doesn't count. Three runs since, at load averages of 25 to 207, placed all
+  60 week launches, with ratios of 1.018 to 1.036 and the week at 2.363 to
+  2.478 s p50; a miss still fails its run and saves a screenshot. The ceiling
+  lets a week add about 0.17 s over an empty launch beyond the highest median
+  seen. A slowdown of every launch alike, such as more work before Today,
+  passes the ratio, so the week's own p50 has an absolute ceiling beside it:
+  3.25 s, about 0.8 s over its 2.428 s median when set. It holds only on the
+  configuration it was measured on, an iPhone 17 Pro Max simulator
+  (iPhone18,2, iOS 26.2, Debug, M1 Max host), which the test stores with the
+  empty account's 2.357 s and the week's 2.428 s medians from the eight runs;
+  on another device the seconds are reported, not checked. Changing the
+  ceiling, the stored medians or the configuration takes a deliberate commit
+  with new measurements here; a run that fails reports the machine's load
+  average, and a failure under heavy load is reported, not met by loosening
+  the ceiling. Before the pairing, on an iPhone 17 Pro Max simulator (iOS
+  26.2, M1 Max, Debug), on a machine loaded by other builds (load average 270
+  to 1,000), on 2026-10-23: 2.43 s p50 and 3.22 s p95 over 21 cold launches
+  with a week of food, under the 2.55 s gate; 1.49 s p50 from the app's own
+  start; Log again hittable and where launch reported it in all 21 (the 2.55 s
+  gate this replaced). With Today's logging cards moved last, 2.79 s p50; with
+  water above the ring, 2.77 s p50 (5 launches each, Log again laid out below
+  the fold and reported where it was). With the shortcuts hidden and the meal
+  being eaten now logged, so Log again is the rest of the day on its own row,
+  2.40 s p50 (5 launches, reported where it was). With three years of history
+  (11,456 food entries), 4.50 and 5.21 s p50 (5.29 and 5.53 s p95) in two runs
+  of 10 launches under XCTest, Log again or the shortcuts hittable and where
+  reported in all 20, still over that test's 3.5 s ceiling; launched outside
+  XCTest with simctl on the same data, 3.74 s p50 and 4.07 s p95 over 10
+  launches, against 30.6 s p50 before a sync's push found entries by index
+  rather than by scanning them all (DECISIONS.md, 2026-10-23). The three-years
+  ceiling is deferred, not met: B03 stays Partial, and that test keeps failing
+  its gate until the sync slice, now under way, pushes only changed documents
+  instead of encoding every one to compare. About 0.9 s of each launch passes
+  before the app's own code runs (loading a Debug build's libraries in the
+  simulator). Earlier figures, on 2026-10-20 and 21 (2.41 to 2.52 s p50 with a
+  week of food), ended at `onAppear` or at display-link ticks instead. PARITY
+  B03's target, under 1 s on a phone, is not yet measured or met. MacroFactor
+  publishes no launch time to compare; the counted comparison is the taps from
+  launch to a logged food.
 - **Not measured.** MacroFactor's figures are counted from its documentation,
   not timed in the app. Exerly's are counted on an iPhone 17 Pro Max simulator
   (iOS 26.2) and haven't been repeated on a phone.

@@ -71,9 +71,9 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 - Progress photos: camera capture and moving a real older store unverified; kept on device.
 - Hide's swipe is a custom pan, checked only by XCTest. At the largest text Progress scrolls only
   beside the trend chart, whose scrub takes drags (tests drag in the margin). Package sizes: synthetic.
-- Open Food Facts search budget is 10/min server-wide; type-ahead spends it faster.
-- Six idle "Exerly App" simulators are left alone. BarcodeScanSessionTests' row Undo is flaky.
-- B03: 3 years take 4.5 to 5.5 s p50 under XCTest, failing its 3.5 s gate until the sync slice
-  pushes only changed documents. The week gate missed Log again's place in 2 of 180 launches.
+- Open Food Facts search: 10/min server-wide, type-ahead spends it. Idle "Exerly App" sims: left alone.
+- Flaky: BarcodeScanSessionTests' row Undo; TodayDiary's eaten-and-back under load averages over 100.
+- B03: 3 years take 4.5 to 7.5 s p50 under XCTest (by load), failing its 3.5 s gate until the sync slice
+  pushes only changed documents. Launch now ends once the logging controls stay put (3 of 200 moved).
 - Intents open a workspace synchronously (LoggingActions.swift:66): an older file's migration lock can
   hold the main actor up to 5 s. Left for the nutrition builder's change to that workspace.
