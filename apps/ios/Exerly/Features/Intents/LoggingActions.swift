@@ -192,9 +192,31 @@ enum LoggingActions {
     /// else multiples of the usual amount.
     static func logFood(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
                         now: Date = .now) throws -> String {
+        try loggedFood(foodID, servings: servings, meal: meal, in: account, now: now).text
+    }
+
+    /// `logFood`, with the entry, for the answer's Undo.
+    static func loggedFood(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
+                           now: Date = .now) throws -> (text: String, entry: FoodEntry) {
         let entry = try logEntry(foodID, servings: servings, meal: meal, in: account, now: now)
-        return sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(entry.meal).",
-                         left(account.store, entry.date))
+        return (sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(entry.meal).",
+                          left(account.store, entry.date)), entry)
+    }
+
+    /// Takes back an entry a shortcut logged, if it's this account's and
+    /// still logged; again, it does nothing. True when it took it back.
+    @discardableResult
+    static func undo(entry id: UUID, accountID: String, in account: IntentAccess.Account) throws -> Bool {
+        guard account.workspace.accountID == accountID, account.store.entries.contains(where: { $0.id == id }) else { return false }
+        try account.store.deleteEntry(id)
+        return true
+    }
+
+    /// What the answer's snippet shows for an entry a shortcut logged: what
+    /// and where, or nil once it's been taken back or isn't this account's.
+    static func logged(entry id: UUID, accountID: String, in account: IntentAccess.Account) -> FoodEntry? {
+        guard account.workspace.accountID == accountID else { return nil }
+        return account.store.entries.first { $0.id == id }
     }
 
     private static func logEntry(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,

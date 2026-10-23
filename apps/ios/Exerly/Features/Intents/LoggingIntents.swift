@@ -2,6 +2,7 @@ import AppIntents
 import CoreSpotlight
 import ExerlyCore
 import Foundation
+import SwiftUI
 
 // Logging without opening Exerly. These run in the app's process, launched in
 // the background if needed; see IntentAccess. The intents that open the app
@@ -69,18 +70,20 @@ struct FoodEntityQuery: EntityStringQuery {
     }
 }
 
-/// A food chosen in Spotlight, or named to Siri. A usual or recent food is
-/// logged with the portion one tap logs on Today, which then opens on its
-/// confirmation, with Undo; another, such as a saved food or recipe never
-/// logged, opens its portion sheet on Today, so the portion is checked
-/// before one tap logs it. It's the Log a food App Shortcut, which Spotlight
-/// shows as a food's top hit: `LogFoodIntent` ran there in place, leaving
-/// nothing to undo it with. That stays an action for Shortcuts.
+/// A food chosen in Spotlight. A usual or recent food is logged with the
+/// portion one tap logs on Today, which then opens on its confirmation,
+/// with Undo; another, such as a saved food or recipe never logged, opens
+/// its portion sheet on Today, so the portion is checked before one tap
+/// logs it. Spotlight's Log a food top hit and Siri run `LogFoodIntent`
+/// instead, in place, with Undo in its answer.
 struct OpenFoodIntent: OpenIntent {
     static let title: LocalizedStringResource = "Open a food"
     static let description = IntentDescription("Logs one of your usual foods with the portion you last had, or opens another ready to log.")
+    /// Exerly opens first. Run from Spotlight's background runner, an open
+    /// intent otherwise fails there with nothing logged.
+    static let supportedModes: IntentModes = .foreground(.immediate)
 
-    @Parameter(title: "Food", requestValueDialog: "Which food?") var target: FoodEntity
+    @Parameter(title: "Food") var target: FoodEntity
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -126,10 +129,96 @@ struct LogFoodIntent: AppIntent {
 
     static var parameterSummary: some ParameterSummary { Summary("Log \(\.$food)") { \.$servings } }
 
+    /// Logged in place, as Siri and Spotlight run it, with an answer whose
+    /// Undo takes the entry back without opening Exerly.
     @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let text = try await IntentAccess().perform { try LoggingActions.logFood(food.id, servings: servings, in: $0) }
-        return .result(dialog: "\(text)")
+    func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetIntent {
+        let logged = try await IntentAccess().perform { account in
+            (try LoggingActions.loggedFood(food.id, servings: servings, in: account), account.workspace.accountID)
+        }
+        return .result(dialog: "\(logged.0.text)",
+                       snippetIntent: LoggedFoodSnippetIntent(entryID: logged.0.entry.id.uuidString, accountID: logged.1))
+    }
+}
+
+/// The answer after Log a food: what was logged, with Undo. The system runs
+/// it again to redraw, so it only reads; logging happened once, in
+/// `LogFoodIntent`.
+struct LoggedFoodSnippetIntent: SnippetIntent {
+    static let title: LocalizedStringResource = "Logged food"
+    static let isDiscoverable = false
+
+    @Parameter(title: "Entry") var entryID: String
+    @Parameter(title: "Account") var accountID: String
+
+    init() {}
+
+    init(entryID: String, accountID: String) {
+        self.entryID = entryID
+        self.accountID = accountID
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ShowsSnippetView {
+        var entry: FoodEntry?
+        if let id = UUID(uuidString: entryID) {
+            entry = try? await IntentAccess().perform(changing: false) { LoggingActions.logged(entry: id, accountID: accountID, in: $0) }
+        }
+        return .result(view: LoggedFoodSnippet(entry: entry, entryID: entryID, accountID: accountID))
+    }
+}
+
+/// Takes back an entry Log a food just logged, for its account only.
+/// Harmless if it runs again.
+struct UndoFoodIntent: AppIntent {
+    static let title: LocalizedStringResource = "Undo a logged food"
+    static let isDiscoverable = false
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "Entry") var entryID: String
+    @Parameter(title: "Account") var accountID: String
+
+    init() {}
+
+    init(entryID: String, accountID: String) {
+        self.entryID = entryID
+        self.accountID = accountID
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        if let id = UUID(uuidString: entryID) {
+            _ = try await IntentAccess().perform { try LoggingActions.undo(entry: id, accountID: accountID, in: $0) }
+        }
+        LoggedFoodSnippetIntent.reload()
+        return .result()
+    }
+}
+
+/// What was logged, and Undo; once taken back, says so.
+struct LoggedFoodSnippet: View {
+    let entry: FoodEntry?
+    let entryID: String
+    let accountID: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: entry == nil ? "arrow.uturn.backward.circle.fill" : "checkmark.circle.fill")
+                .font(.title2).foregroundStyle(entry == nil ? Color.secondary : Color.green).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.map { $0.food.name } ?? "Taken back").font(.headline)
+                Text(entry.map { "\($0.meal) · \(Int(($0.nutrients.energy ?? 0).rounded())) kcal" } ?? "Nothing is logged.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if entry != nil {
+                Button(intent: UndoFoodIntent(entryID: entryID, accountID: accountID)) {
+                    Text("Undo").font(.headline)
+                }
+                .buttonStyle(.bordered).accessibilityIdentifier("snippet.undo")
+            }
+        }
+        .padding()
     }
 }
 
@@ -331,8 +420,8 @@ struct ExerlyShortcuts: AppShortcutsProvider {
     static let shortcutTileColor: ShortcutTileColor = .purple
 
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(intent: OpenFoodIntent(), phrases: [
-            "Log \(\.$target) in \(.applicationName)",
+        AppShortcut(intent: LogFoodIntent(), phrases: [
+            "Log \(\.$food) in \(.applicationName)",
             "Log a food in \(.applicationName)",
             "Log my usual food in \(.applicationName)",
         ], shortTitle: "Log a food", systemImageName: "fork.knife")

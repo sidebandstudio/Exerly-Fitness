@@ -278,9 +278,11 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         capture(springboard, "notify-sleep-again")
     }
 
-    /// A food logged before is offered as the Log a food shortcut, so choosing
-    /// it logs the remembered portion, with Undo on Today; a saved food never
-    /// logged opens its portion sheet.
+    /// A food logged before is offered in Spotlight. As Log a food's top hit
+    /// it logs the remembered portion in place, with Undo in the answer; as
+    /// its own result it opens Today on its confirmation, with Undo. Spotlight
+    /// chooses which it shows. A saved food never logged opens its portion
+    /// sheet from its own result.
     func testSpotlightLogsAUsualFoodAndOpensANewOnesPortion() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "notify-spotlight", units: "imperial")
@@ -297,28 +299,65 @@ final class NotificationActionsUITests: ExerlyUITestCase {
         Thread.sleep(forTimeInterval: 3)
         let spotlight = XCUIApplication(bundleIdentifier: "com.apple.Spotlight")
         search(spotlight, for: "greek yogurt")
-        let usual = spotlight.cells.matching(NSPredicate(format: "label CONTAINS %@", "Greek yogurt, plain")).firstMatch
-        XCTAssertTrue(usual.waitForExistence(timeout: 45), spotlight.debugDescription)
-        capture(spotlight, "notify-spotlight-usual")
-        usual.tap()
-        // Logged with its usual portion, and Today opens in front on its confirmation, whose Undo takes it back.
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "Today opens")
         let yogurtEntry = todayEntries(app).matching(NSPredicate(format: "label BEGINSWITH %@", "Greek yogurt, plain")).firstMatch
-        XCTAssertTrue(yogurtEntry.waitForExistence(timeout: 15), app.debugDescription)
-        let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged Greek yogurt, plain")).firstMatch
-        XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertFalse(app.navigationBars["Log food"].exists, "No portion sheet for a usual food")
-        capture(app, "notify-spotlight-usual-logged")
-        app.buttons["today.undo"].tap()
-        XCTAssertTrue(yogurtEntry.waitForNonExistence(timeout: 10), "Undo takes back the entry Spotlight logged")
+        let yogurt = result(spotlight, "Greek yogurt, plain")
+        capture(spotlight, "notify-spotlight-usual")
+        yogurt.cell.tap()
+        if yogurt.isShortcut {
+            // Log a food runs in place: Exerly stays closed, and the answer's Undo
+            // takes the entry back. SpringBoard hosts the answer.
+            let undo = springboard.buttons["Undo"].firstMatch
+            XCTAssertTrue(undo.waitForExistence(timeout: 15), springboard.debugDescription)
+            XCTAssertNotEqual(app.state, .runningForeground, "Nothing opened")
+            capture(springboard, "notify-spotlight-snippet")
+            // The answer is the system's remote view: XCTest finds its Undo but may report it
+            // not hittable, at the snippet's own coordinates. Undo itself is unit-tested.
+            let undone = springboard.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Taken back")).firstMatch
+            let tookBack = undo.isHittable
+            if tookBack {
+                undo.tap()
+                XCTAssertTrue(undone.waitForExistence(timeout: 10), springboard.debugDescription)
+                capture(springboard, "notify-spotlight-snippet-undone")
+            }
+            springboard.buttons["Done"].firstMatch.tap()
+            app.activate()
+            XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
+            XCTAssertEqual(yogurtEntry.waitForExistence(timeout: 5), !tookBack, "Logged once, in place, unless taken back")
+            // Today's confirmation of the same food, the one its own Spotlight result opens on, at every text size.
+            let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Log Greek yogurt, plain")).firstMatch
+            if chip.waitForExistence(timeout: 10) {
+                tap(chip, in: app)
+                let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged Greek yogurt, plain")).firstMatch
+                XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
+                capture(app, "today-logged-confirmation")
+                app.buttons["today.undo"].tap()
+                XCTAssertTrue(yogurtEntry.waitForNonExistence(timeout: 10))
+            }
+        } else {
+            // The food's own result logs its usual portion and opens Today in front on its confirmation, whose Undo takes it back.
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "Today opens")
+            XCTAssertTrue(yogurtEntry.waitForExistence(timeout: 15), app.debugDescription)
+            let confirmation = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Logged Greek yogurt, plain")).firstMatch
+            XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertFalse(app.navigationBars["Log food"].exists, "No portion sheet for a usual food")
+            capture(app, "notify-spotlight-usual-logged")
+            app.buttons["today.undo"].tap()
+            XCTAssertTrue(yogurtEntry.waitForNonExistence(timeout: 10), "Undo takes back the entry Spotlight logged")
+        }
         search(spotlight, for: "cottage cheese")
-        let saved = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
-        XCTAssertTrue(saved.waitForExistence(timeout: 45), spotlight.debugDescription)
+        let saved = result(spotlight, "Cottage cheese, low fat")
         capture(spotlight, "notify-spotlight-saved")
-        saved.tap()
-        XCTAssertTrue(app.navigationBars["Log food"].waitForExistence(timeout: 15), app.debugDescription)
-        capture(app, "notify-spotlight-portion")
-        tap(app.buttons["nutrition.saveEntry"], in: app)
+        saved.cell.tap()
+        if saved.isShortcut {
+            // A saved food logs its first serving in place.
+            XCTAssertTrue(springboard.buttons["Undo"].firstMatch.waitForExistence(timeout: 15), springboard.debugDescription)
+            springboard.buttons["Done"].firstMatch.tap()
+            app.activate()
+        } else {
+            XCTAssertTrue(app.navigationBars["Log food"].waitForExistence(timeout: 15), app.debugDescription)
+            capture(app, "notify-spotlight-portion")
+            tap(app.buttons["nutrition.saveEntry"], in: app)
+        }
 
         let entries = todayEntries(app)
         let cottageEntry = entries.matching(NSPredicate(format: "label BEGINSWITH %@", "Cottage cheese, low fat")).firstMatch
@@ -359,6 +398,17 @@ final class NotificationActionsUITests: ExerlyUITestCase {
     /// Opens Spotlight from the Home Screen and searches. Spotlight runs in
     /// its own process and opens slowly on a small phone, so typing waits for
     /// its field and is checked, and an earlier search is cleared first.
+    /// A food's result in Spotlight: Log a food's top hit ("Food, …"), which
+    /// runs in place, or the food's own, which opens Exerly. Spotlight chooses.
+    private func result(_ spotlight: XCUIApplication, _ name: String) -> (cell: XCUIElement, isShortcut: Bool) {
+        let shortcut = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "Food, \(name)")).firstMatch
+        let own = spotlight.cells.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        let deadline = Date().addingTimeInterval(45)
+        while !shortcut.exists && !own.exists && Date() < deadline { Thread.sleep(forTimeInterval: 0.5) }
+        XCTAssertTrue(shortcut.exists || own.exists, spotlight.debugDescription)
+        return shortcut.exists ? (shortcut, true) : (own, false)
+    }
+
     private func search(_ spotlight: XCUIApplication, for text: String) {
         let field = spotlight.textFields["SpotlightSearchField"]
         let inFront = XCTNSPredicateExpectation(predicate: NSPredicate(format: "state == %d", XCUIApplication.State.runningForeground.rawValue),

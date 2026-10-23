@@ -2777,3 +2777,18 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   preview says they'll be added later and the anchor stays, so nothing is
   sent twice and shows as needing attention. Online, one already in the
   account is found, and only new ones are added.
+- Decision 4, Siri stays hands-free. The Log a food App Shortcut and its
+  Siri phrases run `LogFoodIntent` again, which logs in place and returns
+  `ShowsSnippetIntent`: `LoggedFoodSnippetIntent` (iOS 26, checked
+  against the 26.2 SDK) shows what was logged with
+  `Button(intent: UndoFoodIntent(entryID:accountID:))`. The snippet only
+  reads, as the system reruns it; Undo acts only for its account and entry,
+  and does nothing the second time. On the simulator the answer, Undo and
+  "Taken back" show in Spotlight. A food's own Spotlight result still runs
+  `OpenFoodIntent`, now `supportedModes = .foreground(.immediate)`: from
+  Spotlight's background runner, without it, the open intent failed with
+  nothing logged. Spotlight chooses which result to show; the UI test
+  checks whichever it gets.
+- At the accessibility sizes Today's confirmation wraps in full instead of
+  stopping at four lines, so "Logged Greek yogurt, plain to Breakfast"
+  keeps its meal.

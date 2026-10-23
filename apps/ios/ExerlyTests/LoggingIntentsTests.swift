@@ -248,6 +248,28 @@ final class LoggingIntentsTests: XCTestCase {
         XCTAssertEqual(store.entries.count, count, "Its portion is checked first")
     }
 
+    /// Decision 4: Log a food logs once, in place, and its answer's Undo
+    /// takes back that entry, for its account only, and is harmless again.
+    func testLogAFoodsAnswerUndoesItsEntryOnceForItsAccountOnly() throws {
+        let account = try account()
+        let store = account.store
+        let oats = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        try store.saveFood(oats)
+        try store.log(oats, grams: 80, on: today.adding(days: -1), meal: "Breakfast")
+        let logged = try LoggingActions.loggedFood(oats.id, servings: nil, in: account, now: time(8))
+        XCTAssertTrue(logged.text.hasPrefix("Logged Synthetic oats"))
+        XCTAssertEqual(LoggingActions.logged(entry: logged.entry.id, accountID: "intents", in: account)?.meal, "Breakfast",
+                       "The snippet reads what was logged, logging nothing")
+        let count = store.entries.count
+        XCTAssertFalse(try LoggingActions.undo(entry: logged.entry.id, accountID: "someone-else", in: account))
+        XCTAssertEqual(store.entries.count, count, "Another account's Undo takes nothing")
+        XCTAssertTrue(try LoggingActions.undo(entry: logged.entry.id, accountID: "intents", in: account))
+        XCTAssertFalse(store.entries.contains { $0.id == logged.entry.id })
+        XCTAssertFalse(try LoggingActions.undo(entry: logged.entry.id, accountID: "intents", in: account), "Again, it does nothing")
+        XCTAssertNil(LoggingActions.logged(entry: logged.entry.id, accountID: "intents", in: account), "The snippet says it's taken back")
+        XCTAssertEqual(store.entries.count, count - 1)
+    }
+
     func testRepeatDayCopiesTheLastDayWithFoodOnlyIntoAnEmptyDay() throws {
         let account = try account()
         let store = account.store
