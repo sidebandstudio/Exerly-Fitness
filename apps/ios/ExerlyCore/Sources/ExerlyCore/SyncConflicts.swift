@@ -22,7 +22,7 @@ public struct SyncDevice: Codable, Hashable, Sendable {
 /// about the same record is a conflict of its own, and only the resolution
 /// changes, on any device. See docs/DECISIONS.md, 2026-10-21 and 2026-10-22.
 public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
-    public enum Choice: String, Codable, Sendable, Hashable {
+    public enum Choice: Codable, Sendable, Hashable {
         /// The version of the device that found the conflict.
         case local
         /// The other device's version.
@@ -32,6 +32,36 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
         /// Neither: the record stays as it is on this device now, such as a
         /// workout whose clashing set was removed since.
         case current
+        /// A choice a newer app made: settled elsewhere, read-only here,
+        /// and kept as it came so syncing it back changes nothing.
+        case unknown(String)
+
+        public init(rawValue: String) {
+            self = switch rawValue {
+            case "local": .local
+            case "remote": .remote
+            case "both": .both
+            case "current": .current
+            default: .unknown(rawValue)
+            }
+        }
+
+        public var rawValue: String {
+            switch self {
+            case .local: "local"
+            case .remote: "remote"
+            case .both: "both"
+            case .current: "current"
+            case .unknown(let raw): raw
+            }
+        }
+
+        public init(from decoder: Decoder) throws { self.init(rawValue: try decoder.singleValueContainer().decode(String.self)) }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 
     public struct Resolution: Codable, Hashable, Sendable {
@@ -40,6 +70,13 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
         public var device: SyncDevice
         /// Settled by sync, not the person: the record was deleted on every device since.
         public var automatic: Bool?
+
+        public init(choice: Choice, at: Date, device: SyncDevice, automatic: Bool? = nil) {
+            self.choice = choice
+            self.at = at
+            self.device = device
+            self.automatic = automatic
+        }
     }
 
     public var id: UUID

@@ -526,7 +526,12 @@ final class CountingHost: DocumentHost {
         encoded += 1
         return try store.payload(kind: kind, id: id)
     }
-    func canonicalize(kind: String, payload: Data) throws -> Data { try store.canonicalize(kind: kind, payload: payload) }
+    /// As a build that can't read the store's documents would be.
+    var unreadable = false
+    func canonicalize(kind: String, payload: Data) throws -> Data {
+        if unreadable { throw DocumentError(message: "Not readable by this build") }
+        return try store.canonicalize(kind: kind, payload: payload)
+    }
     func validate(kind: String, id: String, payload: Data) throws { try store.validate(kind: kind, id: id, payload: payload) }
     func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
         try store.merge(kind: kind, base: base, local: local, remote: remote)
@@ -636,5 +641,54 @@ extension SQLiteDatabase {
         try await sync.sync()
         #expect(store.library.exercise(exercise.id) != nil, "Kept here, as sessions may use it")
         #expect(server.stored(TrainingStore.exerciseKind, exercise.id.rawValue)?.payload != nil, "Pushed back, so both devices agree")
+    }
+}
+
+
+/// Review round 3, compatibility: a document one build sets aside is fetched
+/// again by the next build, which may read it; and a conflict a newer app
+/// settled with a choice this build doesn't know is kept, settled, as it came.
+@MainActor
+@Suite struct NewerDocumentTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test func aDocumentSetAsideIsFetchedAgainAfterAnUpgrade() async throws {
+        let server = FakeDocumentServer()
+        let tabletDisk = InMemoryTrainingPersistence()
+        let tablet = try NutritionStore(persistence: tabletDisk)
+        let logged = try tablet.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        try await SyncEngine(hosts: [tablet], state: tabletDisk, api: server).sync()
+
+        let disk = InMemoryTrainingPersistence()
+        let host = CountingHost(try NutritionStore(persistence: disk))
+        host.unreadable = true
+        let older = SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1")
+        try await older.sync()
+        #expect(older.rejected.map(\.id) == [logged.id.uuidString] && host.store.entries.isEmpty)
+        host.unreadable = false
+        try await SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1").sync()
+        #expect(host.store.entries.isEmpty, "The same build doesn't fetch it again")
+        let upgraded = SyncEngine(hosts: [host], state: disk, api: server, appVersion: "2")
+        try await upgraded.sync()
+        #expect(host.store.entries.map(\.id) == [logged.id] && upgraded.rejected.isEmpty, "The new build reads it")
+    }
+
+    @Test func aChoiceANewerAppMadeKeepsTheConflictSettledAsItCame() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try AccountDevice("iPhone", server: server, clock: clock)
+        let id = UUID()
+        let newer = """
+            {"id":"\(id.uuidString)","kind":"food_entry","documentID":"\(UUID().uuidString)",\
+            "device":{"id":"\(UUID().uuidString)","name":"iPad"},"detectedAt":"2026-10-21T14:14:00.000Z",\
+            "changedAt":"2026-10-21T14:15:00.000Z","local":{"grams":60},"remote":{"grams":90},"fields":["grams"],\
+            "resolution":{"choice":"average","at":"2026-10-21T14:15:00.000Z","device":{"id":"\(UUID().uuidString)","name":"iPad"}}}
+            """
+        server.inject(kind: SyncConflictStore.kind, id: id.uuidString, payload: Data(newer.utf8))
+        try await phone.sync.sync()
+        let conflict = try #require(phone.conflicts.conflict(id), "Not set aside")
+        #expect(phone.sync.rejected.isEmpty && conflict.isResolved && phone.conflicts.unresolved.isEmpty)
+        #expect(conflict.resolution?.choice.rawValue == "average")
+        let payload = try #require(try phone.conflicts.payload(kind: SyncConflictStore.kind, id: id.uuidString))
+        #expect(String(decoding: payload, as: UTF8.self).contains(#""choice":"average""#), "Kept as it came")
     }
 }

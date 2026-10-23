@@ -26,6 +26,10 @@ public struct RejectedDocument: Sendable, Hashable, Codable {
     public var revision: Int
     /// Why it couldn't be read, for diagnostics rather than display.
     public var reason: String
+    /// Its place in the change feed, so a later build can fetch it again.
+    public var sequence: Int?
+    /// The build that set it aside: another may read it.
+    public var build: String?
 }
 
 /// Where the sync engine keeps bases and its cursor. Both training

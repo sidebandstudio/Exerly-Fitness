@@ -59,8 +59,11 @@ public final class SyncEngine {
     @ObservationIgnored private let changesToken: String
 
     private static let maxAttempts = 4
-    /// Raised when what counts as a change to push does.
-    private static let changesVersion = 1
+    /// Part of the token that decides when every document is compared again.
+    /// Bump it whenever any host's payload encoding changes (a field added,
+    /// renamed or encoded differently), since a dev build often keeps its
+    /// build number: the bump makes every device compare everything once.
+    public static let syncEncodingVersion = 1
     /// Kinds a server deployed before them refuses, kept here until it takes them.
     private static let newerKinds: Set<String> = [SyncConflictStore.kind, NutritionStore.linkKind]
 
@@ -72,7 +75,7 @@ public final class SyncEngine {
     public init(hosts: [DocumentHost], state: SyncStateStore, api: DocumentAPI, conflicts: SyncConflictStore? = nil,
                 appVersion: String = "", now: @escaping () -> Date = Date.init) {
         let conflicts = conflicts ?? SyncConflictStore(state: state, hosts: hosts, now: now)
-        changesToken = "\(Self.changesVersion)/\(appVersion)"
+        changesToken = "\(Self.syncEncodingVersion)/\(appVersion)"
         self.conflicts = conflicts
         self.hosts = hosts + [conflicts]
         stateStore = state
@@ -150,6 +153,7 @@ public final class SyncEngine {
             }
         }
         rejected = try stateStore.rejectedDocuments()
+        try refetchSetAside()
         try await pull()
         try tidyConflicts()
         if try await push() { try await pull() }
@@ -273,8 +277,27 @@ public final class SyncEngine {
         return true
     }
 
+    /// Documents another build set aside may be readable now, after an
+    /// upgrade: the pull starts again just before the earliest, once.
+    private func refetchSetAside() throws {
+        let earlier = rejected.filter { $0.build != changesToken && $0.sequence != nil }
+        guard let first = earlier.compactMap(\.sequence).min() else { return }
+        try checkActive()
+        let stamped = rejected.map { entry in
+            var entry = entry
+            if entry.sequence != nil { entry.build = changesToken }
+            return entry
+        }
+        try stateStore.performAtomically {
+            if try stateStore.syncCursor() >= first { try stateStore.saveSyncCursor(first - 1) }
+            try stateStore.saveRejectedDocuments(stamped)
+        }
+        rejected = stamped
+    }
+
     private func setAside(_ change: RemoteDocument, reason: String) throws {
-        let entry = RejectedDocument(kind: change.kind, id: change.id, revision: change.revision, reason: String(reason.prefix(500)))
+        let entry = RejectedDocument(kind: change.kind, id: change.id, revision: change.revision, reason: String(reason.prefix(500)),
+                                     sequence: change.sequence, build: changesToken)
         let updated = rejected.filter { $0.kind != change.kind || $0.id != change.id } + [entry]
         try stateStore.saveRejectedDocuments(updated)
         rejected = updated

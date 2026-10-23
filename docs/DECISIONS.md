@@ -2478,3 +2478,12 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   publishing, when the store really holds the server's copy. Anything merged, kept or
   declined is pushed as a full comparison would push it. A crash in between costs one extra
   comparison, never a missed push.
+- Compatibility before mixed builds. A conflict's choice now decodes whatever it is: one this
+  build doesn't know (`Choice.unknown`, such as a newer app's) reads as settled elsewhere,
+  is never offered or acted on here, and is encoded back exactly as it came, so this build
+  neither rejects the conflict nor rewrites it. A document a build sets aside now records
+  its place in the change feed and that build, and the first sync of any other build pulls
+  again from just before the earliest, once, so an upgrade reads what an older build
+  couldn't. `SyncEngine.syncEncodingVersion` joins the build number in the token that
+  triggers comparing every document; dev builds keep their build number, so bump it
+  whenever a payload's encoding changes.

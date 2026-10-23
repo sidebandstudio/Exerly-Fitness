@@ -111,6 +111,7 @@ extension SyncConflict {
                 case .remote: .init(choice: choice, title: "Keep the other device's", done: "Kept the other device's")
                 case .both: .init(choice: choice, title: "Keep both", done: "Kept both")
                 case .current: .init(choice: choice, title: "Keep it as it is", done: "Kept it as it is")
+                case .unknown: .init(choice: choice, title: "Settled on another device", done: "Settled on another device")
                 }
             }
         }
