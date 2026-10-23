@@ -201,6 +201,25 @@ import Testing
         #expect(try imports.pendingWork() == nil && imports.records[soup.id] != nil)
     }
 
+    /// Review 3, item 8: a removed record keeps only its ID, kind, owner,
+    /// generation and state, and still keeps its sample from coming back.
+    @Test func aRemovedRecordIsATombstoneThatStillStopsItsSample() throws {
+        let soup = food(5, 12, tracker, kcal: 250)
+        var removed = record(soup, state: .removed)
+        removed.adopt(by: "phone-b", at: at(2, 0))
+        let json = try #require(try JSONSerialization.jsonObject(with: ExerlyJSON.canonical(removed)) as? [String: Any])
+        #expect(Set(json.keys) == ["id", "kind", "owner", "generation", "state", "updatedAt"])
+        let read = try ExerlyJSON.decoder.decode(HealthImport.self, from: ExerlyJSON.canonical(removed))
+        #expect(read.id == soup.id && read.owner == "phone-b" && read.generation == 1 && read.state == .removed && read.kind == .food)
+        #expect(try ExerlyJSON.canonical(read) == ExerlyJSON.canonical(removed), "the same tombstone again")
+        let plan = HealthHistory.plan(added: [soup], full: true, records: [read], install: "phone-b", live: [], changed: [],
+                                      grouping: .day, item: item)
+        #expect(plan.adding.isEmpty && plan.preview.adding == 0, "never imported again")
+        var kept = record(soup)
+        kept.adopt(by: "phone-b", at: at(2, 0))
+        #expect(try ExerlyJSON.decoder.decode(HealthImport.self, from: ExerlyJSON.canonical(kept)) == kept, "one still in keeps it all")
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))

@@ -807,6 +807,26 @@ test('a Health import record syncs with its owner and state, and needs them', as
     { token, headers: key() }
   );
   assert.equal(negative.status, 400);
+  const tombstone = {
+    id,
+    kind: 'workout',
+    owner: 'phone-b',
+    generation: 1,
+    state: 'removed',
+    updatedAt: '2026-10-21T08:00:00.000Z',
+  };
+  const removed = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: tombstone, base_revision: 2 },
+    { token, headers: key() }
+  );
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  const targetless = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...tombstone, id: otherID, state: 'imported' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(targetless.status, 400, 'only a record taken out goes without its target');
 });
 
 test('legacy food logs and saved foods stay in their own feeds', async () => {

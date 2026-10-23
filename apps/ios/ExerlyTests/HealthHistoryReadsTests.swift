@@ -549,6 +549,24 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertTrue(activities.restored.isEmpty)
     }
 
+    /// Item 8: a food Health deleted is kept only as a tombstone, which still
+    /// stops the same sample being imported again on a later read.
+    func testAFoodTakenOutIsATombstoneThatNeverComesBack() async throws {
+        let soup = food(12, "com.example.tracker"), toast = food(8, "com.example.tracker")
+        client.foods = [soup, toast]
+        let history = model()
+        await history.begin(.foods)
+        await history.confirm()
+        client.foods = [toast]
+        await history.refresh()
+        XCTAssertEqual(workspace.healthImports.records[soup.id]?.target, "", "Kept as a tombstone")
+        client.foods = [toast, soup]
+        await history.refresh()
+        await history.checkEverythingAgain(.foods)
+        XCTAssertEqual(history.pending?.preview.adding, 0)
+        XCTAssertEqual(workspace.nutrition.entries.map(\.id), [toast.id])
+    }
+
     /// Item 7: an export holds the account's Health import records, and
     /// restoring it brings each back with its owner, generation, fingerprint and state.
     func testAnExportKeepsHealthImportRecordsAndRestoringBringsThemBack() async throws {

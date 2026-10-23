@@ -552,7 +552,8 @@ final class HealthHistoryModel: ObservableObject {
             // Only the days Health's changes touch: a screen opening with nothing new does no work.
             let deleted = Set(changes.deleted)
             let days = Set(changes.added.map { HealthHistory.item($0, timeZone: timeZone).day } + records.filter { deleted.contains($0.id) }.map(\.day))
-            records = records.filter { days.contains($0.day) }
+            // Removed ones are tombstones with no day, kept so their samples are never imported again.
+            records = records.filter { $0.state == .removed || days.contains($0.day) }
         }
         let entries = Dictionary(workspace.nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var live = Set<UUID>(), changed = Set<UUID>()
@@ -576,9 +577,11 @@ final class HealthHistoryModel: ObservableObject {
             let deleted = Set(changes.deleted)
             let spans = changes.added.map { ($0.start, $0.end) } + records.filter { deleted.contains($0.id) }.map { ($0.start, $0.end) }
             if let start = spans.map(\.0).min(), let end = spans.map(\.1).max() {
-                records = records.filter { $0.end >= start.addingTimeInterval(-86400) && $0.start <= end.addingTimeInterval(86400) }
+                records = records.filter {
+                    $0.state == .removed || ($0.end >= start.addingTimeInterval(-86400) && $0.start <= end.addingTimeInterval(86400))
+                }
             } else {
-                records = []
+                records = records.filter { $0.state == .removed }
             }
         }
         let derived = Dictionary(changes.added.map { (HealthHistory.activityID(for: $0.id, accountID: accountID), $0.id) },

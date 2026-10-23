@@ -41,14 +41,15 @@ final class TrainingWorkspace: ObservableObject {
         if let stored {
             store = try TrainingStore(persistence: persistence, loaded: stored.training)
             nutrition = NutritionStore(persistence: persistence, loaded: stored.nutrition)
+            healthImports = HealthImportStore(persistence: persistence, loaded: stored.healthImports)
         } else {
             store = try TrainingStore(persistence: persistence)
             nutrition = try NutritionStore(persistence: persistence)
+            healthImports = try HealthImportStore(persistence: persistence)
         }
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
         provenance = try ProvenanceStore(persistence: persistence)
-        healthImports = try HealthImportStore(persistence: persistence)
         barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
         conflicts = SyncConflictStore(state: persistence, hosts: [store, programs, nutrition, gyms, agent],

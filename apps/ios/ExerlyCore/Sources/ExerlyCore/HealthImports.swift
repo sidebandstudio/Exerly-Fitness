@@ -64,23 +64,50 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
         case id, kind, target, owner, generation, source, sourceName, start, end, day, fingerprint, state, updatedAt
     }
 
-    /// Records written before generations count as the first.
+    /// Records written before generations count as the first. A removed
+    /// record is kept as a tombstone (`encode(to:)`), and reads back with
+    /// empty details, which nothing uses once it's out.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         kind = try container.decode(Kind.self, forKey: .kind)
-        target = try container.decode(String.self, forKey: .target)
         owner = try container.decode(String.self, forKey: .owner)
         generation = try container.decodeIfPresent(Int.self, forKey: .generation) ?? 0
-        source = try container.decode(String.self, forKey: .source)
-        sourceName = try container.decode(String.self, forKey: .sourceName)
-        start = try container.decode(Date.self, forKey: .start)
-        end = try container.decode(Date.self, forKey: .end)
-        day = try container.decode(LocalDate.self, forKey: .day)
-        fingerprint = try container.decode(String.self, forKey: .fingerprint)
         state = try container.decode(State.self, forKey: .state)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        let tombstone = state == .removed && !container.contains(.target)
+        target = tombstone ? "" : try container.decode(String.self, forKey: .target)
+        source = tombstone ? "" : try container.decode(String.self, forKey: .source)
+        sourceName = tombstone ? "" : try container.decode(String.self, forKey: .sourceName)
+        start = tombstone ? Self.none : try container.decode(Date.self, forKey: .start)
+        end = tombstone ? Self.none : try container.decode(Date.self, forKey: .end)
+        day = tombstone ? LocalDate(Self.none, in: Self.utc) : try container.decode(LocalDate.self, forKey: .day)
+        fingerprint = tombstone ? "" : try container.decode(String.self, forKey: .fingerprint)
     }
+
+    /// Retention: a removed record keeps only what stops its sample being
+    /// imported again and who may change it, its ID, kind, owner, generation
+    /// and state, and drops the rest, so years of removals stay small.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(owner, forKey: .owner)
+        try container.encode(generation, forKey: .generation)
+        try container.encode(state, forKey: .state)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        guard state != .removed else { return }
+        try container.encode(target, forKey: .target)
+        try container.encode(source, forKey: .source)
+        try container.encode(sourceName, forKey: .sourceName)
+        try container.encode(start, forKey: .start)
+        try container.encode(end, forKey: .end)
+        try container.encode(day, forKey: .day)
+        try container.encode(fingerprint, forKey: .fingerprint)
+    }
+
+    private static let none = Date(timeIntervalSince1970: 0)
+    private static let utc = TimeZone(identifier: "UTC")!
 
     /// Makes this install the owner, one generation on.
     public mutating func adopt(by install: String, at now: Date) {
@@ -120,7 +147,7 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
 @MainActor
 @Observable
 public final class HealthImportStore {
-    static let kind = "health_import"
+    nonisolated static let kind = "health_import"
 
     public private(set) var records: [UUID: HealthImport] = [:]
 
@@ -132,6 +159,12 @@ public final class HealthImportStore {
             let record = try ExerlyJSON.decoder.decode(HealthImport.self, from: data)
             records[record.id] = record
         }
+    }
+
+    /// Starts from records read off the main actor (`StoredAccount`).
+    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: [HealthImport]) {
+        self.persistence = persistence
+        records = Dictionary(loaded.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     public func records(_ kind: HealthImport.Kind) -> [HealthImport] { records.values.filter { $0.kind == kind } }

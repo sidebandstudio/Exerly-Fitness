@@ -31,6 +31,28 @@ import Testing
         #expect(stored.unreadableRows == ["sessions/unreadable"])
     }
 
+    /// Health import records are read off the main actor with the rest, a
+    /// removed one as its tombstone.
+    @Test func healthImportRecordsAreReadOffTheMainActorToo() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("exerly-stored-\(UUID().uuidString)/x.sqlite")
+        let persistence = try SQLiteTrainingPersistence(url: url)
+        let nutrition = try NutritionStore(persistence: persistence), imports = try HealthImportStore(persistence: persistence)
+        let zone = TimeZone(identifier: "America/New_York")!
+        let soup = HealthFoodReading(id: UUID(), at: Fixture.instant(), name: "Synthetic soup", nutrients: NutrientAmounts([.energy: 250]),
+                                     source: "com.example.tracker", sourceName: "Tracker")
+        let toast = HealthFoodReading(id: UUID(), at: Fixture.instant().addingTimeInterval(-3600), name: "Synthetic toast",
+                                      nutrients: NutrientAmounts([.energy: 120]), source: "com.example.tracker", sourceName: "Tracker")
+        var adding = HealthFoodChanges(), removing = HealthFoodChanges()
+        adding.adding = [soup, toast]
+        removing.removing = [toast.id]
+        try imports.apply(adding, to: nutrition, install: "phone", timeZone: zone)
+        try imports.apply(removing, to: nutrition, install: "phone", timeZone: zone)
+        let stored = try #require(try await Task.detached { try StoredAccount.read(url: url) }.value)
+        let loaded = HealthImportStore(persistence: persistence, loaded: stored.healthImports)
+        #expect(loaded.records == (try HealthImportStore(persistence: persistence)).records)
+        #expect(loaded.records[toast.id]?.state == .removed && loaded.records[toast.id]?.target == "")
+    }
+
     /// A file an older version wrote is brought up to date and read off the
     /// main actor too, not left for the stores to read on it.
     @Test func aFileInAnOlderSchemaIsMigratedAndReadOffTheMainActor() async throws {

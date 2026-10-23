@@ -3,7 +3,8 @@ import Foundation
 /// An account's largest stores, read and decoded from its database on
 /// whatever thread calls `read`, with a connection of its own, so opening a
 /// long history never blocks the main actor. The stores then start from it
-/// (`NutritionStore(persistence:loaded:)`, `TrainingStore(persistence:loaded:)`).
+/// (`NutritionStore(persistence:loaded:)`, `TrainingStore(persistence:loaded:)`,
+/// `HealthImportStore(persistence:loaded:)`).
 public struct StoredAccount: Sendable {
     public struct Nutrition: Sendable {
         let foods: [Food]
@@ -25,6 +26,8 @@ public struct StoredAccount: Sendable {
 
     public let nutrition: Nutrition
     public let training: Training
+    /// The account's Health import records (`HealthImportStore(persistence:loaded:)`).
+    public let healthImports: [HealthImport]
     /// Rows that couldn't be decoded, as `table/id`; left in the file as they are.
     public let unreadableRows: [String]
 
@@ -79,6 +82,7 @@ public struct StoredAccount: Sendable {
         let sessions = try rows(WorkoutSession.self, table: "sessions", order: "started_at")
         let customExercises = try rows(Exercise.self, table: "custom_exercises", order: "id")
         let training = Training(sessions: sessions, customExercises: customExercises, unreadable: unreadable)
-        return StoredAccount(nutrition: nutrition, training: training, unreadableRows: unreadable)
+        let healthImports = try documents(HealthImportStore.kind).map { try decoder.decode(HealthImport.self, from: $0) }
+        return StoredAccount(nutrition: nutrition, training: training, healthImports: healthImports, unreadableRows: unreadable)
     }
 }
