@@ -2720,3 +2720,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   phrases) now runs `OpenFoodIntent`, so every Spotlight tap opens Today on
   the confirmation with Undo. `LogFoodIntent` stays a Shortcuts action, for
   shortcuts and automations that shouldn't open the app.
+- Sync now on the Health screen now also reads food and workouts from
+  other apps and recovery, and is enabled when only those switches are
+  on. The recovery switches' explanations and the import preview's notes
+  are shorter, one line each where possible, so at the largest text size
+  the switches and Import stay in reach; the preview's sources heading is
+  "Sources, best first".

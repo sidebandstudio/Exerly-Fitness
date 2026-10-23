@@ -117,6 +117,8 @@ struct HealthKitSettingsView: View {
     @StateObject private var history: HealthHistoryModel
     @ObservedObject private var sync = HealthSync.shared
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// Sync now is reading history and recovery after HealthSync's part.
+    @State private var refreshing = false
 
     init(accountID: String) {
         _activity = StateObject(wrappedValue: HealthReadModel(accountID: accountID))
@@ -368,7 +370,7 @@ struct HealthKitSettingsView: View {
                 if let result = sync.lastResult {
                     Text(result.summary).font(.exCaption).foregroundStyle(Color.exTextSecondary)
                         .accessibilityIdentifier("health.lastResult")
-                } else if !sync.anyOn {
+                } else if !sync.anyOn && history.enabled.isEmpty && recovery.enabled.isEmpty {
                     Text("Turn on a switch above to start.").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 }
             }
@@ -380,24 +382,34 @@ struct HealthKitSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button {
-                Task { await sync.sync(asked: true) }
+                Task { await syncNow() }
             } label: {
                 HStack(spacing: ExSpacing.small) {
-                    if sync.isSyncing {
+                    if sync.isSyncing || refreshing {
                         ProgressView().tint(Color.exPrimaryText)
                     } else {
                         Image(systemName: "arrow.triangle.2.circlepath").accessibilityHidden(true)
                     }
-                    Text(sync.isSyncing ? "Syncing…" : "Sync now")
+                    Text(sync.isSyncing || refreshing ? "Syncing…" : "Sync now")
                 }
             }
             .buttonStyle(ExActionStyle(secondary: true))
-            .disabled(!sync.anyOn || sync.isSyncing)
+            .disabled(!(sync.anyOn || !history.enabled.isEmpty || !recovery.enabled.isEmpty) || sync.isSyncing || refreshing)
             .accessibilityIdentifier("health.syncNow")
             #if DEBUG
             HealthDebugProbe(sync: sync)
             #endif
         }
+    }
+
+    /// Every switch that's on: weigh-ins and writes, food and workouts
+    /// from other apps, and recovery.
+    private func syncNow() async {
+        refreshing = true
+        defer { refreshing = false }
+        await sync.sync(asked: true)
+        await history.refresh()
+        await recovery.refresh()
     }
 
     private var lastSyncText: String {

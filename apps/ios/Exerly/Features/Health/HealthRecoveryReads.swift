@@ -18,20 +18,20 @@ extension RecoveryStatus.Signal {
     /// Why Exerly wants this, in one line.
     var purpose: String {
         switch self {
-        case .sleep: "Time asleep each night from your watch or sleep app, to show your recovery. It never changes your targets."
-        case .hrv: "Overnight heart rate variability, compared with your own usual, to show your recovery."
-        case .restingHeartRate: "Your resting heart rate each day, compared with your own usual, to show your recovery."
+        case .sleep: "Time asleep each night, to show your recovery. It never changes your targets."
+        case .hrv: "Overnight heart rate variability against your usual, to show your recovery."
+        case .restingHeartRate: "Resting heart rate each day against your usual, to show your recovery."
         }
     }
 
     /// What's shown when Health has none, and what to check.
     var missing: String {
         let what = switch self {
-        case .sleep: "No sleep in Health this week. If a watch or sleep app records it, check that Exerly can read Sleep"
-        case .hrv: "No heart rate variability in Health this week. A watch records it overnight; check that Exerly can read Heart Rate Variability"
-        case .restingHeartRate: "No resting heart rate in Health this week. A watch records it; check that Exerly can read Resting Heart Rate"
+        case .sleep: "No sleep in Health this week. Check that Exerly can read Sleep"
+        case .hrv: "No heart rate variability in Health this week. Check that Exerly can read Heart Rate Variability"
+        case .restingHeartRate: "No resting heart rate in Health this week. Check that Exerly can read Resting Heart Rate"
         }
-        return what + " in the Health app: your profile › Apps › Exerly."
+        return what + " in Health: your profile › Apps › Exerly."
     }
 }
 
