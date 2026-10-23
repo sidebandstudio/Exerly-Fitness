@@ -11,6 +11,8 @@ public struct SyncConflictSummary: Sendable, Hashable {
         public var value: String
         /// When the server took that version, when known.
         public var time: String?
+        /// This device has this version now.
+        public var shown: Bool
     }
 
     public struct Option: Sendable, Hashable, Identifiable {
@@ -28,6 +30,8 @@ public struct SyncConflictSummary: Sendable, Hashable {
     public var explanation: String
     public var local: Side
     public var remote: Side
+    /// What this device has now, when it's neither version: "45 g".
+    public var now: String?
     public var options: [Option]
 }
 
@@ -35,8 +39,10 @@ extension SyncConflict {
     /// Words for this conflict as seen on `viewer`, with masses in `unit`
     /// and times in `timeZone`. With `replaced`, the record was logged again
     /// from the same scan, so bringing it back changes that entry instead.
+    /// `current` is the record on `viewer` now, nil when deleted; without
+    /// it, the version of the device that found the conflict is shown.
     public func summary(on viewer: SyncDevice, unit: MassUnit, timeZone: TimeZone, locale: Locale = .current,
-                        replaced: Bool = false) -> SyncConflictSummary {
+                        replaced: Bool = false, current: JSONValue?? = .none) -> SyncConflictSummary {
         let words = ConflictWords(kind: kind, unit: unit, timeZone: timeZone, locale: locale)
         let here = device.id == viewer.id
         let localName = here ? "This \(device.name)" : device.name
@@ -47,6 +53,12 @@ extension SyncConflict {
             guard let version else { return "Deleted" }
             let parts = (fields.isEmpty ? words.headline : fields).map { words.value($0, in: version) }
             return Array(NSOrderedSet(array: parts)).compactMap { $0 as? String }.joined(separator: ", ")
+        }
+        let now = current ?? local
+        /// Whether `now` has this version: deleted or not, and the clashing fields as in it.
+        func shows(_ version: JSONValue?) -> Bool {
+            guard let version, let now else { return version == nil && now == nil }
+            return isDeletion || Merge.apply(fields, from: version, to: now, groups: Self.groups(kind)) == now
         }
         let explanation: String
         let options: [SyncConflictSummary.Option]
@@ -75,13 +87,20 @@ extension SyncConflict {
                 }
             }
         }
+        let (localShown, remoteShown) = (shows(local), shows(remote))
         return SyncConflictSummary(
             title: title, detail: detail, explanation: explanation,
-            local: .init(device: localName, value: value(local), time: nil),
-            remote: .init(device: "Another device", value: value(remote), time: remoteAt.map(words.time)),
+            local: .init(device: localName, value: value(local), time: nil, shown: localShown),
+            remote: .init(device: "Another device", value: value(remote), time: remoteAt.map(words.time), shown: remoteShown && !localShown),
+            now: localShown || remoteShown ? nil : value(now),
             options: options
         )
     }
+}
+
+extension SyncConflict {
+    /// Fields that clash together, as the record's host merges them.
+    static func groups(_ kind: String) -> [[String]] { NutritionStore.fieldGroups(of: kind) }
 }
 
 private extension String {
@@ -113,9 +132,10 @@ private struct ConflictWords {
         case ("nutrition_day", "notes"): "note"
         case (_, "per100g"): "nutrients"
         case (_, "*"): "details"
+        case (_, "exercises[]"): "order of the exercises"
         default:
             // A workout's sets and exercises read by what they are.
-            field.contains("sets[") ? "sets" : field.hasPrefix("exercises") ? "exercises"
+            field.hasSuffix("sets[]") ? "order of the sets" : field.contains("sets[") ? "sets" : field.hasPrefix("exercises") ? "exercises"
                 : field.reduce(into: "") { text, character in
                     text += character.isUppercase ? " \(character.lowercased())" : String(character)
                 }
@@ -150,6 +170,7 @@ private struct ConflictWords {
 
     func value(_ field: String, in version: JSONValue) -> String {
         let fields = version.objectValue ?? [:]
+        if field.contains("[") { return workout(field, in: fields) }
         switch (kind, field) {
         case ("food_entry", "grams"):
             let grams = fields["grams"]?.numberValue ?? 0
@@ -161,8 +182,7 @@ private struct ConflictWords {
         case ("food_entry", "food"): return fields["food"]?.objectValue?["name"]?.stringValue ?? "Another food"
         case ("weight_entry", "weight"):
             guard let weight = fields["weight"].flatMap({ try? $0.decode(Mass.self) }) else { return "A weight" }
-            let converted = weight.converted(to: unit)
-            return "\(converted.value.formatted(.number.precision(.fractionLength(0...1)).locale(locale))) \(unit.rawValue)"
+            return mass(weight)
         case ("nutrition_day", "status"):
             switch fields["status"]?.stringValue {
             case "complete": return "Complete"
@@ -177,15 +197,97 @@ private struct ConflictWords {
             return fields["date"]?.stringValue.flatMap(LocalDate.init).map(day) ?? "Another day"
         case (_, "loggedAt"), (_, "at"):
             return fields[field]?.stringValue.flatMap(date).map(time) ?? "Another time"
-        default:
-            switch fields[field] {
-            case .string(let text)?: return text.isEmpty ? "Empty" : text
-            case .number(let value)?: return number(value)
-            case .bool(let value)?: return value ? "On" : "Off"
-            case nil, .null?: return "None"
-            default: return "Its own \(name(field))"
+        case ("nutrition_plan", "goal"):
+            guard let goal = fields["goal"].flatMap({ try? $0.decode(NutritionGoal.self) }) else { return "No goal" }
+            let rate = (goal.weeklyRate * 100).formatted(.number.precision(.fractionLength(0...2)).locale(locale))
+            let target = goal.goalWeight.map { " to \(mass($0))" } ?? ""
+            switch goal.direction {
+            case .maintain: return "Maintain" + target
+            case .lose: return "Lose \(rate)% a week" + target
+            case .gain: return "Gain \(rate)% a week" + target
             }
+        default:
+            return plain(fields[field])
         }
+    }
+
+    /// Any other value as it reads: text, a number, on or off, a mass, or
+    /// the first few named values of a group.
+    private func plain(_ value: JSONValue?) -> String {
+        switch value {
+        case .string(let text)?: return text.isEmpty ? "Empty" : text
+        case .number(let value)?: return number(value)
+        case .bool(let value)?: return value ? "On" : "Off"
+        case nil, .null?: return "None"
+        case .array(let items)?: return items.isEmpty ? "None" : items.count == 1 ? "1 item" : "\(items.count) items"
+        case .object(let fields)?:
+            if let weight = try? value?.decode(Mass.self) { return mass(weight) }
+            let parts = fields.sorted { $0.key < $1.key }.compactMap { key, value -> String? in
+                switch value {
+                case .string, .number, .bool: "\(name(key).prefix(1).uppercased() + name(key).dropFirst()) \(plain(value))"
+                default: nil
+                }
+            }
+            return parts.isEmpty ? "\(fields.count) details" : parts.prefix(4).joined(separator: ", ")
+        }
+    }
+
+    // MARK: Workouts
+
+    /// A path into a workout, `exercises[ID].sets[ID].efforts` and the like,
+    /// as the exercise and set it names: "Barbell Bench Press: 100 kg × 5".
+    private func workout(_ path: String, in session: [String: JSONValue]) -> String {
+        let steps = path.split(separator: ".").map(String.init)
+        func item(_ step: String, in list: JSONValue?) -> [String: JSONValue]? {
+            guard let open = step.firstIndex(of: "["), case .array(let items)? = list else { return nil }
+            let id = String(step[step.index(after: open)..<step.index(before: step.endIndex)])
+            return items.lazy.compactMap(\.objectValue).first { $0["id"]?.stringValue == id }
+        }
+        func items(_ list: JSONValue?) -> [[String: JSONValue]] {
+            if case .array(let items)? = list { items.compactMap(\.objectValue) } else { [] }
+        }
+        if steps[0] == "exercises[]" { return items(session["exercises"]).map(exerciseName).joined(separator: ", ") }
+        guard let exercise = item(steps[0], in: session["exercises"]) else { return "Removed" }
+        let name = exerciseName(exercise)
+        guard steps.count > 1 else {
+            let count = items(exercise["sets"]).count
+            return "\(name): \(count == 1 ? "1 set" : "\(count) sets")"
+        }
+        if steps[1] == "sets[]" { return "\(name): " + items(exercise["sets"]).map(set).joined(separator: ", ") }
+        guard steps[1].hasPrefix("sets[") else { return "\(name): \(plain(exercise[steps[1]]))" }
+        guard let performed = item(steps[1], in: exercise["sets"]) else { return "\(name): set removed" }
+        return "\(name): \(set(performed))"
+    }
+
+    private func exerciseName(_ exercise: [String: JSONValue]) -> String {
+        guard let id = exercise["exerciseID"]?.stringValue else { return "An exercise" }
+        if let known = ExerciseLibrary.bundled.exercise(ExerciseID(id)) { return known.name }
+        let words = id.replacingOccurrences(of: "custom-", with: "").replacingOccurrences(of: "-", with: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    /// "100 kg × 5", each effort of a drop set in turn, then RIR and kind.
+    private func set(_ set: [String: JSONValue]) -> String {
+        let all = set["efforts"].flatMap { try? $0.decode([Effort].self) } ?? []
+        let efforts: [String] = all.compactMap { effort in
+            var parts: [String] = []
+            if let load = effort.load { parts.append(mass(load)) }
+            if let reps = effort.reps { parts.append(parts.isEmpty ? (reps == 1 ? "1 rep" : "\(reps) reps") : "\(reps)") }
+            if let duration = effort.duration { parts.append("\(number(duration)) s") }
+            if let distance = effort.distance { parts.append("\(number(distance)) m") }
+            return parts.isEmpty ? nil : parts.joined(separator: " × ")
+        }
+        var text = efforts.isEmpty ? "Empty set" : efforts.joined(separator: ", ")
+        if case .number(let rir)? = set["rir"] { text += ", RIR \(number(rir))" }
+        if let kind = set["kind"]?.stringValue, kind != SetKind.standard.rawValue {
+            text += ", " + (SetKind(rawValue: kind) == .warmUp ? "warm-up" : kind)
+        }
+        if set["completedAt"] == nil || set["completedAt"] == .null { text += ", not done" }
+        return text
+    }
+
+    private func mass(_ mass: Mass) -> String {
+        "\(mass.converted(to: unit).value.formatted(.number.precision(.fractionLength(0...1)).locale(locale))) \(unit.rawValue)"
     }
 
     private func number(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0...1)).locale(locale)) }

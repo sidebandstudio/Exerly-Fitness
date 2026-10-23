@@ -320,6 +320,13 @@ public final class SyncConflictStore {
         undoable = nil
     }
 
+    /// The conflict in words on this device, beside the record as it is here now.
+    public func summary(of conflict: SyncConflict, unit: MassUnit, timeZone: TimeZone, locale: Locale = .current) -> SyncConflictSummary {
+        let now = try? host(for: conflict.kind)?.payload(kind: conflict.kind, id: conflict.documentID).map(JSONValue.init(data:))
+        return conflict.summary(on: device, unit: unit, timeZone: timeZone, locale: locale, replaced: replacement(for: conflict) != nil,
+                                current: .some(now))
+    }
+
     /// The document now standing in for a deleted one, such as the entry an
     /// undone scan was logged again as.
     public func replacement(for conflict: SyncConflict) -> String? {

@@ -86,7 +86,9 @@ struct ConflictReviewView: View {
             }
         }
         .navigationTitle("Needs a look").navigationBarTitleDisplayMode(.inline)
-        .overlay(alignment: .bottom) {
+        // An inset, not an overlay: at the largest text the Undo bar is tall,
+        // and the cards scroll clear of it instead of hiding behind it.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if let resolved, conflicts.undoable != nil {
                 ConflictResolvedToast(title: resolved.title, detail: resolved.detail) {
                     do { try conflicts.undo() } catch { self.error = error.localizedDescription }
@@ -101,7 +103,7 @@ struct ConflictReviewView: View {
     }
 
     private func summary(_ conflict: SyncConflict) -> SyncConflictSummary {
-        conflict.summary(on: conflicts.device, unit: unit, timeZone: timeZone, replaced: conflicts.replacement(for: conflict) != nil)
+        conflicts.summary(of: conflict, unit: unit, timeZone: timeZone)
     }
 
     private func resolve(_ conflict: SyncConflict, _ option: SyncConflictSummary.Option) {
@@ -136,8 +138,13 @@ private struct ConflictCard: View {
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.small))
                 : AnyLayout(HStackLayout(alignment: .top, spacing: ExSpacing.small))
             layout {
-                VersionTile(side: summary.local, showing: true)
-                VersionTile(side: summary.remote, showing: false)
+                VersionTile(side: summary.local, local: true)
+                VersionTile(side: summary.remote, local: false)
+            }
+            if let now = summary.now {
+                // Changed again here since: neither version is what this device shows.
+                Text("Showing now: \(now)").font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("conflict.now")
             }
             VStack(spacing: ExSpacing.small) {
                 ForEach(summary.options) { option in
@@ -151,15 +158,17 @@ private struct ConflictCard: View {
     }
 }
 
-/// One device's version. The one in use now is outlined.
+/// One device's version. The one this device has now is outlined.
 private struct VersionTile: View {
     let side: SyncConflictSummary.Side
-    let showing: Bool
+    /// The version of the device that found the conflict.
+    let local: Bool
+    private var showing: Bool { side.shown }
 
     var body: some View {
         VStack(alignment: .leading, spacing: ExSpacing.tight) {
             HStack(spacing: ExSpacing.tight) {
-                Image(systemName: showing ? (side.device.contains("iPad") ? "ipad" : "iphone") : "icloud").font(.caption).accessibilityHidden(true)
+                Image(systemName: local ? (side.device.contains("iPad") ? "ipad" : "iphone") : "icloud").font(.caption).accessibilityHidden(true)
                 Text(side.device).font(.exSmall.weight(.semibold))
             }
             .foregroundStyle(showing ? Color.exPrimaryText : Color.exTextSecondary)
@@ -215,10 +224,12 @@ private struct ConflictResolvedToast: View {
 /// UI tests and screenshots: with EXERLY_SYNC_CONFLICT_SEED=1, a synthetic
 /// entry whose amount another device changed, and a weigh-in deleted here
 /// that another device changed, as real conflicts in the account's store.
+/// With "all", also a workout set and a plan's goal both devices changed.
 @MainActor
 enum ConflictSeed {
     static func seedIfAsked(_ workspace: TrainingWorkspace, timeZone: TimeZone) {
-        guard ProcessInfo.processInfo.environment["EXERLY_SYNC_CONFLICT_SEED"] == "1", workspace.conflicts.conflicts.isEmpty else { return }
+        let asked = ProcessInfo.processInfo.environment["EXERLY_SYNC_CONFLICT_SEED"]
+        guard asked == "1" || asked == "all", workspace.conflicts.conflicts.isEmpty else { return }
         do {
             let today = LocalDate(Date(), in: timeZone)
             let food = Food(id: "seed-conflict-yogurt", name: "Synthetic Greek yogurt",
@@ -227,6 +238,8 @@ enum ConflictSeed {
             let base = try ExerlyCore.JSONValue(encoding: entry)
             entry.grams = 90
             try workspace.nutrition.saveEntry(entry)
+            // As saved, so marked as changed, the way both devices' versions are.
+            entry = workspace.nutrition.entries.first { $0.id == entry.id } ?? entry
             let local = try ExerlyCore.JSONValue(encoding: entry)
             entry.grams = 60
             let remote = try ExerlyCore.JSONValue(encoding: entry)
@@ -243,13 +256,47 @@ enum ConflictSeed {
                              remoteAt: at.addingTimeInterval(-120), base: weightBase, local: nil,
                              remote: weightRemote, fields: []),
             ]
-            for conflict in seeded {
+            for conflict in seeded + (asked == "all" ? try workoutAndGoal(workspace, today: today, timeZone: timeZone, at: at, device: device) : []) {
                 try workspace.conflicts.prepareWrite(kind: SyncConflictStore.kind, id: conflict.id.uuidString,
                                                      payload: ExerlyJSON.canonical(conflict))()
             }
         } catch {
             assertionFailure("Couldn't seed conflicts: \(error)")
         }
+    }
+
+    /// Yesterday's workout, whose second set one device made heavier and
+    /// the other gave a rep more, and a plan's goal changed on both.
+    private static func workoutAndGoal(_ workspace: TrainingWorkspace, today: LocalDate, timeZone: TimeZone, at: Date, device: SyncDevice) throws
+        -> [SyncConflict] {
+        let sets = (0..<3).map { index in
+            PerformedSet(efforts: [Effort(reps: 5, load: .kg(100))], completedAt: at.addingTimeInterval(-86_400 + Double(index) * 180))
+        }
+        let session = WorkoutSession(name: "Synthetic push day", startedAt: at.addingTimeInterval(-86_400 - 600),
+                                     endedAt: at.addingTimeInterval(-86_400 + 1_800),
+                                     exercises: [PerformedExercise(exerciseID: "barbell-bench-press", sets: sets)])
+        try workspace.store.importSessions([session])
+        var heavier = session, more = session
+        heavier.exercises[0].sets[1].efforts[0].load = .kg(102.5)
+        more.exercises[0].sets[1].efforts[0].reps = 6
+        try workspace.store.saveSession(heavier)
+        let path = "exercises[\(session.exercises[0].id.uuidString)].sets[\(sets[1].id.uuidString)].efforts"
+        var plan = try NutritionPlan(startDate: today, goal: NutritionGoal(.lose, weeklyRate: 0.005))
+            .computed(from: PlanBasis(expenditure: 2_500, expenditureError: 300, trendWeight: 80))
+        let planBase = try ExerlyCore.JSONValue(encoding: plan)
+        plan.goal = NutritionGoal(.lose, weeklyRate: 0.0075)
+        try workspace.nutrition.savePlan(plan, timeZone: timeZone)
+        var maintain = plan
+        maintain.goal = NutritionGoal(.maintain)
+        return [
+            SyncConflict(kind: "workout_session", documentID: session.id.uuidString, device: device, detectedAt: at.addingTimeInterval(-10),
+                         remoteAt: at.addingTimeInterval(-200), base: try ExerlyCore.JSONValue(encoding: session),
+                         local: try ExerlyCore.JSONValue(encoding: heavier), remote: try ExerlyCore.JSONValue(encoding: more), fields: [path]),
+            SyncConflict(kind: "nutrition_plan", documentID: plan.id.uuidString, device: device, detectedAt: at.addingTimeInterval(-15),
+                         remoteAt: at.addingTimeInterval(-300), base: planBase,
+                         local: try ExerlyCore.JSONValue(encoding: plan),
+                         remote: try ExerlyCore.JSONValue(encoding: maintain), fields: ["goal"]),
+        ]
     }
 }
 #endif

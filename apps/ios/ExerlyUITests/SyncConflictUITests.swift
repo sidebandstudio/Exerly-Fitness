@@ -49,15 +49,40 @@ final class SyncConflictUITests: ExerlyUITestCase {
         XCTAssertTrue(entry.firstMatch.exists, "Today shows the kept 60 g")
     }
 
+    /// A workout set and a plan's goal read as their values on both sides,
+    /// with the version this device has marked, and resolve like the rest.
+    func testWorkoutSetsAndGoalsShowTheirValues() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "sync-values", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "all"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.conflicts"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertEqual(row.value as? String, "4 changes to check")
+        tap(row, in: app)
+        let set = app.descendants(matching: .any)["This iPhone, Barbell Bench Press: 102.5 kg × 5, Showing now"]
+        reveal(set, in: app)
+        XCTAssertTrue(set.exists, app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@",
+                                                                           "Another device, Barbell Bench Press: 100 kg × 6, ")).firstMatch.exists)
+        let goal = app.descendants(matching: .any)["This iPhone, Lose 0.75% a week, Showing now"]
+        reveal(goal, in: app)
+        XCTAssertTrue(goal.exists, app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Another device, Maintain, "))
+            .firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["None"].exists, "No version reads as None")
+    }
+
     /// Opt-in screenshots of the review, as the capture script runs them
-    /// in light and dark, at default and largest text.
+    /// in light and dark, at default and largest text: every kind of value,
+    /// then the Undo bar with the list scrolled to its end.
     func testConflictReviewCapture() async throws {
         guard ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" else {
             throw XCTSkip("Opt-in visual review of the conflict review")
         }
         try await control([:])
         let person = try await createAccount(prefix: "sync-capture", units: "metric")
-        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "1"])
+        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "all"])
         signIn(app, email: person.email)
         let row = app.buttons["today.conflicts"]
         XCTAssertTrue(row.waitForExistence(timeout: 20))
@@ -65,13 +90,30 @@ final class SyncConflictUITests: ExerlyUITestCase {
         tap(row, in: app)
         XCTAssertTrue(app.staticTexts["Synthetic Greek yogurt"].waitForExistence(timeout: 10))
         capture(app, "sync-capture-02-review")
-        app.swipeUp()
-        capture(app, "sync-capture-03-review-more")
-        app.swipeUp()
-        capture(app, "sync-capture-04-review-end")
-        reveal(app.buttons["Keep the other device's"], in: app)
-        tap(app.buttons["Keep the other device's"], in: app)
+        // The versions themselves, which at the largest text sit a screen below the title.
+        func version(_ text: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", text)).firstMatch
+        }
+        /// A third of a screen further, so the whole tile, not just its top, is in the shot.
+        func nudge() {
+            let window = app.windows.firstMatch
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)))
+        }
+        reveal(version("Another device, Barbell Bench Press"), in: app)
+        nudge()
+        capture(app, "sync-capture-03-workout-set")
+        reveal(version("Another device, Maintain"), in: app)
+        nudge()
+        capture(app, "sync-capture-04-goal")
+        app.swipeDown()
+        app.swipeDown()
+        let keep = app.buttons["Keep the other device's"].firstMatch
+        reveal(keep, in: app)
+        tap(keep, in: app)
         XCTAssertTrue(app.buttons["conflicts.undo"].waitForExistence(timeout: 5))
         capture(app, "sync-capture-05-saved")
+        for _ in 0..<4 { app.swipeUp() }
+        capture(app, "sync-capture-06-saved-end")
     }
 }

@@ -272,4 +272,43 @@ final class TrainingDevice {
         #expect(phone.entry(logged.id)?.meal == "Lunch" && tablet.entry(logged.id)?.meal == "Lunch")
         #expect(phone.conflicts.unresolved.isEmpty && tablet.conflicts.unresolved.isEmpty)
     }
+
+    // MARK: Words
+
+    /// A set's load and a plan's goal read as what they are, and the
+    /// version this device shows now is the one marked.
+    @Test func setsAndGoalsReadAsTheirValuesAndTheShownVersionIsMarked() throws {
+        let device = SyncDevice(id: UUID(), name: "iPhone")
+        let set = Fixture.set(5, 100)
+        var heavier = set
+        heavier.efforts[0].load = .kg(102.5)
+        let exercise = PerformedExercise(exerciseID: "barbell-bench-press", sets: [set])
+        let base = WorkoutSession(name: "Push", startedAt: Fixture.instant(), timeZone: Fixture.utc, exercises: [exercise])
+        var mine = base, theirs = base
+        mine.exercises[0].sets[0] = heavier
+        theirs.exercises[0].sets[0].efforts[0].reps = 6
+        let path = "exercises[\(exercise.id.uuidString)].sets[\(set.id.uuidString)].efforts"
+        let workout = SyncConflict(kind: "workout_session", documentID: base.id.uuidString, device: device, detectedAt: Fixture.instant(),
+                                   base: try JSONValue(data: ExerlyJSON.canonical(base)), local: try JSONValue(data: ExerlyJSON.canonical(mine)),
+                                   remote: try JSONValue(data: ExerlyJSON.canonical(theirs)), fields: [path])
+        let words = workout.summary(on: device, unit: .kilograms, timeZone: Fixture.utc, locale: Locale(identifier: "en_US"),
+                                    current: workout.remote)
+        #expect(words.local.value == "Barbell Bench Press: 102.5 kg × 5" && words.remote.value == "Barbell Bench Press: 100 kg × 6")
+        #expect(words.explanation == "Both devices changed the sets.")
+        #expect(!words.local.shown && words.remote.shown)
+        #expect(workout.summary(on: device, unit: .pounds, timeZone: Fixture.utc, locale: Locale(identifier: "en_US"),
+                                current: workout.local).local.value == "Barbell Bench Press: 226 lb × 5")
+
+        let plan = try NutritionPlan(startDate: monday, goal: NutritionGoal(.lose, weeklyRate: 0.005))
+            .computed(from: PlanBasis(expenditure: 2500, expenditureError: 400, trendWeight: 80))
+        var lose = plan, keep = plan
+        lose.goal = NutritionGoal(.lose, weeklyRate: 0.0075)
+        keep.goal = NutritionGoal(.maintain)
+        let goal = SyncConflict(kind: "nutrition_plan", documentID: plan.id.uuidString, device: device, detectedAt: Fixture.instant(),
+                                base: try JSONValue(data: ExerlyJSON.canonical(plan)), local: try JSONValue(data: ExerlyJSON.canonical(lose)),
+                                remote: try JSONValue(data: ExerlyJSON.canonical(keep)), fields: ["goal"])
+        let goals = goal.summary(on: device, unit: .kilograms, timeZone: Fixture.utc, locale: Locale(identifier: "en_US"), current: goal.local)
+        #expect(goals.local.value == "Lose 0.75% a week" && goals.remote.value == "Maintain")
+        #expect(goals.local.shown && !goals.remote.shown)
+    }
 }

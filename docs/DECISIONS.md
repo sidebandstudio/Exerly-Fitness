@@ -2324,3 +2324,14 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   training review named, isn't on this base (the training branch hasn't landed), and nothing
   here offers Undo of a workout delete; `restore(_:)` for a session is ready for it and
   tested through sync. The diary's Undo of a food delete now goes through it.
+- The review read a workout's nested paths as top-level fields, so a set conflict showed
+  "None" on both sides and a goal "Its own goal". A workout path now reads as the exercise and
+  set it names ("Barbell Bench Press: 102.5 kg × 5", with RIR, kind and "not done" when they
+  apply, a whole exercise as its set count, an order as the names in turn), a plan's goal as
+  "Lose 0.75% a week" or "Maintain", and other structured values as a mass or their first few
+  named values. "Showing now" marked the finding device's version on every device and after
+  every later edit; it now marks the version whose clashing fields match the record on this
+  device (`SyncConflictStore.summary(of:)`), and when neither does, the card says what it
+  shows now. The Undo bar is a bottom inset rather than an overlay, so at the largest text the
+  last card scrolls clear of it. `EXERLY_SYNC_CONFLICT_SEED=all` adds a workout set and a goal
+  conflict for the screenshots.

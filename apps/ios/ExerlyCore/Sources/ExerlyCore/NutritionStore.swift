@@ -660,10 +660,12 @@ extension NutritionStore: DocumentHost {
         }
     }
 
-    public func fieldGroups(kind: String) -> [[String]] {
+    public func fieldGroups(kind: String) -> [[String]] { Self.fieldGroups(of: kind) }
+
+    nonisolated static func fieldGroups(of kind: String) -> [[String]] {
         switch kind {
-        case Self.entryKind: [["grams", "serving", "quantity", "amountChanged"]]
-        case Self.weightKind: [["at", "date"]]
+        case entryKind: [["grams", "serving", "quantity", "amountChanged"]]
+        case weightKind: [["at", "date"]]
         default: []
         }
     }
