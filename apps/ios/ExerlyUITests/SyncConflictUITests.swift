@@ -102,6 +102,25 @@ final class SyncConflictUITests: ExerlyUITestCase {
         XCTAssertTrue(note.exists, app.debugDescription)
     }
 
+    /// Review round 3: with nothing left to decide, Today still leads to
+    /// what sync settled, as a calm row rather than Needs a look.
+    func testWhatSyncSettledStaysReachableFromToday() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "sync-settled", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_SYNC_CONFLICT_SEED": "settled"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.conflicts.settled"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertFalse(app.buttons["today.conflicts"].exists, "Nothing needs a look")
+        XCTAssertEqual(row.value as? String, "One change settled by sync")
+        tap(row, in: app)
+        XCTAssertTrue(app.staticTexts["Nothing needs a look"].waitForExistence(timeout: 10))
+        let settled = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@",
+                                                                           "deleted on every device since")).firstMatch
+        reveal(settled, in: app)
+        XCTAssertTrue(settled.exists, app.debugDescription)
+    }
+
     /// Opt-in screenshots of round 2's cards: the removed set and the
     /// conflict too large to sync.
     func testRemovedSetAndTooLargeCapture() async throws {

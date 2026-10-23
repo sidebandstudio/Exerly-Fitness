@@ -40,6 +40,24 @@ struct ConflictBadgeRow: View {
                 .accessibilityValue(count == 1 ? "One change to check" : "\(count) changes to check")
                 .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier("today.conflicts")
+            } else if !workspace.conflicts.settledForYou.isEmpty {
+                // Nothing to decide: a quiet way back to what sync settled, not a warning.
+                let settled = workspace.conflicts.settledForYou.count
+                NavigationLink {
+                    ConflictReviewView(conflicts: workspace.conflicts, unit: unit, timeZone: timeZone)
+                } label: {
+                    ExNavigationLabel(title: "Settled for you", icon: "checkmark.icloud",
+                                      detail: typeSize.isAccessibilitySize ? nil : settled == 1 ? "Sync settled one change for you"
+                                          : "Sync settled \(settled) changes for you")
+                        .padding(.horizontal, ExSpacing.item)
+                        .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Settled for you")
+                .accessibilityValue(settled == 1 ? "One change settled by sync" : "\(settled) changes settled by sync")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("today.conflicts.settled")
             }
         }
         #if DEBUG
@@ -244,13 +262,27 @@ private struct ConflictResolvedToast: View {
 /// that another device changed, as real conflicts in the account's store.
 /// With "all", also a workout set and a plan's goal both devices changed.
 /// With "removed", only a set clash whose set was removed here since, and a
-/// workout's conflict too large to sync.
+/// workout's conflict too large to sync. With "settled", only a conflict
+/// sync settled because its entry was deleted on every device.
 @MainActor
 enum ConflictSeed {
     static func seedIfAsked(_ workspace: TrainingWorkspace, timeZone: TimeZone) {
         let asked = ProcessInfo.processInfo.environment["EXERLY_SYNC_CONFLICT_SEED"]
-        guard asked == "1" || asked == "all" || asked == "removed", workspace.conflicts.conflicts.isEmpty else { return }
+        guard asked == "1" || asked == "all" || asked == "removed" || asked == "settled", workspace.conflicts.conflicts.isEmpty
+        else { return }
         do {
+            if asked == "settled" {
+                let at = Date().addingTimeInterval(-600), device = workspace.conflicts.device
+                var settled = SyncConflict(kind: "food_entry", documentID: UUID().uuidString, device: device, detectedAt: at,
+                                           base: nil, local: .object(["grams": .number(60), "food": .object(["name": .string("Synthetic oats")])]),
+                                           remote: .object(["grams": .number(90), "food": .object(["name": .string("Synthetic oats")])]),
+                                           fields: ["grams"])
+                settled.resolution = SyncConflict.Resolution(choice: .current, at: at.addingTimeInterval(300), device: device, automatic: true)
+                settled.changedAt = at.addingTimeInterval(300)
+                try workspace.conflicts.prepareWrite(kind: SyncConflictStore.kind, id: settled.id.uuidString,
+                                                     payload: ExerlyJSON.canonical(settled))()
+                return
+            }
             if asked == "removed" {
                 for conflict in try removedSetAndTooLarge(workspace, at: Date().addingTimeInterval(-180), device: workspace.conflicts.device) {
                     try workspace.conflicts.prepareWrite(kind: SyncConflictStore.kind, id: conflict.id.uuidString,

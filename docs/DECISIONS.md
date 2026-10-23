@@ -2492,3 +2492,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   workspace instead of a fixed sentence, and for this case it reads "Your data is safe on
   this device. A newer version of Exerly saved it, so update Exerly to open it." Nothing
   destructive is offered; Try again stays.
+- Today's only way into the review was Needs a look, shown only while a conflict is open,
+  so "Settled for you" was unreachable once nothing was left to decide. While sync has
+  settled something in the last week, Today shows a calm "Settled for you" row instead:
+  an ordinary surface with no count badge or accent, saying how many changes sync
+  settled. `EXERLY_SYNC_CONFLICT_SEED=settled` seeds one for
+  `testWhatSyncSettledStaysReachableFromToday`.
