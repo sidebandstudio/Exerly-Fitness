@@ -271,8 +271,9 @@ final class ReminderActionsTests: XCTestCase {
         content.title = "Sleep reminder"
         content.categoryIdentifier = ReminderActions.sleepCategory
         var added: [UNNotificationRequest] = []
+        let on = { (id: String) in id == "reminders" }
         let notice = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
-                                                   namespace: "test") { added.append($0) }
+                                                   namespace: "test", add: { added.append($0) }, remindsAgain: on)
         XCTAssertNil(notice, "Nothing to say")
         let again = try XCTUnwrap(added.first)
         XCTAssertEqual(again.identifier, ReminderActions.againPrefix + reminder("sleep"))
@@ -282,16 +283,37 @@ final class ReminderActionsTests: XCTestCase {
         XCTAssertEqual(again.content.categoryIdentifier, ReminderActions.sleepCategory, "With its button, to put it off again")
 
         _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: again.identifier, content: again.content, access: access,
-                                          namespace: "test") { added.append($0) }
+                                          namespace: "test", add: { added.append($0) }, remindsAgain: on)
         XCTAssertEqual(added.last?.identifier, again.identifier, "Again from the one it brought back, replacing it")
 
         let nobody = IntentAccess(screens: nil, token: nil, root: temporaryRoot(), widgets: nil)
         for (id, who) in [(reminder("sleep", of: "someone-else"), access), (reminder("sleep"), nobody)] {
-            _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: id, content: content, access: who, namespace: "test") {
-                added.append($0)
-            }
+            _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: id, content: content, access: who, namespace: "test",
+                                              add: { added.append($0) }, remindsAgain: on)
         }
         XCTAssertEqual(added.count, 2, "Another account's reminder, or one left after signing out, doesn't come back")
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { added.append($0) }, remindsAgain: { _ in false })
+        XCTAssertEqual(added.count, 2, "Nor one whose reminders were turned off")
+    }
+
+    /// Signing out, or turning reminders off, while Remind me again is still
+    /// adding its reminder takes it away once it's added.
+    func testARemindAgainStillBeingAddedWhenTheySignOutDoesntStay() async throws {
+        let screens = try TrainingWorkspace(accountID: "reminders", root: temporaryRoot())
+        let access = try access(screens)
+        let content = UNMutableNotificationContent()
+        content.categoryIdentifier = ReminderActions.sleepCategory
+        var signedIn = true, removed: [String] = []
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { _ in signedIn = false }, remindsAgain: { _ in signedIn },
+                                          remove: { removed += $0 })
+        XCTAssertEqual(removed, [ReminderActions.againPrefix + reminder("sleep")])
+        signedIn = true
+        removed = []
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { _ in }, remindsAgain: { _ in signedIn }, remove: { removed += $0 })
+        XCTAssertTrue(removed.isEmpty, "Still signed in, it stays")
     }
 
     func testOpeningButtonsHandTheAppTheirLink() async throws {

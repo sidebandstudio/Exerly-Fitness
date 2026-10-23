@@ -2655,6 +2655,30 @@ final class ProductionTests: XCTestCase {
         XCTAssertTrue(scheduler.pending.isEmpty)
     }
 
+    func testARemindedAgainReminderGoesWithItsReminder() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        let scheduler = TestReminderScheduler()
+        let service = NotificationService(api: api, defaults: defaults, keychain: keychain, scheduler: scheduler)
+        service.configure(accountID: "a")
+        service.accept(preferencesDocument(values: ["reminders": .object(["sleep": .bool(true)]), "reminderTimes": .object(["sleep": .string("22:00")])]))
+        await service.setDeviceEnabled(true)
+        let sleep = try XCTUnwrap(service.scheduled.first?.id)
+        let snoozed = ReminderActions.againPrefix + sleep
+        scheduler.pending[snoozed] = ReminderSpec(id: snoozed, title: "Sleep reminder", body: "", components: DateComponents())
+        scheduler.unrelated = [ReminderActions.againPrefix + "another-app"]
+        await service.reschedule()
+        XCTAssertNotNil(scheduler.pending[snoozed], "Rescheduling keeps it while its reminder stays")
+
+        await service.setDeviceEnabled(false)
+        XCTAssertNil(scheduler.pending[snoozed], "Reminders turned off take it too")
+        scheduler.pending[snoozed] = ReminderSpec(id: snoozed, title: "Sleep reminder", body: "", components: DateComponents())
+        keychain.deleteToken()
+        service.configure(accountID: nil)
+        await service.waitForSchedule()
+        XCTAssertTrue(scheduler.pending.isEmpty, "Signing out takes it")
+        XCTAssertEqual(scheduler.unrelated, [ReminderActions.againPrefix + "another-app"], "Only Exerly's reminders are touched")
+    }
+
     func testReminderSchedulingFailureIsVisibleAndDoesNotEraseSavedPreferences() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let scheduler = TestReminderScheduler()

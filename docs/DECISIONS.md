@@ -2666,3 +2666,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   an evening nap on the wrong night where clocks change at midnight
   (Santiago, for one). Tests cover nights across spring-forward and
   fall-back, whose hours are the real ones.
+- A reminder put off with Remind me again (`exerly.again.` + its ID) now
+  goes with its reminder: rescheduling removes it once its reminder isn't
+  wanted, so signing out or turning reminders off takes it. Remind me
+  again also checks the account is still signed in with reminders on
+  before and after adding it, so one still being added when that changes
+  is removed once it lands.

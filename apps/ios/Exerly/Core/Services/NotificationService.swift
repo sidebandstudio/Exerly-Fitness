@@ -166,7 +166,14 @@ final class NotificationService: ObservableObject {
         self.keychain = keychain
         self.scheduler = scheduler ?? SystemReminderScheduler()
     }
-    private func key(_ accountID: String, suffix: String) -> String { "reminders.v1.\(api.storageNamespace).\(accountID).\(suffix)" }
+    private func key(_ accountID: String, suffix: String) -> String { Self.key(accountID, suffix: suffix, namespace: api.storageNamespace) }
+    private nonisolated static func key(_ accountID: String, suffix: String, namespace: String) -> String { "reminders.v1.\(namespace).\(accountID).\(suffix)" }
+    /// Whether `accountID` is signed in here with reminders on, so a reminder
+    /// put off from the Lock Screen may come back.
+    nonisolated static func remindsAgain(accountID: String, namespace: String = APIClient.shared.storageNamespace, defaults: UserDefaults = .standard,
+                                         keychain: any SessionCredentials = KeychainService.shared) -> Bool {
+        APIClient.accountID(in: keychain.getToken()) == accountID && defaults.bool(forKey: key(accountID, suffix: "enabled", namespace: namespace))
+    }
     private func owns(_ accountID: String) -> Bool { APIClient.accountID(in: keychain.getToken()) == accountID }
     func configure(accountID: String?) {
         guard accountID == nil || owns(accountID!) else { return }
@@ -281,7 +288,11 @@ final class NotificationService: ObservableObject {
         let desiredIDs = Set(desired.map(\.id))
         let existing = await scheduler.pendingIDs()
         guard generation == scheduleGeneration else { return }
-        scheduler.remove(existing.filter { $0.hasPrefix("exerly.reminder.") && !desiredIDs.contains($0) })
+        // A reminder put off goes with its reminder: after sign-out, or with reminders off.
+        scheduler.remove(existing.filter { id in
+            let original = id.hasPrefix(ReminderActions.againPrefix) ? String(id.dropFirst(ReminderActions.againPrefix.count)) : id
+            return original.hasPrefix("exerly.reminder.") && !desiredIDs.contains(original)
+        })
         for reminder in desired {
             guard generation == scheduleGeneration else { return }
             if let accountID, !owns(accountID) { configure(accountID: nil); return }

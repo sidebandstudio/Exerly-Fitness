@@ -28,7 +28,7 @@ enum ReminderActions {
 
     static let workoutCategory = "exerly.workout", weighInCategory = "exerly.weighIn", sleepCategory = "exerly.sleep"
     /// A reminder shown again later. Outside "exerly.reminder.", so
-    /// rescheduling the reminders leaves it.
+    /// rescheduling the reminders leaves it while its reminder stays.
     static let againPrefix = "exerly.again."
     #if DEBUG
     /// A UI test's reminder delay, in seconds, carried by the reminder.
@@ -86,7 +86,9 @@ enum ReminderActions {
     /// link; logging ones say how it went.
     static func perform(_ action: Action, reminder id: String, content: UNNotificationContent? = nil, access: IntentAccess? = nil,
                         namespace: String = APIClient.shared.storageNamespace, now: Date = .now,
-                        add: (UNNotificationRequest) async throws -> Void = { try await UNUserNotificationCenter.current().add($0) })
+                        add: (UNNotificationRequest) async throws -> Void = { try await UNUserNotificationCenter.current().add($0) },
+                        remindsAgain: (String) -> Bool = { NotificationService.remindsAgain(accountID: $0) },
+                        remove: ([String]) -> Void = { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: $0) })
         async -> Notice? {
         if case .open(let url) = action {
             ExerlyLinkHandler.open?(url)
@@ -97,14 +99,17 @@ enum ReminderActions {
         let original = id.hasPrefix(againPrefix) ? String(id.dropFirst(againPrefix.count)) : id
         let theirs = accountID.map { original.hasPrefix(ReminderPlan.prefix(namespace: namespace, accountID: $0)) } ?? false
         if case .remindAgain(let minutes) = action {
-            // Only the signed-in account's reminders come back.
-            guard theirs, let copy = content?.mutableCopy() as? UNMutableNotificationContent else { return nil }
+            // Only the signed-in account's reminders come back, while its reminders are on.
+            guard theirs, let accountID, remindsAgain(accountID),
+                  let copy = content?.mutableCopy() as? UNMutableNotificationContent else { return nil }
             var seconds = TimeInterval(minutes * 60)
             #if DEBUG
             if let delay = (copy.userInfo[testDelayKey] as? String).flatMap(TimeInterval.init) { seconds = delay }
             #endif
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)
             try? await add(UNNotificationRequest(identifier: againPrefix + original, content: copy, trigger: trigger))
+            // Signing out or turning reminders off while it was added doesn't keep it.
+            if !remindsAgain(accountID) { remove([againPrefix + original]) }
             return nil
         }
         // A reminder left on this phone by another account logs nothing.
