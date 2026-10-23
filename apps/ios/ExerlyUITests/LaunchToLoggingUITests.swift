@@ -19,10 +19,10 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
     /// seconds apart, and the order alternates, so the machine's load and its
     /// drift cancel out, and what's left is what a week of food adds to a
     /// launch. A slowdown of every launch alike shows in the seconds reported
-    /// beside it, not in the ratio. Four runs of 20 pairs on 2026-10-23, on
+    /// beside it, not in the ratio. Eight runs of 20 pairs on 2026-10-23, on
     /// an iPhone 17 Pro Max simulator (Debug, M1 Max, load averages 20 to
-    /// 52), had medians of 1.016 to 1.025; the ceiling leaves a week of food
-    /// about 0.24 s more than that (docs/TAP_BUDGETS.md). PARITY B03's target
+    /// 142), had medians of 1.002 to 1.032; the ceiling leaves a week of food
+    /// about 0.17 s more than that (docs/TAP_BUDGETS.md). PARITY B03's target
     /// is under 1 s on a phone.
     static let ratioCeiling = 1.10
     static let pairs = 20
@@ -30,6 +30,8 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
     private struct Launch {
         let process: Double, app: Double, wallClock: Double
         let placed: Bool, hittable: Bool
+        /// Where the chip was as the launch returned, and where the app reported it.
+        let place: String
     }
 
     func testColdLaunchToLoggingStaysUnderItsCeiling() async throws {
@@ -72,6 +74,7 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
             + "App start to that frame: \(Self.percentiles(week.map(\.app)).text). "
             + "Asking for the launch to Log again hittable, with XCTest's setup: \(Self.percentiles(week.map(\.wallClock)).text). "
             + "Log again hittable as the launch returned: \(week.filter(\.hittable).count) of \(week.count)."
+            + week.enumerated().filter { !$0.element.placed }.map { " Launch \($0.offset + 1) misplaced: \($0.element.place)." }.joined()
         print(report)
         let attachment = XCTAttachment(string: report)
         attachment.name = "launch-to-logging"
@@ -105,11 +108,14 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         }
         guard timings.count == before.count + 1, let timing = timings.last,
               let process = timing["processToReadyMs"] as? Double, let start = timing["initToReadyMs"] as? Double else { return [] }
+        let place = (timing["frames"] as? [String: [Double]])?[control]
         var placed = false
-        if let seen, let place = (timing["frames"] as? [String: [Double]])?[control], place.count == 4 {
+        if let seen, let place, place.count == 4 {
             placed = seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
         }
-        return [Launch(process: process / 1000, app: start / 1000, wallClock: wallClock, placed: placed, hittable: hittable)]
+        let detail = "seen at y \(seen.map { "\($0.minY)-\($0.maxY)" } ?? "none"), reported \(place.map { "\($0)" } ?? "none")"
+        return [Launch(process: process / 1000, app: start / 1000, wallClock: wallClock, placed: placed, hittable: hittable,
+                       place: detail)]
     }
 
     /// Three years of meals, workouts and weigh-ins on the device: launch

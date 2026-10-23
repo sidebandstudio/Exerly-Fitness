@@ -27,7 +27,7 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
     tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
-- claude/taps (not landed): tap budgets in CI; review rounds 1-5 fixed; launch gated as 1.02x an empty
+- claude/taps (not landed): tap budgets in CI; review rounds 1-5 fixed; launch gated at 1.00-1.03x an empty
   account's in the same run (ceiling 1.10); 3 years launch in 3.7 s, not 30 s (B03, DECISIONS).
 
 ## Current outcome
@@ -76,4 +76,4 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 - Open Food Facts search budget is 10/min server-wide; type-ahead spends it faster.
 - Six idle "Exerly App" simulators are left alone. BarcodeScanSessionTests' row Undo is flaky.
 - B03, 3 years: 4.5 to 5.5 s p50 under XCTest; the 3.5 s gate stays failing, deferred to the sync
-  slice (push only changed documents); the paired week gate is unmeasured above load 52.
+  slice (push only changed documents). The week gate missed Log again's place once in 160 launches.
