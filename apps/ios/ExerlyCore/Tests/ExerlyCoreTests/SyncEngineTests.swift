@@ -14,6 +14,8 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     /// When set, the next write is applied but its response is lost.
     var loseNextResponse = false
     var offline = false
+    /// Refuses larger payloads with 413, as the API's 256 KB body limit does.
+    var maxPayloadBytes: Int?
     private(set) var writes = 0
     /// Every write the server received, including ones refused as conflicts.
     private(set) var attempts: [(id: String, baseRevision: Int)] = []
@@ -38,6 +40,9 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     private func write(_ kind: String, _ id: String, _ payload: Data?, _ base: Int, _ idempotency: String) throws -> DocumentWriteResult {
         try lock.withLock {
             if offline { throw Offline() }
+            if let maxPayloadBytes, (payload?.count ?? 0) > maxPayloadBytes {
+                throw APIError.server(status: 413, message: "request entity too large")
+            }
             if let receipt = receipts[idempotency] { return receipt }
             attempts.append((id, base))
             let current = documents[key(kind, id)]

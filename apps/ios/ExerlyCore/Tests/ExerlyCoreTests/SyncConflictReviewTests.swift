@@ -180,6 +180,77 @@ final class TrainingDevice {
         #expect(phone.session(session.id)?.exercises[0].sets.count == 1 && phone.conflicts.unresolved.isEmpty)
     }
 
+    /// A workout of about `bytes` as JSON: bench press first, then rows.
+    private func workout(bytes: Int) throws -> WorkoutSession {
+        var session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100), Fixture.set(5, 100)])])
+        while try ExerlyJSON.canonical(session).count < bytes {
+            session.exercises += Fixture.session([("barbell-row", (0..<20).map { Fixture.set(8, 60 + Double($0)) })]).exercises
+        }
+        return session
+    }
+
+    /// Review round 2, finding 5: a set clash in a workout of 100 KB, well
+    /// within the API's limit, makes a conflict that still syncs, holding
+    /// what it clashed on, and the next unrelated push goes through.
+    @Test func aConflictAboutALargeWorkoutSyncsAndSyncCarriesOn() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        server.maxPayloadBytes = 256 * 1024
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = try workout(bytes: 100_000), other = Fixture.session(days: 1, [("barbell-curl", [Fixture.set(10, 30)])])
+        try phone.store.importSessions([session, other])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var mine = try #require(phone.session(session.id)), theirs = try #require(tablet.session(session.id))
+        mine.exercises[0].sets[1].efforts[0].reps = 6
+        theirs.exercises[0].sets[1].efforts[0].reps = 4
+        try phone.store.saveSession(mine)
+        try tablet.store.saveSession(theirs)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        let stored = try #require(server.stored(SyncConflictStore.kind, conflict.id.uuidString)?.payload, "The conflict syncs")
+        #expect(stored.count < 200_000)
+        #expect(tablet.conflicts.conflict(conflict.id) == conflict)
+        let four = try #require(conflict.choices.first { choice in
+            conflict.version(choice).map { (try? $0.decode(WorkoutSession.self))?.exercises[0].sets[1].primary.reps } == 4
+        })
+        try tablet.conflicts.resolve(conflict.id, four)
+        #expect(tablet.session(session.id)?.exercises.count == session.exercises.count)
+        #expect(tablet.session(session.id)?.exercises[0].sets[1].primary.reps == 4)
+        var renamed = try #require(phone.session(other.id))
+        renamed.name = "Legs"
+        try phone.store.saveSession(renamed)
+        try await phone.sync.sync()
+        #expect(server.revision(TrainingStore.sessionKind, other.id.uuidString) == 2)
+    }
+
+    /// Changed here and deleted there, a workout so large its conflict can't
+    /// be sent stays as a conflict on this device only, which its card says,
+    /// and the rest syncs.
+    @Test func aConflictTooLargeToSyncStaysOnThisDeviceAndSyncCarriesOn() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        server.maxPayloadBytes = 256 * 1024
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        let session = try workout(bytes: 230_000), other = Fixture.session(days: 1, [("barbell-curl", [Fixture.set(10, 30)])])
+        try phone.store.importSessions([session, other])
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var mine = try #require(phone.session(session.id))
+        mine.name = "Heavy day"
+        try phone.store.saveSession(mine)
+        try tablet.store.deleteSession(session.id)
+        try await tablet.sync.sync()
+        try await phone.sync.sync()
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        #expect(conflict.tooLarge == true && server.stored(SyncConflictStore.kind, conflict.id.uuidString) == nil)
+        let summary = phone.conflicts.summary(of: conflict, unit: .kilograms, timeZone: .gmt)
+        #expect(summary.note == "Too large to sync, so it's only on this iPhone.")
+        var renamed = try #require(phone.session(other.id))
+        renamed.name = "Legs"
+        try phone.store.saveSession(renamed)
+        try await phone.sync.sync()
+        #expect(server.revision(TrainingStore.sessionKind, other.id.uuidString) == 2)
+        try phone.conflicts.resolve(conflict.id, try #require(conflict.choices.first { conflict.version($0) != nil }))
+        #expect(phone.session(session.id)?.name == "Heavy day")
+    }
+
     // MARK: 4. A clean deletion of the workout in progress
 
     /// The phone syncs its workout in progress and changes nothing since;

@@ -146,6 +146,11 @@ private struct ConflictCard: View {
                 Text("Showing now: \(now)").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("conflict.now")
             }
+            if let note = summary.note {
+                Label(note, systemImage: "icloud.slash")
+                    .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("conflict.note")
+            }
             VStack(spacing: ExSpacing.small) {
                 ForEach(summary.options) { option in
                     Button(option.title) { choose(option) }

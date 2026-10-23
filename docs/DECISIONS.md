@@ -2383,3 +2383,16 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   merges still never resurrect an item), and "Leave it removed", a new choice, `.current`,
   that settles the conflict and writes nothing. Conflicts haven't shipped, so no installed app
   meets a choice it can't decode.
+- A conflict kept three whole versions, so a clash in a workout of about 100 KB, well within
+  the API's 256 KB body limit, made a conflict over it; the 413 wasn't caught and failed
+  every later sync. A conflict above 200 KB now keeps, of each version, its top-level values
+  that aren't lists and, of each list, the items a clash names, whole (a list's order keeps
+  every item's own values): enough for the card's words and for a choice, which sets only
+  the clashing paths. Small conflicts, all food and weigh-in conflicts among them, are kept
+  whole as before. Trimming, rather than storing only the clashing values and the base
+  revision, keeps resolution, Undo and keeping both unchanged; chunking would have put many
+  writes behind one decision. If it's still too large the base goes, and if even that isn't
+  enough (a deletion conflict holds a whole version of the record) it's marked `tooLarge`:
+  it stays on the device that found it, sync never offers it, and its card says "Too large to
+  sync, so it's only on this iPhone." A 413 for a conflict marks it the same way, so a
+  misjudged size never blocks the rest of sync.

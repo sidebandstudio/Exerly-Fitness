@@ -60,10 +60,13 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
     /// When the resolution last changed, on any device: when two devices
     /// resolved it, or one undid it, at once, the later change stands.
     public var changedAt: Date
+    /// Too large to sync even with only what clashed kept: it stays on
+    /// the device that found it.
+    public var tooLarge: Bool?
 
     public init(id: UUID = UUID(), kind: String, documentID: String, device: SyncDevice, detectedAt: Date, remoteAt: Date? = nil,
                 base: JSONValue?, local: JSONValue?, remote: JSONValue?, fields: [String], resolution: Resolution? = nil,
-                changedAt: Date? = nil) {
+                changedAt: Date? = nil, tooLarge: Bool? = nil) {
         self.id = id
         self.kind = kind
         self.documentID = documentID
@@ -76,8 +79,58 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
         self.fields = fields
         self.resolution = resolution
         self.changedAt = changedAt ?? detectedAt
+        self.tooLarge = tooLarge
     }
 
+    /// Conflicts larger than this keep only what clashed. The API takes
+    /// bodies up to 256 KB, and a conflict holds up to three versions.
+    static let syncBudget = 200_000
+
+    /// This conflict small enough to sync: versions of a large record keep
+    /// only what a card and a choice need, its top-level values and each
+    /// list item a clash names, whole, then the base goes; still too
+    /// large, it's marked to stay here.
+    func fitted() -> SyncConflict {
+        let size = { (conflict: SyncConflict) in (try? ExerlyJSON.canonical(conflict).count) ?? .max }
+        var fitted = self
+        guard size(fitted) > Self.syncBudget else { return fitted }
+        if !isDeletion {
+            fitted.local = Self.trimmed(local, to: fields)
+            fitted.remote = Self.trimmed(remote, to: fields)
+            fitted.base = Self.trimmed(base, to: fields)
+        }
+        if size(fitted) > Self.syncBudget { fitted.base = nil }
+        if size(fitted) > Self.syncBudget { fitted.tooLarge = true }
+        return fitted
+    }
+
+    /// `version` with only its top-level values that aren't lists, and of
+    /// each list the items `paths` name, whole; a list's order keeps every
+    /// item's own values.
+    static func trimmed(_ version: JSONValue?, to paths: [String]) -> JSONValue? {
+        guard case .object(let fields)? = version else { return version }
+        var kept = fields.filter { if case .array = $0.value { false } else { true } }
+        for path in paths {
+            let step = String(path.split(separator: ".").first ?? "")
+            guard let open = step.firstIndex(of: "["), step.hasSuffix("]") else {
+                kept[step] = fields[step]
+                continue
+            }
+            let name = String(step[..<open]), id = String(step[step.index(after: open)..<step.index(before: step.endIndex)])
+            guard case .array(let items)? = fields[name] else { continue }
+            let have: [JSONValue] = if case .array(let have)? = kept[name] { have } else { [] }
+            func key(_ item: JSONValue) -> String? { if case .object(let f) = item, case .string(let id)? = f["id"] { id } else { nil } }
+            kept[name] = .array(items.compactMap { item in
+                let held = have.first { key($0) == key(item) }
+                if !id.isEmpty, key(item) == id { return item }
+                if id.isEmpty, case .object(let f) = item, held == nil {
+                    return .object(f.filter { if case .array = $0.value { false } else { true } })
+                }
+                return held
+            })
+        }
+        return .object(kept)
+    }
     public var isDeletion: Bool { local == nil || remote == nil }
     public var isResolved: Bool { resolution != nil }
 
@@ -172,7 +225,7 @@ public final class SyncConflictStore {
         let local = try json(local), remote = try json(remote)
         return SyncConflict(kind: kind, documentID: id, device: device, detectedAt: at, remoteAt: remoteAt, base: try json(base),
                             local: local, remote: remote, fields: local == nil || remote == nil ? [] : Array(Set(fields)).sorted(),
-                            changedAt: at)
+                            changedAt: at).fitted()
     }
 
     /// Persists a conflict inside the caller's transaction; publish after it commits.
@@ -363,7 +416,19 @@ public final class SyncConflictStore {
 extension SyncConflictStore: DocumentHost {
     public var documentKinds: [String] { [Self.kind] }
 
-    public func documentIDs(kind: String) -> [String] { kind == Self.kind ? conflicts.map(\.id.uuidString) : [] }
+    /// A conflict too large to sync isn't offered to sync.
+    public func documentIDs(kind: String) -> [String] {
+        kind == Self.kind ? conflicts.filter { $0.tooLarge != true }.map(\.id.uuidString) : []
+    }
+
+    /// The server refused a conflict as too large: it stays here.
+    func keepHere(_ id: String) throws {
+        guard var conflict = conflicts.first(where: { $0.id.uuidString == id }), conflict.tooLarge != true else { return }
+        conflict.tooLarge = true
+        var publish: () -> Void = {}
+        try state.performAtomically { publish = try stage(conflict) }
+        publish()
+    }
 
     public func payload(kind: String, id: String) throws -> Data? {
         guard kind == Self.kind else { return nil }

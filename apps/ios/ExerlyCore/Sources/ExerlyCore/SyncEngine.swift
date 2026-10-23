@@ -312,6 +312,11 @@ public final class SyncEngine {
             } catch APIError.server(status: 400, _) where Self.newerKinds.contains(kind) {
                 // A server from before this kind: keep it here and try next time.
                 return false
+            } catch APIError.server(status: 413, _) where kind == SyncConflictStore.kind {
+                // Too large to send: it stays on this device, and the rest syncs.
+                try checkActive()
+                try conflicts.keepHere(id)
+                return false
             }
             switch result {
             case .applied(let revision):

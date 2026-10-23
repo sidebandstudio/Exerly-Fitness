@@ -32,6 +32,8 @@ public struct SyncConflictSummary: Sendable, Hashable {
     public var remote: Side
     /// What this device has now, when it's neither version: "45 g".
     public var now: String?
+    /// "Too large to sync, so it's only on this iPhone."
+    public var note: String?
     public var options: [Option]
 }
 
@@ -118,6 +120,7 @@ extension SyncConflict {
             local: .init(device: localName, value: value(local), time: nil, shown: localShown),
             remote: .init(device: "Another device", value: value(remote), time: remoteAt.map(words.time), shown: remoteShown && !localShown),
             now: localShown || remoteShown ? nil : value(now),
+            note: tooLarge == true ? "Too large to sync, so it's only on \(here ? "this \(device.name)" : "the \(device.name)")." : nil,
             options: options
         )
     }
