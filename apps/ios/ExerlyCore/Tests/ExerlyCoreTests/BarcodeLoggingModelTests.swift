@@ -528,6 +528,59 @@ private struct ModelRandom {
         #expect(library.pending.isEmpty)
     }
 
+    /// Review round 4, merge-only: opened as the app does, history read off
+    /// the main actor (`StoredAccount`), a relaunch keeps the entry links. A
+    /// new build's full comparison leaves the server's link, and the tablet
+    /// bringing the original back still logs the scan once.
+    @Test func aRelaunchFromTheBackgroundReadKeepsEntryLinks() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let server = FakeDocumentServer()
+        let tabletDisk = InMemoryTrainingPersistence()
+        let tablet = try NutritionStore(persistence: tabletDisk)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server)
+        let code = Self.codes[2]
+        var edited: FoodEntry
+        let again: [FoodEntry], first: [FoodEntry]
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            let library = BarcodeLibrary(persistence: disk)
+            let phone = try NutritionStore(persistence: disk)
+            let phoneSync = SyncEngine(hosts: [phone], state: disk, api: server, appVersion: "1")
+            phoneSync.conflicts.effects = ScanConflictEffects(library: library, store: phone)
+            _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+            await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+            let scan = try #require(library.ready.first)
+            let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+            first = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+            try await phoneSync.sync()
+            try await tabletSync.sync()
+            edited = try #require(tablet.entries.first)
+            edited.grams = 60
+            try library.undo(Set(first.map(\.id)), from: phone)
+            again = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+            try await phoneSync.sync()
+            disk.close()
+        }
+        let link = NutritionStore.linkKind, id = again[0].id.uuidString
+        #expect(server.stored(link, id)?.payload != nil)
+
+        let stored = try #require(try StoredAccount.read(url: url))
+        let disk = try SQLiteTrainingPersistence(url: url)
+        let library = BarcodeLibrary(persistence: disk)
+        let phone = NutritionStore(persistence: disk, loaded: stored.nutrition)
+        #expect(phone.links[again[0].id]?.replaces == [first[0].id], "The link is read with the rest of the history")
+        let phoneSync = SyncEngine(hosts: [phone], state: disk, api: server, appVersion: "2")
+        phoneSync.conflicts.effects = ScanConflictEffects(library: library, store: phone)
+        try await phoneSync.sync()
+        #expect(server.stored(link, id)?.payload != nil, "The full comparison left the server's link")
+        server.inject(kind: NutritionStore.entryKind, id: first[0].id.uuidString, payload: try ExerlyJSON.canonical(edited))
+        try await phoneSync.sync()
+        #expect(phone.entries.map(\.id) == again.map(\.id), "The scan is logged once, not as \(phone.entries.map(\.grams)) g")
+    }
+
     /// Undo and logging the scan again, over and over, keeps the link
     /// bounded, with the first entry first, and never naming itself.
     @Test func repeatedUndoAndLoggingAgainKeepsTheLinkBounded() async throws {

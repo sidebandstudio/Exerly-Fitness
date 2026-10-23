@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 import ExerlyCore
 @testable import Exerly
@@ -128,6 +129,47 @@ final class AccountWorkspaceTests: XCTestCase {
         } catch let read as Read {
             XCTAssertFalse(read.onMain, "Read off the main thread")
         }
+    /// Review round 4, merge-only: opened as the app opens an account, with
+    /// its history read off the main actor, a workout this build can't read is
+    /// known to persistence (counted once), and entry links are loaded. Core's
+    /// `aRowThisBuildCantReadIsNeverPushedAsADeletion(loaded:)` and
+    /// `aRelaunchFromTheBackgroundReadKeepsEntryLinks` sync through the same path.
+    func testOpeningFromTheBackgroundReadKeepsUnreadableRowsAndEntryLinks() async throws {
+        let session = WorkoutSession(name: "Synthetic newer kind", startedAt: Date().addingTimeInterval(-3_600),
+                                     endedAt: Date().addingTimeInterval(-1_800),
+                                     exercises: [PerformedExercise(exerciseID: "barbell-bench-press",
+                                                                   sets: [PerformedSet(efforts: [Effort(reps: 5, load: .kg(100))],
+                                                                                       completedAt: Date())])])
+        let first = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil)
+        _ = try first.store.importSessions([session])
+        let code = try XCTUnwrap(GTIN("0012345678905"))
+        let food = Food(id: "synthetic-scan-food", name: "Synthetic bar", per100g: NutrientAmounts([.energy: 400]), servings: [],
+                        createdAt: Date())
+        let today = LocalDate(Date(), in: .current)
+        _ = await first.barcodes.resolve(code, meal: "Lunch", date: today) { _ in .unavailable }
+        await first.barcodes.resolveWaiting { _ in .found(food, attribution: "OFF") }
+        let scan = try XCTUnwrap(first.barcodes.ready.first)
+        let plate = [NutritionStore.PlateItem(food, grams: 40)]
+        let logged = try first.barcodes.log(plate, consuming: [[scan.id]], to: first.nutrition, on: today, meal: "Lunch")
+        try first.barcodes.undo(Set(logged.map(\.id)), from: first.nutrition)
+        let again = try first.barcodes.log(plate, consuming: [[scan.id]], to: first.nutrition, on: today, meal: "Lunch")
+        let url = first.url
+        await first.close()
+        // A newer app's set kind, which this build can't decode.
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let sql = "UPDATE sessions SET payload = CAST(replace(CAST(payload AS TEXT), '\"standard\"', '\"cluster\"') AS BLOB) WHERE id = '\(session.id.uuidString)'"
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_changes(database), 1)
+
+        let reopened = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil)
+        XCTAssertEqual(reopened.unreadableCount, 1, "Known once, as persistence now holds it")
+        XCTAssertNil(reopened.store.history.session(session.id))
+        XCTAssertEqual(reopened.nutrition.links[again[0].id]?.replaces, logged.map(\.id))
+        await reopened.close()
+    }
+
     /// Review round 3, compatibility: data a newer Exerly saved opens nowhere
     /// here, and the screens say it's safe and to update, offering nothing destructive.
     func testDataFromANewerVersionSaysItsSafeAndToUpdate() async throws {

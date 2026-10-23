@@ -2509,3 +2509,7 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   (`TrainingPersistence.noteUnreadable`) before anything can sync, in canonical form, so
   sync keeps them exactly as it does rows persistence read itself. The workspace counts them
   once, from persistence.
+- The same background read stopped after hidden suggestions, so a relaunch started with no
+  entry links although they were on disk: a full comparison deleted the server's links, and
+  the original of a scan logged again, brought back, made a second entry. The read now
+  includes `food_entry_link` documents and the loaded nutrition store starts from them.

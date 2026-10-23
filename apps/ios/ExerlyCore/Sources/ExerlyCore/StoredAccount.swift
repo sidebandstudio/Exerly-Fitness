@@ -12,6 +12,7 @@ public struct StoredAccount: Sendable {
         let weights: [WeightEntry]
         let plans: [NutritionPlan]
         let hidden: [HiddenSuggestion]
+        let links: [EntryLink]
     }
 
     public struct Training: Sendable {
@@ -73,7 +74,8 @@ public struct StoredAccount: Sendable {
             plans: try documents(NutritionStore.planKind).map { try decoder.decode(NutritionPlan.self, from: $0) }
                 .sorted(by: NutritionStore.planOrder),
             hidden: try documents(NutritionStore.hiddenKind).map { try decoder.decode(HiddenSuggestion.self, from: $0) }
-                .sorted(by: NutritionStore.hiddenOrder))
+                .sorted(by: NutritionStore.hiddenOrder),
+            links: try documents(NutritionStore.linkKind).map { try decoder.decode(EntryLink.self, from: $0) })
         let sessions = try rows(WorkoutSession.self, table: "sessions", order: "started_at")
         let customExercises = try rows(Exercise.self, table: "custom_exercises", order: "id")
         let training = Training(sessions: sessions, customExercises: customExercises, unreadable: unreadable)

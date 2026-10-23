@@ -74,6 +74,7 @@ public final class NutritionStore {
         weights = loaded.weights
         plans = loaded.plans
         hiddenSuggestions = loaded.hidden
+        links = Dictionary(loaded.links.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     nonisolated static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
