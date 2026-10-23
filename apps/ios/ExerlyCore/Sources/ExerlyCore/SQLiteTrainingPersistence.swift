@@ -75,13 +75,15 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         }
     }
 
-    func schemaVersion() throws -> Int {
+    func schemaVersion() throws -> Int { try Self.schemaVersion(database) }
+
+    nonisolated static func schemaVersion(_ database: SQLiteDatabase) throws -> Int {
         guard case .integer(let version) = try database.query("PRAGMA user_version").first?.first else { return 0 }
         return Int(version)
     }
 
     /// Ordered migrations; migration `n` moves the schema from version n to n + 1.
-    private static let migrations = [
+    private nonisolated static let migrations = [
         """
         CREATE TABLE sessions (
             id TEXT PRIMARY KEY,
@@ -125,14 +127,26 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         """,
     ]
 
-    private func migrate() throws {
-        let version = try schemaVersion()
+    private func migrate() throws { try Self.migrate(database) }
+
+    /// Brings the file at `url` up to the current schema on whatever thread
+    /// calls it, so an older file's history can be read off the main actor
+    /// (StoredAccount).
+    nonisolated static func migrate(url: URL) throws {
+        let database = try SQLiteDatabase(url: url)
+        defer { database.close() }
+        try database.executeScript("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
+        try migrate(database)
+    }
+
+    private nonisolated static func migrate(_ database: SQLiteDatabase) throws {
+        let version = try schemaVersion(database)
         guard version <= Self.currentSchemaVersion else {
-            throw PersistenceError.newerSchema(found: version, supported: Self.currentSchemaVersion)
+            throw PersistenceError.newerSchema(found: version, supported: currentSchemaVersion)
         }
-        for step in version..<Self.currentSchemaVersion {
+        for step in version..<currentSchemaVersion {
             try database.transaction {
-                try database.executeScript(Self.migrations[step])
+                try database.executeScript(migrations[step])
                 try database.executeScript("PRAGMA user_version = \(step + 1)")
             }
         }

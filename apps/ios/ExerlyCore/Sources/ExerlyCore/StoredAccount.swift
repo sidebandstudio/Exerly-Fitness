@@ -24,13 +24,19 @@ public struct StoredAccount: Sendable {
     /// Rows that couldn't be decoded, as `table/id`; left in the file as they are.
     public let unreadableRows: [String]
 
-    /// Nil when there is nothing to read yet: no file, or one whose schema
-    /// the main connection still has to migrate. Those open on the main actor
-    /// as before; there's no history to wait for.
+    /// Nil when there is nothing to read yet: no file, which opens on the
+    /// main actor as before, with no history to wait for. A file an older
+    /// version wrote is migrated here first, so its history is read here too;
+    /// one a newer version wrote throws, as the main connection would.
     public static func read(url: URL) throws -> StoredAccount? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let database = try SQLiteDatabase(url: url, readOnly: true)
+        var database = try SQLiteDatabase(url: url, readOnly: true)
         defer { database.close() }
+        if try SQLiteTrainingPersistence.schemaVersion(database) != SQLiteTrainingPersistence.currentSchemaVersion {
+            database.close()
+            try SQLiteTrainingPersistence.migrate(url: url)
+            database = try SQLiteDatabase(url: url, readOnly: true)
+        }
         guard case .integer(let version) = try database.query("PRAGMA user_version").first?.first,
               version == SQLiteTrainingPersistence.currentSchemaVersion else { return nil }
         var unreadable: [String] = []

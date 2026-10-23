@@ -30,4 +30,23 @@ import Testing
         #expect(training.history.sessions == directTraining.history.sessions)
         #expect(stored.unreadableRows == ["sessions/unreadable"])
     }
+
+    /// A file an older version wrote is brought up to date and read off the
+    /// main actor too, not left for the stores to read on it.
+    @Test func aFileInAnOlderSchemaIsMigratedAndReadOffTheMainActor() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("exerly-stored-\(UUID().uuidString)/x.sqlite")
+        let persistence = try SQLiteTrainingPersistence(url: url)
+        let session = Fixture.session([("deadlift", [Fixture.set(5, 140)])])
+        try persistence.save(session)
+        // Version 3 had no documents table.
+        try persistence.database.executeScript("DROP TABLE documents; PRAGMA user_version = 3;")
+        persistence.close()
+
+        let stored = try #require(try await Task.detached { try StoredAccount.read(url: url) }.value, "Read, not left for later")
+        #expect(stored.training.sessions.map(\.id) == [session.id])
+        #expect(stored.nutrition.entries.isEmpty)
+        let reopened = try SQLiteTrainingPersistence(url: url)
+        #expect(try reopened.schemaVersion() == SQLiteTrainingPersistence.currentSchemaVersion)
+        #expect(try TrainingStore(persistence: reopened, loaded: stored.training).history.sessions.map(\.id) == [session.id])
+    }
 }
