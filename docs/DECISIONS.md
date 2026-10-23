@@ -2301,3 +2301,17 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   order of the items all three versions have against the base: one side's reorder is taken,
   two different reorders keep the preferred side's and are reported as `exercises[]` (or a
   set list's), and items only one side has follow, in that side's order.
+- When the phone undid a scanned entry and logged the scan again, a tablet resolving the
+  deletion conflict knew nothing of the phone's scans and brought the original back, and the
+  phone took it in through an ordinary sync: the scan was logged twice. The entry logged
+  again now carries `replaces`, the IDs of the entries Undo removed whose scans it logged,
+  and it syncs (an additive, optional field; the server's food-entry check is unchanged).
+  `DocumentHost.reconcile` lets the owning store keep its records true whenever a document
+  comes back, through a resolution or through sync: `NutritionStore` turns an original coming
+  back where its replacement is logged into the replacement's change, merged against the
+  version both devices last agreed on, and keeps the original deleted. Only the device
+  holding the replacement folds; folding on a device that merely hasn't received the
+  deletion yet would decide the conflict for the person. A phone receiving an entry back
+  whose scan is still pending consumes the scan (`ConflictSideEffects.broughtBack`), so it
+  can't be logged again. The PARITY I03 pin from 2026-10-21 already passes on this branch;
+  the tablet-resolves case is now a passing test with three variants.

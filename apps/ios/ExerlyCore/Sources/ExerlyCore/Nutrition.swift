@@ -222,6 +222,10 @@ public struct FoodEntry: Sendable, Codable, Hashable, Identifiable {
     /// True when the time of day isn't known, as for a day's total or a row
     /// imported without a time: `loggedAt` is a stand-in, not when it was eaten.
     public var timeUnknown: Bool?
+    /// Entries Undo removed whose offline scans this one logged again. It
+    /// syncs, so any device bringing one of them back changes this entry
+    /// instead, and the scan is logged once.
+    public var replaces: [UUID]?
 
     public init(id: UUID = UUID(), date: LocalDate, meal: String, loggedAt: Date, food: FoodSnapshot, grams: Double,
                 serving: Serving? = nil, quantity: Double? = nil) {

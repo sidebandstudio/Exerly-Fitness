@@ -32,6 +32,15 @@ public protocol DocumentHost: AnyObject {
     /// they keep the older behaviour, where a change beats a deletion, and
     /// raise no conflict.
     func reviewsConflicts(kind: String) -> Bool
+    /// The document standing in for `id`, such as the entry an undone scan
+    /// was logged again as: bringing `id` back changes that one instead.
+    func replacement(kind: String, id: String) -> String?
+    /// The writes that keep this host's records true when `payload` arrives
+    /// for `id` or a resolution brings it back (`isBack`, gone here until
+    /// now), or nil to write it as it is: an entry and the one logged again
+    /// from its scan become one. `agreed` gives a document's version both
+    /// devices last agreed on, when known.
+    func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]?
     /// Persists a write, nil to delete, and returns the step that publishes it in
     /// memory. Call inside `performAtomically` and publish only after it commits.
     func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void
@@ -102,6 +111,12 @@ extension DocumentHost {
     public func keepsWhenDeletedElsewhere(kind: String, id: String) -> Bool { false }
 
     public func fieldGroups(kind: String) -> [[String]] { [] }
+
+    public func replacement(kind: String, id: String) -> String? { nil }
+
+    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]? {
+        nil
+    }
 
     public func reviewsConflicts(kind: String) -> Bool { true }
 

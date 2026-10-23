@@ -250,6 +250,62 @@ private struct ModelRandom {
         #expect(phone.entries.map(\.grams) == [40] && library.pending.isEmpty)
     }
 
+    /// When the phone logs the scan again.
+    enum Relog: CaseIterable, Sendable { case beforeSync, afterTheTabletResolves, never }
+
+    /// Review round 1, finding 3: the same, but the tablet resolves the
+    /// conflict. Its barcode library knows nothing of the phone's scans, yet
+    /// the entry logged again says which entry it stands in for, so the
+    /// tablet's version becomes that entry's change and the scan is logged
+    /// once on both. Logged again only after the tablet brought the original
+    /// back, the phone folds the original into it; never logged again, the
+    /// original is the scan's log on the phone, and the scan isn't pending.
+    @Test(arguments: Relog.allCases)
+    func aScanConflictResolvedOnAnotherDeviceLogsTheScanOnce(relog: Relog) async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phoneDisk = InMemoryTrainingPersistence(), tabletDisk = InMemoryTrainingPersistence()
+        let library = BarcodeLibrary(persistence: phoneDisk), tabletLibrary = BarcodeLibrary(persistence: tabletDisk)
+        let phone = try NutritionStore(persistence: phoneDisk), tablet = try NutritionStore(persistence: tabletDisk)
+        let phoneConflicts = SyncConflictStore(state: phoneDisk, hosts: [phone], deviceName: "iPhone", now: clock.now)
+        let tabletConflicts = SyncConflictStore(state: tabletDisk, hosts: [tablet], deviceName: "iPad", now: clock.now)
+        phoneConflicts.effects = ScanConflictEffects(library: library, store: phone)
+        tabletConflicts.effects = ScanConflictEffects(library: tabletLibrary, store: tablet)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneDisk, api: server, conflicts: phoneConflicts, now: clock.now)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletDisk, api: server, conflicts: tabletConflicts, now: clock.now)
+        let code = Self.codes[4]
+        _ = await library.resolve(code, meal: "Lunch", date: Self.days[0]) { _ in .unavailable }
+        await library.resolveWaiting { gtin in .found(Self.food(gtin), attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Self.food(code), grams: 40)]
+        let first = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var edited = try #require(tablet.entries.first)
+        edited.grams = 60
+        try tablet.saveEntry(edited)
+        try await tabletSync.sync()
+        try library.undo(Set(first.map(\.id)), from: phone)
+        var again = first
+        if relog == .beforeSync { again = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal) }
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        let conflict = try #require(tabletConflicts.unresolved.first)
+        #expect(conflict.documentID == first[0].id.uuidString && conflict.local == nil)
+        try tabletConflicts.resolve(conflict.id, .remote)
+        if relog == .afterTheTabletResolves {
+            again = try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        }
+        for sync in [tabletSync, phoneSync, tabletSync, phoneSync] { try await sync.sync() }
+        for store in [phone, tablet] {
+            #expect(store.entries.map(\.id) == again.map(\.id), "The scan is logged once, not as \(store.entries.map(\.grams)) g")
+            #expect(store.entries.map(\.grams) == [60])
+        }
+        #expect(library.pending.isEmpty)
+        #expect(throws: BarcodeLibrary.LogError.alreadyLogged([scan.id])) {
+            try library.log(plate, consuming: [[scan.id]], to: phone, on: scan.date, meal: scan.meal)
+        }
+    }
+
     /// Undone and not logged again, the scan is pending; bringing the entry
     /// back logs it, once, and Undo puts the scan back.
     @Test func bringingBackAnUndoneScanLogsItOnce() async throws {

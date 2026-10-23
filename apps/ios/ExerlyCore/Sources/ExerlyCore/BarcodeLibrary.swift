@@ -246,7 +246,8 @@ public final class BarcodeLibrary {
 
     /// Logs a plate's foods and consumes exactly the offline scans each item
     /// came from (`consuming[i]` for `plate[i]`), in one transaction, keeping
-    /// each scan beside the entry it became so Undo can put it back. A scan
+    /// each scan beside the entry it became so Undo can put it back. An entry
+    /// logging a scan Undo put back names the entries it replaces. A scan
     /// no longer pending throws `alreadyLogged`, so nothing logs it twice.
     /// Pending scans are read from the transaction itself, so two logs in one
     /// caller's transaction see each other; memory changes only after the
@@ -264,7 +265,11 @@ public final class BarcodeLibrary {
             let consumed = stored.filter { ids.contains($0.id) }
             guard consumed.count == ids.count else { throw LogError.alreadyLogged(ids.subtracting(consumed.map(\.id))) }
             try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: stored.filter { !ids.contains($0.id) })), forKey: Self.key)
-            let written = try store.writeLog(plate, on: date, meal: meal, at: time)
+            let undone = try storedValue([String: [Pending]].self, Self.undoneKey) ?? [:]
+            let replacing = scans.map { own in
+                undone.filter { $0.value.contains { own.contains($0.id) } }.keys.compactMap(UUID.init).sorted { $0.uuidString < $1.uuidString }
+            }
+            let written = try store.writeLog(plate, on: date, meal: meal, at: time, replacing: replacing)
             var provenance = try storedProvenance()
             for (entry, own) in zip(written.entries, scans) where !own.isEmpty {
                 provenance[entry.id.uuidString] = consumed.filter { own.contains($0.id) }
@@ -308,36 +313,35 @@ public final class BarcodeLibrary {
         }
     }
 
-    /// The entry a scan undone with `entryID` was logged again as, if it's still logged.
-    public func relog(of entryID: UUID, in store: NutritionStore) -> UUID? {
-        guard let scans = try? storedValue([String: [Pending]].self, Self.undoneKey)?[entryID.uuidString],
-              let provenance = try? storedProvenance() else { return nil }
-        let ids = Set(scans.map(\.id))
-        return store.entries.first { entry in provenance[entry.id.uuidString]?.contains { ids.contains($0.id) } == true }?.id
+    /// Brings back an entry Undo removed, as another device changed it,
+    /// while its scans are still pending: bringing it back logs them, once.
+    /// An entry logged again from them stands in for it instead; see
+    /// `NutritionStore.reconcile`. Returns how to undo it, or nil when no
+    /// pending scan is involved. Call inside a transaction.
+    func bringBack(_ id: UUID, as entry: FoodEntry, to store: NutritionStore) throws -> (() throws -> Void)? {
+        guard try claim(id, store: store, write: { try store.commit(NutritionStore.entryKind, id.uuidString, entry) }) else { return nil }
+        return { [self] in try undo([id], from: store) }
     }
 
-    /// Brings back an entry Undo removed, as another device changed it,
-    /// keeping each of its scans logged once: when a scan was logged again,
-    /// that entry takes the other device's changes instead; when the scans
-    /// are pending, bringing it back logs them. Returns how to undo it, or
-    /// nil when no scan is involved. Call inside a transaction.
-    func bringBack(_ id: UUID, as entry: FoodEntry, base: FoodEntry?, to store: NutritionStore) throws -> (() throws -> Void)? {
+    /// Another device brought back an entry Undo removed here: its scans
+    /// still pending are its log again. Call inside a transaction.
+    func broughtBack(_ id: UUID, to store: NutritionStore) throws {
+        _ = try claim(id, store: store, write: {})
+    }
+
+    /// Consumes the pending scans Undo put back with `id` and keeps them
+    /// with it again, writing it with `write`. False when none is pending.
+    private func claim(_ id: UUID, store: NutritionStore, write: () throws -> Void) throws -> Bool {
         guard (store.persistence as AnyObject) === (persistence as AnyObject) else { throw LogError.separateStores }
         var undone = try storedValue([String: [Pending]].self, Self.undoneKey) ?? [:]
-        guard let scans = undone[id.uuidString], !scans.isEmpty else { return nil }
-        if let other = relog(of: id, in: store), let current = store.entries.first(where: { $0.id == other }) {
-            let merged = try store.merge(kind: NutritionStore.entryKind, base: base.map(ExerlyJSON.canonical),
-                                         local: ExerlyJSON.canonical(current), remote: ExerlyJSON.canonical(entry), preferring: .remote)
-            try store.commit(NutritionStore.entryKind, other.uuidString, ExerlyJSON.decoder.decode(FoodEntry.self, from: merged.merged))
-            return { try store.commit(NutritionStore.entryKind, other.uuidString, current) }
-        }
+        guard let scans = undone[id.uuidString], !scans.isEmpty else { return false }
         let pendingNow = try storedPending()
         let back = scans.filter { scan in pendingNow.contains { $0.id == scan.id } }
-        guard !back.isEmpty else { return nil }
+        guard !back.isEmpty else { return false }
         let ids = Set(back.map(\.id))
         try persistence.performAtomically {
             try persistence.saveValue(try ExerlyJSON.canonical(saved(pending: pendingNow.filter { !ids.contains($0.id) })), forKey: Self.key)
-            try store.commit(NutritionStore.entryKind, id.uuidString, entry)
+            try write()
             var provenance = try storedProvenance()
             provenance[id.uuidString] = back
             undone[id.uuidString] = nil
@@ -345,7 +349,7 @@ public final class BarcodeLibrary {
             try persistence.saveValue(try ExerlyJSON.canonical(undone), forKey: Self.undoneKey)
             persistence.afterCommit { [self] in pending.removeAll { ids.contains($0.id) } }
         }
-        return { [self] in try undo([id], from: store) }
+        return true
     }
 
     /// The person logged or dismissed an offline scan.

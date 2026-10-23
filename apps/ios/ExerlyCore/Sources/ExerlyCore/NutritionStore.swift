@@ -249,7 +249,7 @@ public final class NutritionStore {
     /// Writes a plate's entries inside the caller's transaction without
     /// publishing them. Hand `publish` to `afterCommit`, so a failed commit
     /// leaves memory as untouched as the disk.
-    func writeLog(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date?) throws
+    func writeLog(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date?, replacing: [[UUID]] = []) throws
         -> (entries: [FoodEntry], publish: () -> Void) {
         let loggedAt = time?.roundedToMilliseconds ?? now()
         var problems: [String] = []
@@ -264,6 +264,7 @@ public final class NutritionStore {
             }
         }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
+        for (index, replaced) in replacing.enumerated() where !replaced.isEmpty { logged[index].replaces = replaced }
         var seen = Set<String>()
         let invalid = logged.flatMap(\.problems).filter { seen.insert($0).inserted }
         guard invalid.isEmpty else { throw StoreError.invalid(invalid) }
@@ -665,6 +666,36 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: [["at", "date"]]
         default: []
         }
+    }
+
+    /// The entry logged again from the scan of `id`, an entry Undo removed.
+    public func replacement(kind: String, id: String) -> String? {
+        guard kind == Self.entryKind, let entry = UUID(uuidString: id) else { return nil }
+        return entries.first { $0.id != entry && $0.replaces?.contains(entry) == true }?.id.uuidString
+    }
+
+    /// An entry and the one logged again from its scan never both stand:
+    /// one coming back where the other is logged becomes its change, merged
+    /// against the version both devices last agreed on, and stays deleted.
+    /// The device holding the entry logged again does this when the other
+    /// comes back, so every device ends with the one entry.
+    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, agreed: (String) -> Data?) throws -> [DocumentWrite]? {
+        guard kind == Self.entryKind else { return nil }
+        let decoder = ExerlyJSON.decoder
+        let entry = try decoder.decode(FoodEntry.self, from: payload)
+        func fold(_ source: FoodEntry, into target: FoodEntry) throws -> FoodEntry {
+            let merged = try merge(kind: kind, base: agreed(source.id.uuidString), local: ExerlyJSON.canonical(target),
+                                   remote: ExerlyJSON.canonical(source), preferring: .remote).merged
+            var folded = try decoder.decode(FoodEntry.self, from: merged)
+            folded.id = target.id
+            folded.replaces = Array(Set((target.replaces ?? []) + (source.replaces ?? []) + [source.id]).subtracting([target.id]))
+                .sorted { $0.uuidString < $1.uuidString }
+            return folded
+        }
+        guard isBack, let standIn = replacement(kind: kind, id: id).flatMap(UUID.init),
+              let target = entries.first(where: { $0.id == standIn }) else { return nil }
+        return [DocumentWrite(kind: kind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(fold(entry, into: target))),
+                DocumentWrite(kind: kind, id: id, payload: nil)]
     }
 
     /// Hiding a food again elsewhere needs no review.

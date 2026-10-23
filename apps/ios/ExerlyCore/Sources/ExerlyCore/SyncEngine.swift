@@ -207,17 +207,30 @@ public final class SyncEngine {
             try conflicts.found(kind: change.kind, id: change.id, base: base?.payload, local: $0.local, remote: $0.remote,
                                 fields: $0.fields, remoteAt: change.updatedAt)
         }
+        // Back here after a deletion, it may be what another record now
+        // stands in for, such as an entry whose scan was logged again.
+        let isBack = local == nil && base != nil
+        var writes = write.map { [DocumentWrite(kind: change.kind, id: change.id, payload: $0)] } ?? []
+        if case .some(let payload?) = write,
+           let reconciled = try host.reconcile(kind: change.kind, id: change.id, payload: payload, isBack: isBack, agreed: { [self] id in
+               conflicts.agreed(kind: change.kind, id: id) ?? (id == change.id ? base?.payload : nil)
+           }) {
+            writes = try reconciled.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+        }
         let newBase = SyncBase(kind: change.kind, id: change.id, revision: change.revision, payload: remote)
         let remaining = rejected.filter { $0.kind != change.kind || $0.id != change.id }
-        var publish: () -> Void = {}
+        var publishes: [() -> Void] = []
         var publishConflict: () -> Void = {}
         try stateStore.performAtomically {
-            if let write { publish = try host.prepareWrite(kind: change.kind, id: change.id, payload: write) }
+            for write in writes { publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload)) }
+            if isBack, writes.contains(where: { $0.id == change.id && $0.payload != nil }) {
+                try conflicts.effects?.broughtBack(kind: change.kind, id: change.id)
+            }
             if let conflict { publishConflict = try conflicts.stage(conflict) }
             try stateStore.saveSyncBase(newBase)
             if remaining != rejected { try stateStore.saveRejectedDocuments(remaining) }
         }
-        publish()
+        publishes.forEach { $0() }
         publishConflict()
         bases[key] = newBase
         rejected = remaining

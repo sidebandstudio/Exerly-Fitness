@@ -100,17 +100,16 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
 }
 
 /// A store with its own records about documents another host keeps, such
-/// as the offline scans behind food entries, that resolving a conflict must
-/// keep true.
+/// as the offline scans behind food entries, that bringing a document back
+/// must keep true.
 @MainActor
 public protocol ConflictSideEffects: AnyObject {
-    /// The document now standing in for a deleted one, such as the entry a
-    /// scan was logged again as.
-    func replacement(kind: String, id: String) -> String?
-    /// Brings back a deleted document as `payload`; `base` is the version
-    /// both devices last agreed on. Returns how to undo it, or nil to leave
-    /// it to the document's host. Called inside a transaction.
-    func bringBack(kind: String, id: String, payload: Data, base: Data?) throws -> (() throws -> Void)?
+    /// Brings back a deleted document as `payload`. Returns how to undo it,
+    /// or nil to leave it to the document's host. Called inside a transaction.
+    func bringBack(kind: String, id: String, payload: Data) throws -> (() throws -> Void)?
+    /// Another device brought a deleted document back; sync wrote it.
+    /// Called inside the same transaction.
+    func broughtBack(kind: String, id: String) throws
 }
 
 /// The conflicts of one account, kept in its own store beside its data, so
@@ -211,8 +210,13 @@ public final class SyncConflictStore {
                 if current != nil, conflict.version(choice) != nil {
                     // Already back, perhaps changed since: it stays as it is.
                 } else if let kept = conflict.version(choice)?.canonicalData {
-                    undoEffect = try effects?.bringBack(kind: kind, id: documentID, payload: kept, base: conflict.base?.canonicalData)
-                    if undoEffect == nil { writes = [DocumentWrite(kind: kind, id: documentID, payload: kept)] }
+                    if let reconciled = try host.reconcile(kind: kind, id: documentID, payload: kept, isBack: true,
+                                                           agreed: { agreed(kind: kind, id: $0) }) {
+                        writes = try reconciled.filter { try $0.payload != nil || host.payload(kind: $0.kind, id: $0.id) != nil }
+                    } else {
+                        undoEffect = try effects?.bringBack(kind: kind, id: documentID, payload: kept)
+                        if undoEffect == nil { writes = [DocumentWrite(kind: kind, id: documentID, payload: kept)] }
+                    }
                 } else if current != nil {
                     writes = [DocumentWrite(kind: kind, id: documentID, payload: nil)]
                 }
@@ -267,9 +271,16 @@ public final class SyncConflictStore {
         undoable = nil
     }
 
-    /// The document now standing in for a deleted one, when another store knows.
+    /// The document now standing in for a deleted one, such as the entry an
+    /// undone scan was logged again as.
     public func replacement(for conflict: SyncConflict) -> String? {
-        effects?.replacement(kind: conflict.kind, id: conflict.documentID)
+        host(for: conflict.kind)?.replacement(kind: conflict.kind, id: conflict.documentID)
+    }
+
+    /// The version both devices last agreed on of a document a conflict is
+    /// about, from the latest such conflict.
+    func agreed(kind: String, id: String) -> Data? {
+        conflicts.first { $0.kind == kind && $0.documentID == id && $0.base != nil }?.base?.canonicalData
     }
 }
 
@@ -324,8 +335,9 @@ extension SyncConflictStore: DocumentHost {
     }
 }
 
-/// Keeps offline scans logged exactly once when a conflict brings back a
-/// food entry that Undo removed. See `BarcodeLibrary.bringBack`.
+/// Keeps offline scans logged exactly once when a conflict, here or on
+/// another device, brings back a food entry that Undo removed. See
+/// `BarcodeLibrary.bringBack`.
 @MainActor
 public final class ScanConflictEffects: ConflictSideEffects {
     private let library: BarcodeLibrary
@@ -336,15 +348,13 @@ public final class ScanConflictEffects: ConflictSideEffects {
         self.store = store
     }
 
-    public func replacement(kind: String, id: String) -> String? {
+    public func bringBack(kind: String, id: String, payload: Data) throws -> (() throws -> Void)? {
         guard kind == NutritionStore.entryKind, let entry = UUID(uuidString: id) else { return nil }
-        return library.relog(of: entry, in: store)?.uuidString
+        return try library.bringBack(entry, as: ExerlyJSON.decoder.decode(FoodEntry.self, from: payload), to: store)
     }
 
-    public func bringBack(kind: String, id: String, payload: Data, base: Data?) throws -> (() throws -> Void)? {
-        guard kind == NutritionStore.entryKind, let entry = UUID(uuidString: id) else { return nil }
-        let decoder = ExerlyJSON.decoder
-        return try library.bringBack(entry, as: decoder.decode(FoodEntry.self, from: payload),
-                                     base: base.map { try decoder.decode(FoodEntry.self, from: $0) }, to: store)
+    public func broughtBack(kind: String, id: String) throws {
+        guard kind == NutritionStore.entryKind, let entry = UUID(uuidString: id) else { return }
+        try library.broughtBack(entry, to: store)
     }
 }
