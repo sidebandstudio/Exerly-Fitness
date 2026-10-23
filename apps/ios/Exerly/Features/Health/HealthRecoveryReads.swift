@@ -149,15 +149,20 @@ final class HealthRecoveryModel: ObservableObject {
     @Published private(set) var recovery: [RecoveryDay]?
     @Published private(set) var messages: [RecoveryStatus.Signal: String] = [:]
 
+    private let accountID: String
     private let client: HealthRecoveryClient
     private let defaults: UserDefaults
     private let key: String
     private let timeZone: TimeZone
     private let now: () -> Date
+    private let isCurrent: @MainActor (String) -> Bool
     private var generation = UUID()
 
     init(accountID: String, timeZone: TimeZone = .current, client: HealthRecoveryClient = HealthKitRecoveryClient.shared,
-         namespace: String = APIClient.shared.storageNamespace, defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init) {
+         namespace: String = APIClient.shared.storageNamespace, defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init,
+         isCurrent: @escaping @MainActor (String) -> Bool = { SyncEngine.shared.isConfigured(for: $0) }) {
+        self.accountID = accountID
+        self.isCurrent = isCurrent
         key = "healthRecovery.\(namespace).\(accountID)"
         self.client = client
         self.defaults = defaults
@@ -189,7 +194,8 @@ final class HealthRecoveryModel: ObservableObject {
             messages[signal] = "Health access couldn't open. Try again."
             return
         }
-        guard requesting == signal else { return }
+        // Another account may have opened while Health asked.
+        guard requesting == signal, owned else { return }
         // Health never says whether reading was allowed; what it returns shows.
         enabled.insert(signal)
         save()
@@ -209,7 +215,7 @@ final class HealthRecoveryModel: ObservableObject {
         // From 6 PM the evening before the first night, when it can start.
         let start = NutritionFormat.pickerDate(dates[0], timeZone: timeZone).addingTimeInterval(-30 * 3600)
         let samples = (try? await client.read(enabled, in: DateInterval(start: start, end: max(start, now())))) ?? HealthRecoverySamples()
-        guard generation == operation else { return }
+        guard generation == operation, owned else { return }
         recovery = HealthRecovery.days(dates, sleep: samples.sleep, hrv: samples.hrv, restingHeartRate: samples.restingHeartRate,
                                        timeZone: timeZone)
     }
@@ -237,6 +243,9 @@ final class HealthRecoveryModel: ObservableObject {
     }
 
     func cancelRequest() { requesting = nil }
+
+    /// Still this account's, and still wanted.
+    private var owned: Bool { !Task.isCancelled && isCurrent(accountID) }
 
     private func save() { defaults.set(RecoveryStatus.Signal.allCases.filter(enabled.contains).map(\.rawValue), forKey: key) }
 }

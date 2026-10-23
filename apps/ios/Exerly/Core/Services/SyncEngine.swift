@@ -496,7 +496,7 @@ final class SyncEngine: ObservableObject {
     }
 
     @discardableResult
-    func saveActivity(_ request: ActivityRequest, editing: ActivityDTO? = nil) throws -> String {
+    func saveActivity(_ request: ActivityRequest, editing: ActivityDTO? = nil, clientID: String? = nil) throws -> String {
         guard !request.type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, request.type.utf16.count <= 120,
               request.duration.isFinite, (0.1...1440).contains(request.duration),
               (request.intensity?.utf16.count ?? 0) <= 32, (request.category?.utf16.count ?? 0) <= 48,
@@ -506,8 +506,16 @@ final class SyncEngine: ObservableObject {
         var body = try object(JSONEncoder().encode(request))
         body["activity"] = request.type.trimmingCharacters(in: .whitespacesAndNewlines)
         body["entry_date"] = request.entryDate ?? today.rawValue
-        return try saveLog(kind: "activity", body: body, entityID: editing?.clientID, serverID: editing?.id,
+        return try saveLog(kind: "activity", body: body, entityID: editing?.clientID ?? clientID, serverID: editing?.id,
             revision: editing?.revision, createdAt: editing?.createdAt)
+    }
+
+    /// Which of these activities this phone has for the account, each true
+    /// if it was deleted.
+    func activityStates(_ clientIDs: Set<String>) -> [String: Bool] {
+        let resources = (try? ownedResources()) ?? []
+        return Dictionary(resources.filter { $0.kind == "activity" && clientIDs.contains($0.entityID) }.map { ($0.entityID, $0.tombstoned) },
+                          uniquingKeysWith: { first, _ in first })
     }
 
     @discardableResult
@@ -620,6 +628,11 @@ final class SyncEngine: ObservableObject {
     }
     @discardableResult
     func deleteActivity(_ item: ActivityDTO) throws -> String { try deleteLog(kind: "activity", entityID: item.clientID, revision: item.revision) }
+    @discardableResult
+    func deleteActivity(clientID: String) throws -> String {
+        guard let resource = try ownedResources().first(where: { $0.kind == "activity" && $0.entityID == clientID }) else { throw APIError.unknown }
+        return try deleteResource(resource)
+    }
     @discardableResult
     func deleteSleep(_ item: SleepDTO) throws -> String { try deleteLog(kind: "sleep", entityID: item.clientID, revision: item.revision) }
     private func deleteLog(kind: String, entityID: String?, revision: Int) throws -> String {

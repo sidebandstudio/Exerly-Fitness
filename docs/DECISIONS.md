@@ -2683,3 +2683,32 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   unseen. Now the switch's next read compares what it finds with what was
   shown; if Health has others, nothing is imported, the switch stays off,
   and the preview opens again with them.
+- Health's food and workouts are now read in full each time (as the Health
+  screen opens, and on Sync now), not from an anchor, and reconciled with
+  what's in Exerly by `HealthHistory.foods` and `.workouts`. Anchored reads
+  saw only what was new, so a better source saving a day later won its
+  otherwise empty batch and both stayed, and a deletion made while reading
+  was off was never seen. Now each day (or run of overlapping workouts)
+  keeps its best source across everything Health has, and an import whose
+  record is gone from Health, or now outranked, is taken out. Reading all
+  food correlations costs more than an anchored read; it runs only on that
+  screen.
+- What an install imported is kept per account (`healthHistory.….imported`)
+  and stays when a switch is turned off. Only those are ever taken out, so
+  entries that came from another phone's Health are left alone, and one
+  deleted in Exerly isn't added back. After a reinstall, what's synced and
+  still in this phone's Health counts as imported here again. An entry the
+  person edited is never taken out.
+- A workout's activity ID is a name-based UUID of the account and the
+  Health UUID (`HealthHistory.activityID`), the same on every install.
+  Before adding any, the account's activities on those days are read, so
+  one already synced is found rather than added twice (the server also
+  refuses a second activity with that ID). A workout deleted in Health now
+  takes its activity out; this replaces the 2026-10-21 rule.
+- Workouts dated outside the ten years the activity log takes are checked
+  before the preview, shown as left in Health, and the rest import.
+  Before, the oldest was saved first and its rejection stopped the import.
+- Every Health read (history, its weigh-in preview, recovery) is bound to
+  the account it started for. After each wait for Health it checks the
+  account is still signed in with the same data open, and the task isn't
+  cancelled; otherwise nothing is saved or shown.

@@ -17,8 +17,11 @@ final class HealthRecoveryReadsTests: XCTestCase {
         client = FakeRecoveryClient()
     }
 
+    private var current = "account-a"
+
     private func model(_ account: String = "account-a", now: Date) -> HealthRecoveryModel {
-        HealthRecoveryModel(accountID: account, timeZone: zone, client: client, namespace: "test", defaults: defaults, now: { now })
+        HealthRecoveryModel(accountID: account, timeZone: zone, client: client, namespace: "test", defaults: defaults, now: { now },
+                            isCurrent: { $0 == self.current })
     }
 
     private func at(_ day: Int, _ hour: Int) -> Date {
@@ -80,9 +83,32 @@ final class HealthRecoveryReadsTests: XCTestCase {
         XCTAssertEqual(recovery.messages[.sleep], "Health access couldn't open. Try again.")
         XCTAssertTrue(client.reads.isEmpty)
     }
+
+    /// Review 1: what Health returns after another account opens isn't shown to it.
+    func testAReadThatFinishesAfterAnotherAccountOpensShowsNothing() async {
+        let now = at(15, 9)
+        client.samples.sleep = [HealthSleepReading(start: at(14, 23), end: at(15, 6), kind: .asleep, source: watch)]
+        let recovery = model(now: now)
+        await recovery.setEnabled(.sleep, true)
+        XCTAssertNotNil(recovery.recovery)
+
+        let other = model("account-b", now: now)
+        client.onRead = { self.current = "account-b" }
+        await recovery.refresh()
+        XCTAssertEqual(recovery.recovery?.last?.sleepHours, 7, "The earlier read stays; the late one is dropped")
+        client.onRead = nil
+        current = "account-a"
+        client.onRequest = { self.current = "account-b" }
+        await recovery.setEnabled(.hrv, true)
+        XCTAssertFalse(recovery.enabled.contains(.hrv), "A switch answered after another account opened stays off")
+        XCTAssertTrue(other.enabled.isEmpty)
+    }
 }
 
 final class FakeRecoveryClient: HealthRecoveryClient, @unchecked Sendable {
+    /// Run while Health is asked or read, before it answers.
+    var onRead: (@MainActor () -> Void)?
+    var onRequest: (@MainActor () -> Void)?
     var available = true
     var failRequests = false
     var samples = HealthRecoverySamples()
@@ -94,10 +120,12 @@ final class FakeRecoveryClient: HealthRecoveryClient, @unchecked Sendable {
     func requestAccess(_ signal: RecoveryStatus.Signal) async throws {
         if failRequests { throw URLError(.cancelled) }
         requested.append(signal)
+        await onRequest?()
     }
 
     func read(_ signals: Set<RecoveryStatus.Signal>, in span: DateInterval) async throws -> HealthRecoverySamples {
         reads.append(signals)
+        await onRead?()
         return HealthRecoverySamples(sleep: signals.contains(.sleep) ? samples.sleep : [],
                                      hrv: signals.contains(.hrv) ? samples.hrv : [],
                                      restingHeartRate: signals.contains(.restingHeartRate) ? samples.restingHeartRate : [])
