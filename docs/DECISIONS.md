@@ -2057,6 +2057,7 @@ the water goal and could replace another device's change without review.
   they hold one choice each and the person just made it. Your details' draft,
   its base revision and its conflict review are never touched, so an
   unfinished edit there still asks before replacing another device's save.
+
 ## 2026-10-20: Every repeat on Today's first screen, and a typed weigh-in in two taps
 
 Counted against MacroFactor's public material (docs/TAP_BUDGETS.md), two flows
