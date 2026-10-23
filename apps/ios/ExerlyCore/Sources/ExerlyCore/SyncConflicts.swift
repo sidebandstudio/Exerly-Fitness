@@ -361,6 +361,7 @@ public final class SyncConflictStore {
             reopened.changedAt = now()
             var publishes: [() -> Void] = []
             try state.performAtomically {
+                try forgetAcknowledgement(id)
                 // Changed since, it stays, with the scans it logs, as any
                 // record changed since a resolution does.
                 if let undoEffect, try host.payload(kind: kind, id: documentID) == effectWrote { try undoEffect() }
@@ -397,24 +398,33 @@ public final class SyncConflictStore {
 
     // MARK: Tidying
 
+    /// The server has `payload` for conflict `id`, pushed or pulled. A
+    /// settled version the server hadn't acknowledged yet, a first one or
+    /// one made again after Undo, starts the clock on its removal; the same
+    /// version again leaves it; one reopened stops it.
+    func acknowledged(_ id: String, payload: Data?) throws {
+        var acknowledgements = try state.conflictAcknowledgements()
+        let conflict = try payload.map { try ExerlyJSON.decoder.decode(SyncConflict.self, from: $0) }
+        let version = conflict?.isResolved == true ? conflict?.changedAt : nil
+        guard acknowledgements[id]?.version != version else { return }
+        acknowledgements[id] = version.map { ConflictAcknowledgement(version: $0, at: now()) }
+        try state.saveConflictAcknowledgements(acknowledgements)
+    }
+
+    /// Reopened here: what the server acknowledged is no longer this conflict's state.
+    private func forgetAcknowledgement(_ id: SyncConflict.ID) throws {
+        var acknowledgements = try state.conflictAcknowledgements()
+        guard acknowledgements.removeValue(forKey: id.uuidString) != nil else { return }
+        try state.saveConflictAcknowledgements(acknowledgements)
+    }
+
     /// Settles each open field conflict whose record is now deleted on every
     /// device (`deletedEverywhere`): neither version is a live edit, and
     /// nothing is written but the resolution, which says sync settled it.
     /// Then removes conflicts settled more than `keptAfterSettling` ago
-    /// here, or twice that elsewhere, once `synced` says that version
-    /// reached the server, or at once when it never syncs; never the one
-    /// Undo would reopen. Sync calls this.
-    /// The server has `payload` for conflict `id`, pushed or pulled: a settled
-    /// version starts the clock on its removal, if it hasn't started; one
-    /// reopened stops it.
-    func acknowledged(_ id: String, payload: Data?) throws {
-        var acknowledgements = try state.conflictAcknowledgements()
-        let settled = try payload.map { try ExerlyJSON.decoder.decode(SyncConflict.self, from: $0).isResolved } ?? false
-        guard settled != (acknowledgements[id] != nil) else { return }
-        acknowledgements[id] = settled ? now() : nil
-        try state.saveConflictAcknowledgements(acknowledgements)
-    }
-
+    /// here, or twice that elsewhere, counted from when the server took that
+    /// version, once `synced` says it's still the one there, or at once when
+    /// it never syncs; never the one Undo would reopen. Sync calls this.
     func tidy(deletedEverywhere: (String, String) -> Bool, synced: (SyncConflict) -> Bool) throws {
         let at = now()
         let acknowledgements = try state.conflictAcknowledgements()
@@ -431,7 +441,8 @@ public final class SyncConflictStore {
             let kept = Self.keptAfterSettling * (resolution.device.id == device.id ? 1 : 2)
             // From when the server took it: settled offline, it isn't removed as soon as it's sent.
             let tooLarge = conflict.tooLarge == true
-            guard let since = tooLarge ? max(resolution.at, conflict.changedAt) : acknowledgements[conflict.id.uuidString],
+            let acknowledged = acknowledgements[conflict.id.uuidString].flatMap { $0.version == conflict.changedAt ? $0.at : nil }
+            guard let since = tooLarge ? max(resolution.at, conflict.changedAt) : acknowledged,
                   at.timeIntervalSince(since) > kept else { return false }
             return tooLarge || synced(conflict)
         }

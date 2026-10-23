@@ -2518,3 +2518,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   and place in the feed). After an upgrade nothing pointed at that version, so it was never
   fetched. The push now leaves an existing record as it is and only adds one when there is
   none.
+- The acknowledgement time followed whether a conflict was settled, not which settlement:
+  resolved and synced, then undone and resolved again offline, the new resolution inherited
+  the first one's time and was removed as soon as it synced a month later. An
+  acknowledgement now records the settled version the server took (its `changedAt`) with
+  the time (`ConflictAcknowledgement`, under a new key), a different settled version starts
+  the clock again, pruning counts only an acknowledgement of the version this device
+  holds, and Undo here forgets it in the same transaction.

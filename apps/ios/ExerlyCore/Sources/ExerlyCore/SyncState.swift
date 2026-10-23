@@ -53,8 +53,8 @@ public protocol SyncStateStore: AnyObject {
     func syncDeviceID() throws -> UUID
     /// When this device first knew the server had each settled conflict, by
     /// conflict ID: the clock its removal waits on.
-    func conflictAcknowledgements() throws -> [String: Date]
-    func saveConflictAcknowledgements(_ acknowledgements: [String: Date]) throws
+    func conflictAcknowledgements() throws -> [String: ConflictAcknowledgement]
+    func saveConflictAcknowledgements(_ acknowledgements: [String: ConflictAcknowledgement]) throws
     /// Every document written since sync last found it matching its base,
     /// recorded with the write itself, or nil until `trustChanges(token:)`
     /// was called with this `token`: then sync compares every document.
@@ -100,7 +100,13 @@ let changesTokenKey = "sync.changes.token"
 private let cursorKey = "sync.cursor"
 private let rejectedKey = "sync.rejected"
 private let deviceKey = "sync.device"
-private let acknowledgementsKey = "sync.conflicts.acknowledged"
+private let acknowledgementsKey = "sync.conflicts.acknowledged.v2"
+
+/// The settled version of a conflict the server took, by its `changedAt`, and when this device learned it.
+public struct ConflictAcknowledgement: Codable, Hashable, Sendable {
+    public var version: Date
+    public var at: Date
+}
 let syncConflictKind = "sync_conflict"
 
 extension SyncStateStore where Self: TrainingPersistence & DocumentPersistence {
@@ -111,11 +117,11 @@ extension SyncStateStore where Self: TrainingPersistence & DocumentPersistence {
         }
     }
 
-    public func conflictAcknowledgements() throws -> [String: Date] {
-        try loadValue(forKey: acknowledgementsKey).map { try ExerlyJSON.decoder.decode([String: Date].self, from: $0) } ?? [:]
+    public func conflictAcknowledgements() throws -> [String: ConflictAcknowledgement] {
+        try loadValue(forKey: acknowledgementsKey).map { try ExerlyJSON.decoder.decode([String: ConflictAcknowledgement].self, from: $0) } ?? [:]
     }
 
-    public func saveConflictAcknowledgements(_ acknowledgements: [String: Date]) throws {
+    public func saveConflictAcknowledgements(_ acknowledgements: [String: ConflictAcknowledgement]) throws {
         try saveValue(acknowledgements.isEmpty ? nil : ExerlyJSON.canonical(acknowledgements), forKey: acknowledgementsKey)
     }
 
