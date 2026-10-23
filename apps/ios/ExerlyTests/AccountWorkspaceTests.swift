@@ -128,6 +128,22 @@ final class AccountWorkspaceTests: XCTestCase {
         } catch let read as Read {
             XCTAssertFalse(read.onMain, "Read off the main thread")
         }
+    /// Review round 3, compatibility: data a newer Exerly saved opens nowhere
+    /// here, and the screens say it's safe and to update, offering nothing destructive.
+    func testDataFromANewerVersionSaysItsSafeAndToUpdate() async throws {
+        let directory = root!
+        let newer = AppAccountWorkspace(open: { _ in
+            throw SQLiteTrainingPersistence.PersistenceError.newerSchema(found: 7, supported: 6)
+        }, deleteTraining: { try TrainingWorkspace.deleteStorage(accountID: $0, root: directory) },
+            purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await newer.configure(auth.accountAPI)
+        XCTAssertNil(newer.training)
+        XCTAssertEqual(newer.openingError,
+                       "Your data is safe on this device. A newer version of Exerly saved it, so update Exerly to open it.")
+        let broken = AppAccountWorkspace(open: { _ in throw CocoaError(.fileReadCorruptFile) },
+                                         deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await broken.configure(auth.accountAPI)
+        XCTAssertEqual(broken.openingError, "Your saved data is still on this device. Keep Exerly installed and try again.")
     }
 
     func testSignOutQuiescesSyncAndKeepsTrainingForTheSameAccount() async throws {

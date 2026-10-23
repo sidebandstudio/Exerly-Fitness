@@ -17,7 +17,7 @@ struct TargetsHostView: View {
                 ContentUnavailableView {
                     Label("Targets could not open", systemImage: "externaldrive.badge.exclamationmark")
                 } description: {
-                    Text("Your saved data is still on this device. Keep Exerly installed and try again.")
+                    Text(account.openingError ?? "")
                 } actions: {
                     Button("Try again") { Task { await account.configure(auth.accountAPI, retrying: true) } }
                         .buttonStyle(.borderedProminent).tint(Color.exActionFill)

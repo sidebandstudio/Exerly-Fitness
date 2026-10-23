@@ -2487,3 +2487,8 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   couldn't. `SyncEngine.syncEncodingVersion` joins the build number in the token that
   triggers comparing every document; dev builds keep their build number, so bump it
   whenever a payload's encoding changes.
+- An older build opening data a newer one migrated fails closed (`newerSchema`), which
+  stays: it never downgrades the file. Every screen now shows the reason from the account
+  workspace instead of a fixed sentence, and for this case it reads "Your data is safe on
+  this device. A newer version of Exerly saved it, so update Exerly to open it." Nothing
+  destructive is offered; Try again stays.

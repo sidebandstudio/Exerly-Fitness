@@ -77,7 +77,12 @@ final class AppAccountWorkspace: ObservableObject {
         } catch {
             guard generation == request else { return }
             failedAccountID = account.accountID
-            openingError = "Your saved training could not open. Keep Exerly installed and try again."
+            if case SQLiteTrainingPersistence.PersistenceError.newerSchema = error {
+                // Never downgraded, never offered for deletion: only a newer app opens it.
+                openingError = "Your data is safe on this device. A newer version of Exerly saved it, so update Exerly to open it."
+            } else {
+                openingError = "Your saved data is still on this device. Keep Exerly installed and try again."
+            }
         }
     }
 
