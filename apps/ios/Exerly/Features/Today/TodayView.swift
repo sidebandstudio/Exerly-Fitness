@@ -568,7 +568,7 @@ struct TodayView: View {
     /// back exactly what it logged.
     private func repeatDay(_ day: MealRepeat) {
         if let copies = present(dayRepeated) {
-            remove(copies, announcing: "Removed \(dayName(day.source))'s food")
+            guard remove(copies, announcing: "Removed \(dayName(day.source))'s food") else { return }
             withAnimation(.snappy) { dayRepeated = nil; dayRepeat = nil }
             return
         }
@@ -580,18 +580,24 @@ struct TodayView: View {
         }
     }
 
-    /// Deletes `copies` that are still as logged, and the confirmation that offered to.
-    private func remove(_ copies: [FoodEntry], announcing message: String) {
+    /// Deletes `copies` that are still as logged, all together, and the
+    /// confirmation that offered to. False when that fails: nothing was
+    /// deleted, and the tap that logged them still owns them, to try again.
+    private func remove(_ copies: [FoodEntry], announcing message: String) -> Bool {
         do {
             // An entry edited since is left alone (TodayUndo).
-            for id in TodayUndo.removable(copies, in: store.entries) { try store.deleteEntry(id) }
+            try TodayUndo.remove(copies, from: store)
             UISelectionFeedbackGenerator().selectionChanged()
             withAnimation(.snappy) {
                 if case .remove(let logged) = toast?.undo, Set(logged.map(\.id)) == Set(copies.map(\.id)) { toast = nil }
             }
             UIAccessibility.post(notification: .announcement, argument: message)
             Task { await workspace.synchronize() }
-        } catch { show("Could not remove those foods. They are still logged.", failed: true) }
+            return true
+        } catch {
+            show("Undo didn't finish. Those foods are still logged. Try again.", failed: true)
+            return false
+        }
     }
 
     /// "Yesterday's breakfast", "Sunday's lunch".
@@ -624,7 +630,7 @@ struct TodayView: View {
     /// logs nothing.
     private func repeatMeal(_ repeated: MealRepeat) {
         if let copies = present(mealRepeated) {
-            remove(copies, announcing: "Removed \(mealTitle(repeated).lowercased())")
+            guard remove(copies, announcing: "Removed \(mealTitle(repeated).lowercased())") else { return }
             withAnimation(.snappy) { mealRepeated = nil }
             return
         }
@@ -770,7 +776,7 @@ struct TodayView: View {
         case .remove(let entries):
             // The same removal as a chip's second tap: an entry changed since,
             // here or on another device, is left alone.
-            remove(entries, announcing: "Undone")
+            guard remove(entries, announcing: "Undone") else { return }
             let ids = Set(entries.map(\.id))
             withAnimation(.snappy) {
                 if self.toast == toast { self.toast = nil }

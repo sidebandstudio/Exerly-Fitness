@@ -161,6 +161,12 @@ public final class NutritionStore {
         return (deleted, { publish.forEach { $0() } })
     }
 
+    /// Deletes these entries, those still logged, together, or none of them
+    /// if saving fails.
+    public func deleteEntries(_ ids: [UUID]) throws {
+        try persistence.performAtomically { persistence.afterCommit(try writeDeletes(ids).publish) }
+    }
+
     public func deleteEntry(_ id: UUID) throws {
         guard entries.contains(where: { $0.id == id }) else { throw StoreError.notFound }
         let publish = try prepareWrite(kind: Self.entryKind, id: id.uuidString, payload: nil)

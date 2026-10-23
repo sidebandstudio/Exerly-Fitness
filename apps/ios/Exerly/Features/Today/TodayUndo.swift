@@ -10,4 +10,10 @@ enum TodayUndo {
         let now = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         return logged.filter { now[$0.id] == $0 }.map(\.id)
     }
+
+    /// Takes back those of `logged` still as logged: all of them, or, if
+    /// saving fails, none, so the same Undo can be tried again.
+    @MainActor static func remove(_ logged: [FoodEntry], from store: NutritionStore) throws {
+        try store.deleteEntries(removable(logged, in: store.entries))
+    }
 }

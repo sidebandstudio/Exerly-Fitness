@@ -72,6 +72,22 @@ enum Foods {
 
     /// PARITY N25: an omega-3 total and its parts are separate fields. A day's
     /// total adds only the totals foods report, never the parts again.
+    /// Several entries are deleted together: a commit that fails deletes
+    /// none of them, on disk or in memory, and the retry deletes them all.
+    @Test func entriesDeletedTogetherAreDeletedTogetherOrNotAtAll() throws {
+        let disk = CommitFailingPersistence()
+        let nutrition = try NutritionStore(persistence: disk, now: { Fixture.instant() })
+        let oats = try nutrition.log(Foods.oats, grams: 60, on: monday, meal: "Breakfast")
+        let milk = try nutrition.log(Foods.milk, grams: 244, on: monday, meal: "Breakfast")
+        disk.failNextCommit = true
+        #expect(throws: CommitFailingPersistence.CommitFailed.self) { try nutrition.deleteEntries([oats.id, milk.id]) }
+        #expect(nutrition.entries.count == 2)
+        #expect(try NutritionStore(persistence: disk).entries.count == 2)
+        try nutrition.deleteEntries([oats.id, milk.id])
+        #expect(nutrition.entries.isEmpty)
+        #expect(try NutritionStore(persistence: disk).entries.isEmpty)
+    }
+
     @Test func omega3TotalsAndTheirPartsAddUpSeparately() throws {
         let nutrition = try store()
         let salmon = Food(name: "Synthetic salmon", per100g: NutrientAmounts([
