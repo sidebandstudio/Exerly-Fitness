@@ -142,4 +142,28 @@ final class TrainingDevice {
         try phone.conflicts.resolve(conflict.id, four)
         #expect(phone.session(session.id)?.name == "Push day" && phone.session(session.id)?.exercises[0].sets[1].primary.reps == 4)
     }
+
+    // MARK: 4. A clean deletion of the workout in progress
+
+    /// The phone syncs its workout in progress and changes nothing since;
+    /// the tablet discards it. The phone keeps it and its rest timer, and
+    /// the deletion waits for review.
+    @Test func aCleanWorkoutInProgressStaysWhenDeletedElsewhere() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try TrainingDevice("iPhone", server: server, clock: clock), tablet = try TrainingDevice("iPad", server: server, clock: clock)
+        try phone.store.startSession(name: "Pull", bodyweight: nil)
+        try phone.store.addExercise("deadlift")
+        try phone.store.startRest(seconds: 90)
+        let id = try #require(phone.store.activeSession?.id)
+        try await phone.sync.sync()
+        try await tablet.sync.sync()
+        try tablet.store.discardSession()
+        try await tablet.sync.sync()
+        try await phone.sync.sync()
+        #expect(phone.store.activeSession?.id == id && phone.store.restTimer != nil)
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        #expect(conflict.documentID == id.uuidString && conflict.remote == nil && conflict.local != nil)
+        try phone.conflicts.resolve(conflict.id, .remote)
+        #expect(phone.store.activeSession == nil, "Keeping it deleted ends it here too")
+    }
 }

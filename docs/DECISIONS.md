@@ -2290,3 +2290,9 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   until the person sees it and changes it, deletes it, or decides on a conflict holding it,
   and checks after every later step that some device shows it or some conflict holds it; it
   found the two Undo cases.
+- The workout in progress was protected only when it had changed since the last sync, so a
+  phone that had synced and logged nothing since lost its session and rest timer when the
+  tablet discarded it. The check now comes before the unchanged-record fast path.
+  The randomized check also counts a choice as the person's decision about what that device
+  showed for the clashing fields, since the review shows it beside both versions, and follows
+  a Keep both copy back to its conflict; run eight times over, its 120 seeds pass.

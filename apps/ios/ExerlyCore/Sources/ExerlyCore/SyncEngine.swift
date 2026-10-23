@@ -180,7 +180,11 @@ public final class SyncEngine {
         let clean = base.map { local == $0.payload } ?? (local == nil)
         var write: Data??
         var found: (fields: [String], local: Data?, remote: Data?)?
-        if clean {
+        if clean, remote == nil, let local, host.keepsWhenDeletedElsewhere(kind: change.kind, id: change.id) {
+            // Deleted there while in progress here, even unchanged since:
+            // it stays, and the deletion waits for review.
+            found = ([], local, nil)
+        } else if clean {
             write = .some(remote)
         } else if !host.reviewsConflicts(kind: change.kind) {
             // The kind's own rule decides; a change beats a deletion.

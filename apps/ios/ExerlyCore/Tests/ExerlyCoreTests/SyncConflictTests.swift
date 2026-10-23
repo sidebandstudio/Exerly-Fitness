@@ -340,8 +340,9 @@ final class AccountDevice {
     /// Two devices edit amounts and meals, delete, log, sync, resolve and
     /// undo at random. Every edit a sync carries stays an obligation until
     /// the person sees it and changes it, deletes it, or decides on a
-    /// conflict holding it: after every later step some device shows it or
-    /// some conflict holds it. Once both have synced they agree.
+    /// conflict holding it or about what the device shows: after every
+    /// later step some device shows it or some conflict holds it. Once both
+    /// have synced they agree.
     @Test func twoDevicesNeverLoseAnEditSilently() async throws {
         for seed in 0..<120 { try await run(seed: UInt64(seed)) }
     }
@@ -378,6 +379,8 @@ final class AccountDevice {
         var obligations = Set<Obligation>()
         /// Seen and replaced: the same value typed again elsewhere was already seen.
         var settled = Set<Obligation>()
+        /// Keep both's second record, by the record its conflict is about.
+        var copies: [String: String] = [:]
         func name(_ device: AccountDevice) -> String { device === devices[0] ? "phone" : "tablet" }
 
         func fields(_ value: JSONValue?, _ keys: [String]) -> [String: JSONValue]? {
@@ -393,7 +396,7 @@ final class AccountDevice {
                 let shown = try current(device, duty.id)
                 if duty.value == nil ? shown == nil : fields(shown, duty.keys) == duty.value { return true }
                 let held = device.conflicts.conflicts.contains { conflict in
-                    guard conflict.documentID == duty.id else { return false }
+                    guard conflict.documentID == duty.id || conflict.documentID == copies[duty.id] else { return false }
                     if duty.value == nil { return conflict.isDeletion }
                     return fields(conflict.local, duty.keys) == duty.value || fields(conflict.remote, duty.keys) == duty.value
                 }
@@ -470,7 +473,13 @@ final class AccountDevice {
                 }
                 obligations.subtract(decided)
                 settled.formUnion(decided)
+                // The review shows what this device has now beside both versions.
+                let groups = conflict.isDeletion ? [Self.amount, ["meal"]]
+                    : [Self.amount, ["meal"]].filter { conflict.fields.contains($0[0]) }
+                try seen(device, conflict.documentID, groups)
+                let before = Set(device.nutrition.entries.map(\.id.uuidString))
                 try device.conflicts.resolve(conflict.id, choice)
+                for id in Set(device.nutrition.entries.map(\.id.uuidString)).subtracting(before) { copies[id] = conflict.documentID }
                 steps.append("\(name(device)) resolves \(conflict.documentID.prefix(4)) \(choice)")
             default:
                 if device.conflicts.undoable != nil { steps.append("\(name(device)) undoes") }
