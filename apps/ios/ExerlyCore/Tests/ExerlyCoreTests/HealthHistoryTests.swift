@@ -167,6 +167,28 @@ import Testing
         #expect(HealthImport.fingerprint(activity: server) == print, "the server's copy")
     }
 
+    /// Review 3, item 2: an adoption's generation stands against a stale
+    /// owner's change made later, whichever side it arrives from.
+    @Test func aLaterGenerationWinsOverALaterTime() throws {
+        let imports = try HealthImportStore(persistence: InMemoryTrainingPersistence())
+        let soup = food(5, 12, tracker, kcal: 250)
+        var adopted = record(soup)
+        adopted.adopt(by: "phone-b", at: at(2, 0))
+        #expect(adopted.generation == 1 && adopted.owner == "phone-b")
+        var stale = record(soup)
+        stale.state = .removed
+        stale.updatedAt = at(3, 0)
+        for (local, remote) in [(stale, adopted), (adopted, stale)] {
+            let merged = try imports.merge(kind: "health_import", base: nil, local: ExerlyJSON.canonical(local),
+                                           remote: ExerlyJSON.canonical(remote))
+            #expect(try ExerlyJSON.decoder.decode(HealthImport.self, from: merged) == adopted)
+        }
+        var object = try #require(try JSONSerialization.jsonObject(with: ExerlyJSON.canonical(record(soup))) as? [String: Any])
+        object["generation"] = nil
+        let older = try ExerlyJSON.decoder.decode(HealthImport.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(older.generation == 0, "a record from before generations is the first")
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))

@@ -27,6 +27,9 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
     public var target: String
     /// The install that imported it, or adopted it.
     public var owner: String
+    /// How many times it changed hands: each adoption counts one more, and a
+    /// version from an earlier one never overwrites a later (`merge`).
+    public var generation: Int
     /// The app that saved it to Health, by bundle identifier.
     public var source: String
     public var sourceName: String
@@ -40,12 +43,13 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
     public var state: State
     public var updatedAt: Date
 
-    public init(id: UUID, kind: Kind, target: String, owner: String, source: String, sourceName: String, start: Date, end: Date,
-                day: LocalDate, fingerprint: String, state: State = .imported, updatedAt: Date) {
+    public init(id: UUID, kind: Kind, target: String, owner: String, generation: Int = 0, source: String, sourceName: String,
+                start: Date, end: Date, day: LocalDate, fingerprint: String, state: State = .imported, updatedAt: Date) {
         self.id = id
         self.kind = kind
         self.target = target
         self.owner = owner
+        self.generation = generation
         self.source = source
         self.sourceName = sourceName
         self.start = start
@@ -54,6 +58,35 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
         self.fingerprint = fingerprint
         self.state = state
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, target, owner, generation, source, sourceName, start, end, day, fingerprint, state, updatedAt
+    }
+
+    /// Records written before generations count as the first.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        target = try container.decode(String.self, forKey: .target)
+        owner = try container.decode(String.self, forKey: .owner)
+        generation = try container.decodeIfPresent(Int.self, forKey: .generation) ?? 0
+        source = try container.decode(String.self, forKey: .source)
+        sourceName = try container.decode(String.self, forKey: .sourceName)
+        start = try container.decode(Date.self, forKey: .start)
+        end = try container.decode(Date.self, forKey: .end)
+        day = try container.decode(LocalDate.self, forKey: .day)
+        fingerprint = try container.decode(String.self, forKey: .fingerprint)
+        state = try container.decode(State.self, forKey: .state)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    /// Makes this install the owner, one generation on.
+    public mutating func adopt(by install: String, at now: Date) {
+        owner = install
+        generation += 1
+        updatedAt = now
     }
 
     /// A food entry's fingerprint: any change to it, its amount, portion,
@@ -136,11 +169,15 @@ extension HealthImportStore: DocumentHost {
         guard record.id.uuidString == id.uppercased() else { throw DocumentError(message: "The Health import's ID doesn't match") }
     }
 
-    /// The later change stands: an adoption, or a record taken out or put back.
+    /// The later generation stands whatever its time, so a phone that was
+    /// offline while another adopted a record can't take it back, or out,
+    /// with what it knew before. Within a generation only its owner changes
+    /// the record, and the later change stands.
     public func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
         let decoder = ExerlyJSON.decoder
-        return try decoder.decode(HealthImport.self, from: remote).updatedAt > decoder.decode(HealthImport.self, from: local).updatedAt
-            ? remote : local
+        let mine = try decoder.decode(HealthImport.self, from: local), theirs = try decoder.decode(HealthImport.self, from: remote)
+        if mine.generation != theirs.generation { return theirs.generation > mine.generation ? remote : local }
+        return theirs.updatedAt > mine.updatedAt ? remote : local
     }
 
     public func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
@@ -222,14 +259,15 @@ extension HealthImportStore {
             }
             for id in changes.adopting {
                 if var record = records[id], record.state == .imported {
-                    record.owner = install
-                    record.updatedAt = now
+                    record.adopt(by: install, at: now)
                     changed.append(record)
                 }
             }
+            // Kept as this install's, one generation on, as an adoption is:
+            // the entry was already in Exerly, imported somewhere.
             for reading in changes.claiming where records[reading.id] == nil {
                 guard let entry = current[reading.id] else { continue }
-                changed.append(HealthImport(food: reading, entry: entry, owner: install, now: now))
+                changed.append(HealthImport(food: reading, entry: entry, owner: install, generation: 1, now: now))
             }
             guard !entries.isEmpty || !changed.isEmpty else { return }
             let publishEntries = try nutrition.prepareWrites(kind: NutritionStore.entryKind, entries)
@@ -259,16 +297,17 @@ extension HealthImport {
     }
 
     /// The record of a food just imported.
-    init(food reading: HealthFoodReading, entry: FoodEntry, owner: String, now: Date) {
-        self.init(id: reading.id, kind: .food, target: entry.id.uuidString, owner: owner, source: reading.source,
+    init(food reading: HealthFoodReading, entry: FoodEntry, owner: String, generation: Int = 0, now: Date) {
+        self.init(id: reading.id, kind: .food, target: entry.id.uuidString, owner: owner, generation: generation, source: reading.source,
                   sourceName: reading.sourceName, start: reading.at, end: reading.at, day: entry.date,
                   fingerprint: HealthImport.fingerprint(entry), updatedAt: now)
     }
 
     /// The record of a workout just imported as the activity `clientID`.
-    public init(workout reading: HealthWorkoutReading, clientID: String, fingerprint: String, owner: String, timeZone: TimeZone,
-                now: Date = Date()) {
-        self.init(id: reading.id, kind: .workout, target: clientID, owner: owner, source: reading.source, sourceName: reading.sourceName,
+    public init(workout reading: HealthWorkoutReading, clientID: String, fingerprint: String, owner: String, generation: Int = 0,
+                timeZone: TimeZone, now: Date = Date()) {
+        self.init(id: reading.id, kind: .workout, target: clientID, owner: owner, generation: generation, source: reading.source,
+                  sourceName: reading.sourceName,
                   start: reading.start, end: reading.end, day: LocalDate(reading.start, in: reading.timeZone ?? timeZone),
                   fingerprint: fingerprint, updatedAt: now)
     }

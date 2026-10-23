@@ -795,6 +795,18 @@ test('a Health import record syncs with its owner and state, and needs them', as
     { token, headers: key() }
   );
   assert.equal(ownerless.status, 400);
+  const adopted = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: { ...record, owner: 'phone-b', generation: 1 }, base_revision: 1 },
+    { token, headers: key() }
+  );
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.body));
+  const negative = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...record, id: otherID, generation: -1 }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(negative.status, 400);
 });
 
 test('legacy food logs and saved foods stay in their own feeds', async () => {

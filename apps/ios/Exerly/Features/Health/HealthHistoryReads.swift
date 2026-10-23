@@ -261,6 +261,7 @@ final class HealthHistoryModel: ObservableObject {
     private let isCurrent: @MainActor (String) -> Bool
     private let enableWeights: @MainActor (Set<UUID>) async -> Bool
     private let activities: @MainActor () -> HealthActivityStore
+    private let pull: @MainActor (TrainingWorkspace) async -> Bool
     /// Bumped as a switch turns off, so a read already under way saves nothing.
     private var generation: [HealthHistoryKind: Int] = [:]
 
@@ -271,7 +272,8 @@ final class HealthHistoryModel: ObservableObject {
          workspace: @escaping @MainActor () -> TrainingWorkspace? = { HealthSync.shared.workspace },
          isCurrent: @escaping @MainActor (String) -> Bool = { SyncEngine.shared.isConfigured(for: $0) },
          enableWeights: @escaping @MainActor (Set<UUID>) async -> Bool = { await HealthSync.shared.enableReadingWeights(reviewed: $0) },
-         activities: @escaping @MainActor () -> HealthActivityStore = { SyncEngine.shared }) {
+         activities: @escaping @MainActor () -> HealthActivityStore = { SyncEngine.shared },
+         pull: @escaping @MainActor (TrainingWorkspace) async -> Bool = HealthHistoryModel.pullOwnership) {
         self.accountID = accountID
         self.install = install ?? HealthImportInstall.id(defaults)
         key = "healthHistory.\(namespace).\(accountID)"
@@ -282,6 +284,7 @@ final class HealthHistoryModel: ObservableObject {
         self.isCurrent = isCurrent
         self.enableWeights = enableWeights
         self.activities = activities
+        self.pull = pull
         let saved = accountID.isEmpty ? [] : defaults.stringArray(forKey: key + ".enabled") ?? []
         enabled = Set(saved.compactMap(HealthHistoryKind.init(rawValue:)))
     }
@@ -342,7 +345,13 @@ final class HealthHistoryModel: ObservableObject {
         }
         guard generation[pending.kind, default: 0] == pending.generation else { return }
         do {
-            guard try await apply(pending, in: workspace) else { return }
+            switch try await apply(pending, in: workspace) {
+            case .applied: break
+            case .stale: return
+            case .held(let note):
+                messages[pending.kind] = note
+                return
+            }
         } catch {
             messages[pending.kind] = "Nothing was imported. Try again."
             return
@@ -371,8 +380,11 @@ final class HealthHistoryModel: ObservableObject {
             let started = generation[kind, default: 0]
             do {
                 guard let pending = try await read(kind, full: false, in: workspace, generation: started) else { continue }
-                guard try await apply(pending, in: workspace) else { continue }
-                messages[kind] = pending.note
+                switch try await apply(pending, in: workspace) {
+                case .applied: messages[kind] = pending.note
+                case .held(let note): messages[kind] = note
+                case .stale: continue
+                }
             } catch {
                 guard owns(workspace) else { return }
                 messages[kind] = "Health couldn't be read. Exerly will try again."
@@ -498,12 +510,46 @@ final class HealthHistoryModel: ObservableObject {
         }
     }
 
+    enum Outcome {
+        case applied
+        /// The account changed, or the switch was turned off first.
+        case stale
+        /// Nothing was changed, for the reason given; Health's changes are read again next time.
+        case held(String)
+    }
+
+    /// The account's latest records from the server, so a phone that adopted
+    /// imports since is their owner here too. False when it couldn't be reached.
+    static func pullOwnership(_ workspace: TrainingWorkspace) async -> Bool {
+        guard let sync = workspace.sync else { return true }
+        do {
+            try await sync.sync()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Whether the plan takes anything out of Exerly or sets anything aside.
+    private static func isDestructive(_ pending: Pending) -> Bool {
+        let foods = pending.foods.map { !$0.removing.isEmpty || !$0.displacing.isEmpty || (pending.removeMissing && !$0.missing.isEmpty) }
+        let workouts = pending.workouts.map {
+            !$0.removing.isEmpty || !$0.displacing.isEmpty || (pending.removeMissing && !$0.missing.isEmpty)
+        }
+        return foods == true || workouts == true
+    }
+
     /// Makes a plan's changes in the account it was read for, checking each
-    /// again as it's saved. False when the account changed or the switch
-    /// was turned off first.
-    private func apply(_ pending: Pending, in workspace: TrainingWorkspace) async throws -> Bool {
+    /// again as it's saved. Anything it takes out waits for the account's
+    /// latest records: only their owner at the latest generation does it.
+    private func apply(_ pending: Pending, in workspace: TrainingWorkspace) async throws -> Outcome {
         let kind = pending.kind
-        guard current(kind, workspace, since: pending.generation) else { return false }
+        guard current(kind, workspace, since: pending.generation) else { return .stale }
+        if Self.isDestructive(pending) {
+            let reached = await pull(workspace)
+            guard current(kind, workspace, since: pending.generation) else { return .stale }
+            guard reached else { return .held("Exerly will update this once it can reach your account.") }
+        }
         let imports = workspace.healthImports
         if let plan = pending.foods {
             var changes = HealthFoodChanges()
@@ -516,7 +562,7 @@ final class HealthHistoryModel: ObservableObject {
             }
             if !plan.restoring.isEmpty {
                 changes.restoring = try await client.foods(Set(plan.restoring))
-                guard current(kind, workspace, since: pending.generation) else { return false }
+                guard current(kind, workspace, since: pending.generation) else { return .stale }
             }
             try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
         }
@@ -524,7 +570,7 @@ final class HealthHistoryModel: ObservableObject {
             try applyWorkouts(plan, pending, imports: imports)
         }
         defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
-        return true
+        return .applied
     }
 
     /// Workouts' changes, each checked again just before it's made: only this
@@ -568,13 +614,13 @@ final class HealthHistoryModel: ObservableObject {
         if pending.adopt {
             for id in plan.adoptable {
                 if var record = imports.records[id] {
-                    record.owner = install
-                    record.updatedAt = Date()
+                    record.adopt(by: install, at: Date())
                     changed.append(record)
                 } else if let workout = pending.workoutReadings[id] {
                     let clientID = HealthHistory.activityID(for: id, accountID: accountID)
                     guard let print = store.activityFingerprint(clientID) else { continue }
-                    changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: print, owner: install, timeZone: timeZone))
+                    changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: print, owner: install, generation: 1,
+                                                timeZone: timeZone))
                 }
             }
         }

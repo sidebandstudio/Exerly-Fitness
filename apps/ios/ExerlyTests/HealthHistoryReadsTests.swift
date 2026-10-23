@@ -11,6 +11,7 @@ final class HealthHistoryReadsTests: XCTestCase {
     private var client: FakeHistoryClient!
     private var defaults: UserDefaults!
     private var workspace: TrainingWorkspace!
+    private var root: URL!
     private var activities: FakeActivityStore!
     private var current = "history"
     private var install = "this-phone"
@@ -20,7 +21,8 @@ final class HealthHistoryReadsTests: XCTestCase {
     override func setUp() async throws {
         client = FakeHistoryClient()
         defaults = UserDefaults(suiteName: "history-\(UUID().uuidString)")
-        workspace = try TrainingWorkspace(accountID: "history", root: temporaryRoot())
+        root = temporaryRoot()
+        workspace = try TrainingWorkspace(accountID: "history", root: root)
         activities = FakeActivityStore(today: LocalDate(Date(), in: zone))
         current = "history"
         install = "this-phone"
@@ -34,10 +36,12 @@ final class HealthHistoryReadsTests: XCTestCase {
         return root
     }
 
-    private func model(_ account: String = "history", defaults: UserDefaults? = nil) -> HealthHistoryModel {
-        HealthHistoryModel(accountID: account, timeZone: zone, client: client, namespace: "test", defaults: defaults ?? self.defaults,
-                           install: install,
-                           workspace: { self.workspace }, isCurrent: { $0 == self.current },
+    /// `phone` and `client` stand for another phone's data and Health.
+    private func model(_ account: String = "history", defaults: UserDefaults? = nil, on phone: TrainingWorkspace? = nil,
+                       client: FakeHistoryClient? = nil) -> HealthHistoryModel {
+        HealthHistoryModel(accountID: account, timeZone: zone, client: client ?? self.client, namespace: "test",
+                           defaults: defaults ?? self.defaults, install: install,
+                           workspace: { phone ?? self.workspace }, isCurrent: { $0 == self.current },
                            enableWeights: { self.reviewedWeights.append($0); return self.weightsMatch },
                            activities: { self.activities })
     }
@@ -386,6 +390,46 @@ final class HealthHistoryReadsTests: XCTestCase {
 
     // MARK: Review 3
 
+    /// its old ownership and later comes back online.
+    func testAStaleOwnerNeverRemovesWhatAnotherPhoneAdopted() async throws {
+        let server = MemoryDocumentServer()
+        let phoneA = try XCTUnwrap(workspace)
+        phoneA.resumeSync(api: AccountAPI(accountID: "history", transport: server))
+        let phoneB = try TrainingWorkspace(accountID: "history", root: temporaryRoot(), api: AccountAPI(accountID: "history", transport: server))
+        let soup = food(12, "com.example.tracker")
+        client.foods = [soup]
+        let historyA = model()
+        await historyA.begin(.foods)
+        await historyA.confirm()
+        try await phoneA.sync?.sync()
+
+        // B, with the same Health data, keeps it as its own and syncs.
+        try await phoneB.sync?.sync()
+        XCTAssertEqual(phoneB.healthImports.records[soup.id]?.owner, "this-phone")
+        let healthB = FakeHistoryClient()
+        healthB.foods = [soup]
+        install = "phone-b"
+        let historyB = model(defaults: UserDefaults(suiteName: "b-\(UUID().uuidString)"), on: phoneB, client: healthB)
+        await historyB.checkEverythingAgain(.foods)
+        XCTAssertEqual(historyB.pending?.preview.adoptable, 1)
+        await historyB.confirm(adopt: true)
+        try await phoneB.sync?.sync()
+
+        // A, offline all the while, reads Health deleting it; then it's back online.
+        server.offline = true
+        client.foods = []
+        await historyA.refresh()
+        server.offline = false
+        try await phoneA.sync?.sync()
+        await historyA.refresh()
+        try await phoneA.sync?.sync()
+        try await phoneB.sync?.sync()
+        XCTAssertTrue(phoneB.nutrition.entries.contains { $0.id == soup.id }, "B's soup is still there")
+        XCTAssertEqual(phoneB.healthImports.records[soup.id]?.owner, "phone-b")
+        XCTAssertEqual(phoneB.healthImports.records[soup.id]?.state, .imported)
+        XCTAssertEqual(phoneA.healthImports.records[soup.id]?.owner, "phone-b")
+    }
+
     /// doesn't keep a lower-ranked app's food out of its day.
     func testADisplacedFoodDeletedInHealthNeverComesBackNorHoldsItsDay() async throws {
         let diary = food(8, "com.example.diary"), watch = food(9, "com.apple.health.watch"), other = food(10, "com.example.zapp")
@@ -427,6 +471,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(activities.states[HealthHistory.activityID(for: run.id, accountID: "history")], true, "The removed run stays out")
         XCTAssertTrue(activities.restored.isEmpty)
     }
+
 }
 
 /// Health as a list of samples. An anchored read returns what was added
@@ -487,6 +532,9 @@ final class FakeActivityStore: HealthActivityStore {
     var deleted: [String] = []
     var restored: [String] = []
     var read: [ClosedRange<LocalDate>] = []
+    /// Fails the next write after making it, as a crash right after it would.
+    var crashAfterNextWrite = false
+    struct Crash: Error {}
 
     init(today: LocalDate) { days = today.adding(days: -3650)...today }
 
@@ -504,15 +552,76 @@ final class FakeActivityStore: HealthActivityStore {
     func saveImportedActivity(_ request: ActivityRequest, clientID: String) throws {
         saved.append((request, clientID))
         states[clientID] = false
+        try crashIfAsked()
     }
 
     func deleteImportedActivity(clientID: String) throws {
         deleted.append(clientID)
         states[clientID] = true
+        try crashIfAsked()
     }
 
     func restoreImportedActivity(clientID: String) throws {
         restored.append(clientID)
         states[clientID] = false
+        try crashIfAsked()
+    }
+
+    private func crashIfAsked() throws {
+        guard crashAfterNextWrite else { return }
+        crashAfterNextWrite = false
+        throw Crash()
+    }
+}
+
+/// The API's document endpoints in memory, shared by phones: revisions,
+/// conflicts that carry the current version, and the change feed.
+final class MemoryDocumentServer: SessionTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var documents: [String: (revision: Int, payload: Any?)] = [:]
+    private var feed: [[String: Any]] = []
+    private var isOffline = false
+
+    var offline: Bool {
+        get { lock.withLock { isOffline } }
+        set { lock.withLock { isOffline = newValue } }
+    }
+
+    func send(_ method: String, path: String, body: Data?, headers: [String: String],
+              as accountID: String) async throws -> (status: Int, data: Data) {
+        try lock.withLock {
+            if isOffline { throw URLError(.notConnectedToInternet) }
+            let url = try XCTUnwrap(URLComponents(string: "https://exerly.test" + path))
+            let query = { (name: String) in Int(url.queryItems?.first { $0.name == name }?.value ?? "") ?? 0 }
+            if method == "GET", url.path == "/v1/changes" {
+                let changes = feed.filter { ($0["sequence"] as? Int ?? 0) > query("after") }
+                return (200, try JSONSerialization.data(withJSONObject: ["changes": changes, "cursor": feed.count, "has_more": false]))
+            }
+            let parts = url.path.split(separator: "/").map(String.init)
+            guard parts.count == 4, parts[1] == "documents" else { return (404, Data(#"{"message":"Not found"}"#.utf8)) }
+            let kind = parts[2], id = UUID(uuidString: parts[3])?.uuidString ?? parts[3]
+            let current = documents["\(kind)/\(id)"]
+            func document(_ revision: Int, _ payload: Any?, sequence: Int? = nil) -> [String: Any] {
+                var document: [String: Any] = ["kind": kind, "id": id, "revision": revision, "deleted": payload == nil]
+                document["payload"] = payload
+                document["sequence"] = sequence
+                return document
+            }
+            let base: Int, payload: Any?
+            if method == "PUT" {
+                let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any])
+                (base, payload) = (json["base_revision"] as? Int ?? 0, json["payload"])
+            } else {
+                guard current?.payload != nil else { return (404, Data(#"{"message":"Document not found"}"#.utf8)) }
+                (base, payload) = (query("base_revision"), nil)
+            }
+            guard base == (current?.revision ?? 0) else {
+                let details: [String: Any] = current.map { ["document": document($0.revision, $0.payload)] } ?? [:]
+                return (409, try JSONSerialization.data(withJSONObject: ["message": "Changed elsewhere", "details": details]))
+            }
+            documents["\(kind)/\(id)"] = (base + 1, payload)
+            feed.append(document(base + 1, payload, sequence: feed.count + 1))
+            return (200, try JSONSerialization.data(withJSONObject: ["revision": base + 1]))
+        }
     }
 }
