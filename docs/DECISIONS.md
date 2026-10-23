@@ -2268,3 +2268,13 @@ under `barcode_library.undone.v1`.
 Today shows "Needs a look" with a count while any conflict is open; the review lists each with
 both versions side by side and one-tap choices. Resolved conflicts are kept, not pruned, for
 now: they are rare and small.
+
+## 2026-10-22: Conflict review, round 1: versions stay as found, choices touch only what clashed
+
+An independent review of the 2026-10-21 slice found five ways an edit could still vanish.
+
+- A later clash about a record with an open conflict replaced that conflict's versions, so an
+  unresolved 60 g against 90 g became 120 g against 150 g and the 60 g was gone without a
+  decision. A conflict's base, versions and fields now never change once found; a later clash
+  is a conflict of its own. Merging two copies of one conflict takes only the later resolution
+  (`changedAt`), so a resolution or an Undo on one device can't take another's versions away.

@@ -18,7 +18,9 @@ public struct SyncDevice: Codable, Hashable, Sendable {
 /// side deleted what the other changed. Both versions are kept, and the
 /// conflict syncs like a document, until the person picks one. Meanwhile
 /// the record shows the version of the device that found the conflict, or
-/// stays deleted. See docs/DECISIONS.md, 2026-10-21.
+/// stays deleted. The versions never change once found: a later clash
+/// about the same record is a conflict of its own, and only the resolution
+/// changes, on any device. See docs/DECISIONS.md, 2026-10-21 and 2026-10-22.
 public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
     public enum Choice: String, Codable, Sendable, Hashable {
         /// The version of the device that found the conflict.
@@ -52,8 +54,8 @@ public struct SyncConflict: Codable, Hashable, Sendable, Identifiable {
     /// The fields both changed differently; empty when one side deleted.
     public var fields: [String]
     public var resolution: Resolution?
-    /// The latest change to this conflict, on any device: when two devices
-    /// changed it at once, the later change stands.
+    /// When the resolution last changed, on any device: when two devices
+    /// resolved it, or one undid it, at once, the later change stands.
     public var changedAt: Date
 
     public init(id: UUID = UUID(), kind: String, documentID: String, device: SyncDevice, detectedAt: Date, remoteAt: Date? = nil,
@@ -159,26 +161,16 @@ public final class SyncConflictStore {
 
     // MARK: Finding
 
-    /// The conflict sync found about a document: a new one, or the open one
-    /// brought up to date with both sides' latest versions.
+    /// A new conflict sync found about a document. One already open about it
+    /// stays as it is, so its versions still wait for a decision.
     func found(kind: String, id: String, base: Data?, local: Data?, remote: Data?, fields: [String],
                remoteAt: Date?) throws -> SyncConflict {
         let json = { (data: Data?) in try data.map(JSONValue.init(data:)) }
         let at = now()
-        var conflict = open(kind: kind, id: id) ?? SyncConflict(
-            id: UUID(), kind: kind, documentID: id, device: device, detectedAt: at, base: nil, local: nil, remote: nil,
-            fields: [], changedAt: at
-        )
-        let earlier = conflict.isDeletion ? [] : conflict.fields
-        conflict.device = device
-        conflict.detectedAt = at
-        conflict.changedAt = at
-        conflict.remoteAt = remoteAt
-        conflict.base = try json(base)
-        conflict.local = try json(local)
-        conflict.remote = try json(remote)
-        conflict.fields = conflict.isDeletion ? [] : Array(Set(earlier + fields)).sorted()
-        return conflict
+        let local = try json(local), remote = try json(remote)
+        return SyncConflict(kind: kind, documentID: id, device: device, detectedAt: at, remoteAt: remoteAt, base: try json(base),
+                            local: local, remote: remote, fields: local == nil || remote == nil ? [] : Array(Set(fields)).sorted(),
+                            changedAt: at)
     }
 
     /// Persists a conflict inside the caller's transaction; publish after it commits.
@@ -286,12 +278,17 @@ extension SyncConflictStore: DocumentHost {
         guard conflict.id.uuidString == id else { throw DocumentError(message: "The ID doesn't match") }
     }
 
-    /// Changed on two devices at once, the later change stands: a
-    /// resolution, an Undo, or a newer version found.
+    /// Resolved or undone on two devices at once, the later change stands.
+    /// The versions are the ones found, the same on every device; only the
+    /// resolution is taken from the other side.
     public func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
         let decoder = ExerlyJSON.decoder
-        let mine = try decoder.decode(SyncConflict.self, from: local), theirs = try decoder.decode(SyncConflict.self, from: remote)
-        return theirs.changedAt > mine.changedAt ? remote : local
+        var merged = try decoder.decode(SyncConflict.self, from: local)
+        let theirs = try decoder.decode(SyncConflict.self, from: remote)
+        guard theirs.changedAt > merged.changedAt else { return local }
+        merged.resolution = theirs.resolution
+        merged.changedAt = theirs.changedAt
+        return try ExerlyJSON.canonical(merged)
     }
 
     public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
