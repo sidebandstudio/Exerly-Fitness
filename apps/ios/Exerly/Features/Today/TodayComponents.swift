@@ -379,6 +379,8 @@ struct TodayToast: View {
     var undoIdentifier = "today.undo"
     /// A row in a card, flat and edge to edge, rather than floating over the screen.
     var inline = false
+    /// What the button says: Undo, or Try again on an Undo that failed.
+    var action = "Undo"
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// "Repeated yesterday's breakfast" of "Repeated yesterday's breakfast: 2 foods, 170 kcal".
@@ -403,7 +405,7 @@ struct TodayToast: View {
             if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
             if let undo {
                 // Padded as Add food's toast pads it, clear of the rounded edge.
-                Button("Undo", action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).fixedSize()
+                Button(action, action: undo).font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).fixedSize()
                     .padding(.horizontal, ExSpacing.item).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     .accessibilityIdentifier(undoIdentifier)
             }

@@ -279,11 +279,12 @@ struct TodayView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        // Only a failure, which has nothing to undo, still shows over the bottom;
-        // water's shows in its card.
+        // Only a failure still shows over the bottom, with Try again when it's
+        // an Undo that didn't finish; water's shows in its card.
         .overlay(alignment: .bottom) {
             if let toast, toast.failed, selection == nil, !toast.isWater {
-                TodayToast(message: toast.message, failed: true, undo: nil)
+                TodayToast(message: toast.message, failed: true, undo: toast.undo.map { _ in { undo(toast) } },
+                           undoIdentifier: "today.undo.retry", action: "Try again")
                     .padding(.bottom, ExSpacing.small)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -582,22 +583,22 @@ struct TodayView: View {
 
     /// Deletes `copies` that are still as logged, all together, and the
     /// confirmation that offered to. False when that fails: nothing was
-    /// deleted, and the tap that logged them still owns them, to try again.
+    /// deleted, the tap that logged them still owns them, and the failure
+    /// offers this Undo again as Try again, whichever repeat logged them.
     private func remove(_ copies: [FoodEntry], announcing message: String) -> Bool {
-        do {
-            // An entry edited since is left alone (TodayUndo).
-            try TodayUndo.remove(copies, from: store)
-            UISelectionFeedbackGenerator().selectionChanged()
-            withAnimation(.snappy) {
-                if case .remove(let logged) = toast?.undo, Set(logged.map(\.id)) == Set(copies.map(\.id)) { toast = nil }
-            }
-            UIAccessibility.post(notification: .announcement, argument: message)
-            Task { await workspace.synchronize() }
-            return true
-        } catch {
-            show("Undo didn't finish. Those foods are still logged. Try again.", failed: true)
+        // An entry edited since is left alone (TodayUndo).
+        if let failure = TodayUndo.attempt(copies, from: store) {
+            withAnimation(.snappy) { toast = failure }
+            UIAccessibility.post(notification: .announcement, argument: failure.message)
             return false
         }
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(.snappy) {
+            if case .remove(let logged) = toast?.undo, Set(logged.map(\.id)) == Set(copies.map(\.id)) { toast = nil }
+        }
+        UIAccessibility.post(notification: .announcement, argument: message)
+        Task { await workspace.synchronize() }
+        return true
     }
 
     /// "Yesterday's breakfast", "Sunday's lunch".
@@ -762,11 +763,13 @@ struct TodayView: View {
 
     /// Takes `toast` away once there's been long enough to reach Undo,
     /// longer still with VoiceOver. In the bar a confirmation covers nothing,
-    /// so it stays long enough to change one's mind; water's, in its card,
-    /// and a failure stay less long.
+    /// so it stays long enough to change one's mind, and so does a failure
+    /// with Try again, each try afresh; water's, in its card, and a failure
+    /// with nothing to retry stay less long.
     private func expire(_ toast: Toast) async {
         let voiceOver = UIAccessibility.isVoiceOverRunning
-        let seconds = toast.isWater || toast.failed ? (voiceOver ? 12 : 6) : voiceOver ? 25 : 15
+        let brief = toast.isWater || (toast.failed && toast.undo == nil)
+        let seconds = brief ? (voiceOver ? 12 : 6) : voiceOver ? 25 : 15
         try? await Task.sleep(for: .seconds(seconds))
         withAnimation(.snappy) { if self.toast == toast { self.toast = nil } }
     }

@@ -39,6 +39,56 @@ final class TodayUndoTests: XCTestCase {
     }
 }
 
+/// A repeat logged from a meal card or onto an empty past day has no chip
+/// to tap again: its only Undo is the confirmation's, so a failure keeps it
+/// as Try again, which retries that same Undo until it finishes.
+@MainActor
+final class TodayUndoRetryTests: XCTestCase {
+    private let today = LocalDate("2026-10-22")!
+    private let oats = Food(id: UUID().uuidString, name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]),
+                            servings: [], createdAt: Date(timeIntervalSince1970: 1_792_000_000))
+    private let milk = Food(id: UUID().uuidString, name: "Synthetic milk", per100g: NutrientAmounts([.energy: 60]),
+                            servings: [], createdAt: Date(timeIntervalSince1970: 1_792_000_000))
+
+    private func store(_ disk: DeleteFailingStore, loggedOn day: LocalDate) throws -> NutritionStore {
+        let store = try NutritionStore(persistence: disk)
+        try store.log(oats, grams: 60, on: day, meal: "Breakfast")
+        try store.log(milk, grams: 244, on: day, meal: "Breakfast")
+        return store
+    }
+
+    /// Fails twice, each a new failure still offering the Undo, then finishes.
+    private func retryUntilDone(_ copied: [FoodEntry], in store: NutritionStore, disk: DeleteFailingStore) throws {
+        disk.failingDelete = 1
+        let failure = try XCTUnwrap(TodayUndo.attempt(copied, from: store), "Saving failed")
+        XCTAssertTrue(failure.failed)
+        XCTAssertEqual(failure.undo, .remove(copied), "The failure keeps the Undo for Try again")
+        XCTAssertTrue(Set(copied.map(\.id)).isSubset(of: store.entries.map(\.id)), "Nothing was taken back")
+        disk.failingDelete = 1
+        let again = try XCTUnwrap(TodayUndo.attempt(copied, from: store))
+        XCTAssertNotEqual(again.id, failure.id, "A new failure, so its time starts over")
+        XCTAssertEqual(again.undo, .remove(copied))
+        XCTAssertNil(TodayUndo.attempt(copied, from: store), "Try again finishes once saving works")
+        XCTAssertTrue(Set(copied.map(\.id)).isDisjoint(with: store.entries.map(\.id)))
+        XCTAssertEqual(store.entries.count, 2, "The day it was repeated from stays")
+    }
+
+    func testAMealCardRepeatsUndoIsRetriedUntilItFinishes() throws {
+        let disk = DeleteFailingStore()
+        let store = try store(disk, loggedOn: today.adding(days: -1))
+        let breakfast = try XCTUnwrap(store.repeatable("Breakfast", for: today))
+        try retryUntilDone(try store.apply(breakfast, to: today), in: store, disk: disk)
+    }
+
+    func testAnEmptyPastDaysRepeatsUndoIsRetriedUntilItFinishes() throws {
+        let disk = DeleteFailingStore()
+        let past = today.adding(days: -3)
+        let store = try store(disk, loggedOn: past.adding(days: -1))
+        let day = try XCTUnwrap(store.repeatable(nil, for: past))
+        try retryUntilDone(try store.apply(day, to: past), in: store, disk: disk)
+    }
+}
+
 /// Storage whose `failingDelete`th document deletion fails, as a full disk
 /// would, rolling back the transaction it is in.
 @MainActor
