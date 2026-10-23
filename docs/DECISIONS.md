@@ -2525,3 +2525,11 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   the time (`ConflictAcknowledgement`, under a new key), a different settled version starts
   the clock again, pruning counts only an acknowledgement of the version this device
   holds, and Undo here forgets it in the same transaction.
+- The randomized check treats a value set back to the version a tombstone kept as no
+  change, which doesn't prove that an old value put back on purpose survives. Two fixed
+  tests now do: 40 g changed to 60 g everywhere and set back to 40 g stays beside another
+  device's meal change, waits in a conflict beside another device's 90 g, and stays once
+  the conflict is decided for it; and 40 g put back on one device while the other deletes
+  the entry (agreed at 60 g) waits in the deletion's conflict and comes back as 40 g on
+  both. Both passed as written: merges compare with the last version both devices agreed
+  on, never with older ones.

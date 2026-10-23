@@ -47,6 +47,79 @@ final class TrainingDevice {
         return grams
     }
 
+    // MARK: Restoring an old value
+
+    /// Review round 4, item 5: an amount changed from 40 g to 60 g on every
+    /// device, then set back to 40 g on the phone, is a change like any other,
+    /// though it equals an older version: with only the tablet's meal changed
+    /// meanwhile both stay; with the tablet's amount changed too, the 40 g waits
+    /// in a conflict; and a conflict decided for the older version keeps it.
+    @Test func anOldValuePutBackSurvivesSync() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        func set(_ device: AccountDevice, grams: Double? = nil, meal: String? = nil) throws {
+            var entry = try #require(device.entry(logged.id))
+            if let grams { entry.grams = grams }
+            if let meal { entry.meal = meal }
+            try device.nutrition.saveEntry(entry)
+        }
+        try set(phone, grams: 60)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        #expect(tablet.entry(logged.id)?.grams == 60)
+
+        // Put back, with another field changed elsewhere.
+        try set(phone, grams: 40)
+        try set(tablet, meal: "Lunch")
+        for device in [phone, tablet, phone] { try await device.sync.sync() }
+        for device in [phone, tablet] {
+            #expect(device.entry(logged.id)?.grams == 40 && device.entry(logged.id)?.meal == "Lunch",
+                    "\(device.conflicts.device.name) shows \(device.entry(logged.id)?.grams ?? 0) g")
+        }
+        #expect(phone.conflicts.unresolved.isEmpty)
+
+        // Put back again, with the amount changed elsewhere too.
+        try set(phone, grams: 60)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try set(phone, grams: 40)
+        try set(tablet, grams: 90)
+        for device in [tablet, phone, tablet] { try await device.sync.sync() }
+        let clash = try #require(phone.conflicts.unresolved.first, "40 g waits for review")
+        #expect([grams(clash.local), grams(clash.remote)].compactMap { $0 }.sorted() == [40, 90])
+
+        // Decided for the older value, it stays on both devices.
+        let forty = try #require(clash.choices.first { grams(clash.version($0)) == 40 })
+        try phone.conflicts.resolve(clash.id, forty)
+        for device in [phone, tablet, phone, tablet] { try await device.sync.sync() }
+        for device in [phone, tablet] { #expect(device.entry(logged.id)?.grams == 40) }
+    }
+
+    /// The same across a deletion: agreed at 60 g, deleted on the phone
+    /// while the tablet put back the earlier 40 g. The deletion waits in a
+    /// conflict holding 40 g, and bringing it back keeps 40 g on both, so a
+    /// value that matches no tombstone's version is never taken for no change.
+    @Test func anOldValuePutBackWhileDeletedElsewhereSurvivesBringingItBack() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        var sixty = try #require(phone.entry(logged.id))
+        sixty.grams = 60
+        try phone.nutrition.saveEntry(sixty)
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try phone.nutrition.deleteEntry(logged.id)
+        var forty = try #require(tablet.entry(logged.id))
+        forty.grams = 40
+        try tablet.nutrition.saveEntry(forty)
+        for device in [phone, tablet, phone] { try await device.sync.sync() }
+        let deletion = try #require(phone.conflicts.unresolved.first { $0.isDeletion }, "The 40 g waits for review")
+        // The tablet found it, deleted there and changed here: its version is the 40 g.
+        #expect([grams(deletion.local), grams(deletion.remote)].compactMap { $0 } == [40])
+        let back = try #require(deletion.choices.first { grams(deletion.version($0)) == 40 })
+        try phone.conflicts.resolve(deletion.id, back)
+        for device in [phone, tablet, phone, tablet] { try await device.sync.sync() }
+        for device in [phone, tablet] { #expect(device.entry(logged.id)?.grams == 40, "\(device.conflicts.device.name)") }
+    }
+
     // MARK: Tidying
 
     /// Review round 2: a settled conflict is removed everywhere 30 days
