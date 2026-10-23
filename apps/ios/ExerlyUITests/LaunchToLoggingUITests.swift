@@ -1,80 +1,115 @@
 import XCTest
 
 /// Cold launch to logging (PARITY B03), for docs/TAP_BUDGETS.md. A signed-in
-/// person with a week of food relaunches the app 20 times from terminated.
-/// The gate is end to end: from the process starting (the kernel's clock,
-/// so loading the app's code counts) to the commit of the first frame that
-/// lays out Today and Log again, once the main run loop is free again (the
+/// person with a week of food relaunches the app from terminated, each launch
+/// paired with one of a signed-in account with no food, in the same run.
+/// Timed end to end: from the process starting (the kernel's clock, so
+/// loading the app's code counts) to the commit of the first frame that lays
+/// out Today's logging controls, once the main run loop is free again (the
 /// render server shows it at the next refresh), which the app reports to the
-/// fixture with where it laid Log again out (LaunchTiming); that place must
-/// hold Log again's chip in the accessibility tree, and the chip, one tap
-/// from a logged food, must be hittable by the time the launch returns.
-/// Reported beside it: XCTApplicationLaunchMetric's launch to
-/// a responsive first frame (in the log), the app's own interval from its
-/// start (XCTOSSignpostMetric), and the wall clock from asking for the launch
-/// to the chip being hittable, which includes XCTest's own setup. Simulator
-/// figures, not a phone's: the local full suite runs it, CI's shared runners
-/// don't.
+/// fixture with where it laid them out (LaunchTiming). For the week, that
+/// place must hold Log again's chip in the accessibility tree, and the chip,
+/// one tap from a logged food, must be hittable as the launch returns.
+/// Simulator figures, not a phone's: the local full suite runs it, CI's
+/// shared runners don't.
 @MainActor
 final class LaunchToLoggingUITests: ExerlyUITestCase {
-    /// The p50 ceiling, in seconds, from the process starting to Today's first
-    /// frame with Log again, on an iPhone 17 Pro Max simulator (Debug, M1
-    /// Max). Measured back to back on 2026-10-20: 2.67 s before Today opened
-    /// from the cache and drew its top first, 2.41 to 2.46 s after. PARITY
-    /// B03's target is under 1 s on a phone.
-    static let ceiling = 2.55
+    /// The gate is the median, over the pairs, of the week's launch over the
+    /// empty account's. Both launch the same app on the same machine
+    /// seconds apart, and the order alternates, so the machine's load and its
+    /// drift cancel out, and what's left is what a week of food adds to a
+    /// launch. A slowdown of every launch alike shows in the seconds reported
+    /// beside it, not in the ratio. Four runs of 20 pairs on 2026-10-23, on
+    /// an iPhone 17 Pro Max simulator (Debug, M1 Max, load averages 20 to
+    /// 52), had medians of 1.016 to 1.025; the ceiling leaves a week of food
+    /// about 0.24 s more than that (docs/TAP_BUDGETS.md). PARITY B03's target
+    /// is under 1 s on a phone.
+    static let ratioCeiling = 1.10
+    static let pairs = 20
+
+    private struct Launch {
+        let process: Double, app: Double, wallClock: Double
+        let placed: Bool, hittable: Bool
+    }
 
     func testColdLaunchToLoggingStaysUnderItsCeiling() async throws {
         try await control([:])
         let person = try await createAccount(prefix: "launch", units: "imperial")
         try await seedWeek(token: person.token)
+        let nobody = try await createAccount(prefix: "launch-empty", units: "imperial")
+        // Two installs' worth of state side by side: each launch(…) has its own store.
+        let empty = launch(resetSession: true)
+        signIn(empty, email: nobody.email)
+        settleAfterSignIn(empty)
+        let shortcut = empty.buttons["today.weighIn"]
+        XCTAssertTrue(shortcut.waitForExistence(timeout: 20))
+        empty.terminate()
         let app = launch(resetSession: true)
         signIn(app, email: person.email)
         settleAfterSignIn(app)
         let chip = logAgain(app)
         XCTAssertTrue(chip.waitForExistence(timeout: 20))
         // Later launches keep the session and the saved food, as on a phone.
-        app.launchArguments.removeAll { $0 == "--ui-testing" }
+        for each in [app, empty] { each.launchArguments.removeAll { $0 == "--ui-testing" } }
 
         _ = try await request("DELETE", "/__test/launch-timings")
-        RecordedSignpostMetric.values = []
-        var wallClock: [Double] = []
-        var hittableAtLaunch = 0
-        var seen: [CGRect?] = []
-        let clock = ContinuousClock()
-        let options = XCTMeasureOptions()
-        options.iterationCount = 20
-        let launchMetric = XCTApplicationLaunchMetric(waitUntilResponsive: true)
-        let ready = RecordedSignpostMetric(subsystem: "com.exerly.fitness", category: "launch", name: "LaunchToLogging")
-        measure(metrics: [launchMetric, ready], options: options) {
-            let started = clock.now
-            app.launch()
-            seen.append(chip.exists ? chip.frame : nil)
-            if chip.exists && chip.isHittable { hittableAtLaunch += 1 }
-            XCTAssertTrue(chip.waitForExistence(timeout: 10) && chip.isHittable, "Signed in, on Today, with Log again")
-            wallClock.append(Self.seconds(started.duration(to: clock.now)))
+        var week: [Launch] = [], baseline: [Launch] = []
+        for pair in 0..<Self.pairs {
+            for weekFirst in pair.isMultiple(of: 2) ? [true, false] : [false, true] {
+                if weekFirst {
+                    week += try await timedLaunch(app, chip: chip, control: "logAgain", after: empty)
+                } else {
+                    baseline += try await timedLaunch(empty, chip: shortcut, control: "shortcuts", after: app)
+                }
+            }
         }
 
-        let timings = try await request("GET", "/__test/launch-timings")["timings"] as? [[String: Any]] ?? []
-        let endToEnd = Self.percentiles(timings.compactMap { $0["processToReadyMs"] as? Double }.map { $0 / 1000 })
-        let report = "Cold launch over \(timings.count) launches. Process start to Today's first frame with Log again: \(endToEnd.text). "
-            + "App start to that frame (signpost): \(Self.percentiles(RecordedSignpostMetric.values).text). "
-            + "Asking for the launch to Log again hittable, with XCTest's setup: \(Self.percentiles(wallClock).text). "
-            + "Log again hittable as the launch returned: \(hittableAtLaunch) of \(wallClock.count)."
+        let ratios = Self.percentiles(zip(week, baseline).map { $0.process / $1.process })
+        let report = "Cold launch, \(week.count) week-of-food launches paired with \(baseline.count) of an empty account. "
+            + "Week over empty, the gate: median \(String(format: "%.3f", ratios.p50)), p95 \(String(format: "%.3f", ratios.p95)). "
+            + "Process start to Today's first frame with Log again: \(Self.percentiles(week.map(\.process)).text); "
+            + "the empty account's, with its shortcuts: \(Self.percentiles(baseline.map(\.process)).text). "
+            + "App start to that frame: \(Self.percentiles(week.map(\.app)).text). "
+            + "Asking for the launch to Log again hittable, with XCTest's setup: \(Self.percentiles(week.map(\.wallClock)).text). "
+            + "Log again hittable as the launch returned: \(week.filter(\.hittable).count) of \(week.count)."
         print(report)
         let attachment = XCTAttachment(string: report)
         attachment.name = "launch-to-logging"
         attachment.lifetime = .keepAlways
         add(attachment)
-        // Each report placed Log again where the accessibility tree had it as that launch returned.
-        let placed = zip(timings, seen).filter { timing, seen in
-            guard let seen, let place = (timing["frames"] as? [String: [Double]])?["logAgain"], place.count == 4 else { return false }
-            return seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
-        }.count
-        XCTAssertGreaterThanOrEqual(timings.count, 20, "One report per launch")
-        XCTAssertEqual(placed, timings.count, "Each launch reported Log again where it was on screen: \(report)")
-        XCTAssertEqual(hittableAtLaunch, wallClock.count, "Log again is ready when the launch returns: \(report)")
-        XCTAssertLessThan(endToEnd.p50, Self.ceiling, report)
+        XCTAssertEqual(week.count, Self.pairs, "One report per week launch: \(report)")
+        XCTAssertEqual(baseline.count, Self.pairs, "One report per empty launch: \(report)")
+        XCTAssertEqual(week.filter(\.placed).count, week.count, "Each launch reported Log again where it was on screen: \(report)")
+        XCTAssertEqual(week.filter(\.hittable).count, week.count, "Log again is ready when the launch returns: \(report)")
+        XCTAssertLessThan(ratios.p50, Self.ratioCeiling, report)
+    }
+
+    /// One cold launch of `app`, after `other` is stopped: what it reported,
+    /// or nothing if no report came.
+    private func timedLaunch(_ app: XCUIApplication, chip: XCUIElement, control: String,
+                             after other: XCUIApplication) async throws -> [Launch] {
+        let before = try await request("GET", "/__test/launch-timings")["timings"] as? [[String: Any]] ?? []
+        other.terminate()
+        app.terminate()
+        let clock = ContinuousClock(), started = clock.now
+        app.launch()
+        let seen = chip.exists ? chip.frame : nil
+        let hittable = seen != nil && chip.isHittable
+        XCTAssertTrue(chip.waitForExistence(timeout: 20) && chip.isHittable, "Signed in, on Today, with \(control)")
+        let wallClock = Self.seconds(started.duration(to: clock.now))
+        // A report is posted as its frame shows; give it a moment.
+        var timings = before
+        for _ in 0..<20 where timings.count <= before.count {
+            try await Task.sleep(for: .milliseconds(250))
+            timings = try await request("GET", "/__test/launch-timings")["timings"] as? [[String: Any]] ?? []
+        }
+        guard timings.count == before.count + 1, let timing = timings.last,
+              let process = timing["processToReadyMs"] as? Double, let start = timing["initToReadyMs"] as? Double else { return [] }
+        var placed = false
+        if let seen, let place = (timing["frames"] as? [String: [Double]])?[control], place.count == 4 {
+            placed = seen.minY >= place[1] - 1 && seen.maxY <= place[1] + place[3] + 1
+        }
+        return [Launch(process: process / 1000, app: start / 1000, wallClock: wallClock, placed: placed, hittable: hittable)]
     }
 
     /// Three years of meals, workouts and weigh-ins on the device: launch
@@ -216,25 +251,5 @@ final class LaunchToLoggingUITests: ExerlyUITestCase {
         guard !sorted.isEmpty else { return (.infinity, .infinity, "none") }
         let p50 = sorted[sorted.count / 2], p95 = sorted[Int((Double(sorted.count) * 0.95).rounded(.up)) - 1]
         return (p50, p95, String(format: "p50 %.3f s, p95 %.3f s", p50, p95))
-    }
-}
-
-/// The durations a metric reports, in seconds.
-private func recordedSeconds(_ measurements: [XCTPerformanceMeasurement]) -> [Double] {
-    measurements.filter { $0.identifier.hasSuffix(".duration") }.compactMap { measurement in
-        (measurement.value.unit as? UnitDuration).map { Measurement(value: measurement.value.value, unit: $0).converted(to: .seconds).value }
-    }
-}
-
-/// The app's signpost interval, keeping what it reports to `measure` so the
-/// report can include it. `measure` copies the metric for every run.
-private final class RecordedSignpostMetric: XCTOSSignpostMetric {
-    nonisolated(unsafe) static var values: [Double] = []
-
-    override func reportMeasurements(from startTime: XCTPerformanceMeasurementTimestamp,
-                                     to endTime: XCTPerformanceMeasurementTimestamp) throws -> [XCTPerformanceMeasurement] {
-        let measurements = try super.reportMeasurements(from: startTime, to: endTime)
-        Self.values += recordedSeconds(measurements)
-        return measurements
     }
 }
