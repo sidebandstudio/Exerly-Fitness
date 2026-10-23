@@ -189,6 +189,18 @@ import Testing
         #expect(older.generation == 0, "a record from before generations is the first")
     }
 
+    /// Review 3, item 3: work written down outlasts reopening the store, and
+    /// is cleared in the same transaction that saves its records.
+    @Test func workWrittenDownIsClearedWithItsRecords() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let imports = try HealthImportStore(persistence: persistence)
+        try imports.recordWork(Data("planned".utf8))
+        #expect(try HealthImportStore(persistence: persistence).pendingWork() == Data("planned".utf8))
+        let soup = food(5, 12, tracker, kcal: 250)
+        try imports.save([record(soup)], finishingWork: true)
+        #expect(try imports.pendingWork() == nil && imports.records[soup.id] != nil)
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))

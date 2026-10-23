@@ -430,6 +430,34 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(phoneA.healthImports.records[soup.id]?.owner, "phone-b")
     }
 
+    /// adding it or taking it out, leaves nothing half done once Exerly opens again.
+    func testACrashBetweenAnActivityAndItsRecordIsFinishedOnTheNextOpen() async throws {
+        let run = workout()
+        let id = HealthHistory.activityID(for: run.id, accountID: "history")
+        client.workouts = [run]
+        let history = model()
+        await history.begin(.workouts)
+        activities.crashAfterNextWrite = true
+        await history.confirm()
+        XCTAssertEqual(activities.states[id], false, "The activity was saved before the crash")
+
+        workspace = try TrainingWorkspace(accountID: "history", root: root)
+        await model().refresh()
+        let record = try XCTUnwrap(workspace.healthImports.records[run.id], "Its record is saved on the next open")
+        XCTAssertEqual(record.state, .imported)
+        XCTAssertEqual(record.target, id)
+        XCTAssertEqual(record.owner, "this-phone")
+        XCTAssertEqual(activities.saved.count, 1, "Never saved twice")
+
+        client.workouts = []
+        activities.crashAfterNextWrite = true
+        await model().refresh()
+        XCTAssertEqual(activities.states[id], true, "Taken out before the crash")
+        workspace = try TrainingWorkspace(accountID: "history", root: root)
+        await model().refresh()
+        XCTAssertEqual(workspace.healthImports.records[run.id]?.state, .removed)
+    }
+
     /// doesn't keep a lower-ranked app's food out of its day.
     func testADisplacedFoodDeletedInHealthNeverComesBackNorHoldsItsDay() async throws {
         let diary = food(8, "com.example.diary"), watch = food(9, "com.apple.health.watch"), other = food(10, "com.example.zapp")

@@ -215,6 +215,40 @@ enum HealthImportInstall {
     }
 }
 
+/// Workout changes written down before they're made. The activity log and
+/// the account's records are separate stores, so each change to the log is
+/// recorded with the record it leaves, and a crash between the two is
+/// finished when Exerly next opens, instead of leaving an activity with no
+/// record, or a deleted one recorded as imported.
+struct HealthWorkoutWork: Codable {
+    struct Activity: Codable {
+        var type: String
+        var minutes: Double
+        var calories: Double?
+        var day: String
+    }
+
+    enum Step: Codable {
+        case save(Activity)
+        /// Only while the activity's fingerprint is still this one.
+        case delete(expecting: String)
+        case restore
+        case none
+    }
+
+    struct Item: Codable {
+        var step: Step
+        /// The record as the step leaves it; a save's or a restore's
+        /// fingerprint is the activity's once it's made.
+        var record: HealthImport
+    }
+
+    var items: [Item]
+    var anchor: Data?
+    /// Turns reading workouts on, as confirming a preview does.
+    var turnOn: Bool
+}
+
 /// The history switches and their preview for the open account. Kept per
 /// server and account. Everything read is bound to the account it was read
 /// for, and to the switch: turning it off, or another account opening,
@@ -316,6 +350,7 @@ final class HealthHistoryModel: ObservableObject {
         defer { if requesting == kind { requesting = nil } }
         let started = generation[kind, default: 0]
         do {
+            try recover(workspace)
             try await client.requestAccess(kind)
             guard owns(workspace), generation[kind, default: 0] == started else { return }
             guard var pending = try await read(kind, full: full, in: workspace, generation: started), requesting == kind else { return }
@@ -345,7 +380,7 @@ final class HealthHistoryModel: ObservableObject {
         }
         guard generation[pending.kind, default: 0] == pending.generation else { return }
         do {
-            switch try await apply(pending, in: workspace) {
+            switch try await apply(pending, in: workspace, turningOn: true) {
             case .applied: break
             case .stale: return
             case .held(let note):
@@ -374,6 +409,14 @@ final class HealthHistoryModel: ObservableObject {
     /// Reads what changed in Health for the switches that are on, and
     /// nothing for those that are off.
     func refresh() async {
+        if let workspace = open() {
+            do {
+                try recover(workspace)
+            } catch {
+                messages[.workouts] = "Workouts from Health couldn't be saved. Exerly will try again."
+                return
+            }
+        }
         guard client.isAvailable else { return }
         for kind in [HealthHistoryKind.foods, .workouts] where enabled.contains(kind) {
             guard let workspace = open() else { return }
@@ -542,9 +585,10 @@ final class HealthHistoryModel: ObservableObject {
     /// Makes a plan's changes in the account it was read for, checking each
     /// again as it's saved. Anything it takes out waits for the account's
     /// latest records: only their owner at the latest generation does it.
-    private func apply(_ pending: Pending, in workspace: TrainingWorkspace) async throws -> Outcome {
+    private func apply(_ pending: Pending, in workspace: TrainingWorkspace, turningOn: Bool = false) async throws -> Outcome {
         let kind = pending.kind
         guard current(kind, workspace, since: pending.generation) else { return .stale }
+        try recover(workspace)
         if Self.isDestructive(pending) {
             let reached = await pull(workspace)
             guard current(kind, workspace, since: pending.generation) else { return .stale }
@@ -565,64 +609,115 @@ final class HealthHistoryModel: ObservableObject {
                 guard current(kind, workspace, since: pending.generation) else { return .stale }
             }
             try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
+            defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
         }
         if let plan = pending.workouts {
-            try applyWorkouts(plan, pending, imports: imports)
+            try perform(workoutWork(plan, pending, imports: imports, turningOn: turningOn), imports: imports)
         }
-        defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
         return .applied
     }
 
-    /// Workouts' changes, each checked again just before it's made: only this
+    /// Workouts' changes, each checked again as it's planned: only this
     /// install's records, and only activities still as they were imported.
-    private func applyWorkouts(_ plan: HealthImportPlan<HealthWorkoutReading>, _ pending: Pending, imports: HealthImportStore) throws {
+    /// Nothing is changed yet: `perform` writes it down, then makes it.
+    private func workoutWork(_ plan: HealthImportPlan<HealthWorkoutReading>, _ pending: Pending, imports: HealthImportStore,
+                             turningOn: Bool) -> HealthWorkoutWork {
         let store = activities()
-        var changed: [HealthImport] = []
-        defer { try? imports.save(changed) }
+        let now = Date()
+        var items: [HealthWorkoutWork.Item] = []
         let removals = HealthImport.outcomes(removing: plan.removing + (pending.removeMissing ? plan.missing : []), displacing: plan.displacing)
         for (id, state) in removals {
             guard var record = imports.records[id], record.owner == install, record.allows(state) else { continue }
+            var step = HealthWorkoutWork.Step.none
             if record.state == .imported, store.activityStates([record.target])[record.target] == false {
                 // Changed since it was imported: theirs now.
                 guard store.activityFingerprint(record.target) == record.fingerprint else { continue }
-                try store.deleteImportedActivity(clientID: record.target)
+                step = .delete(expecting: record.fingerprint)
             }
             record.state = state
-            record.updatedAt = Date()
-            changed.append(record)
+            record.updatedAt = now
+            items.append(.init(step: step, record: record))
         }
         for id in plan.restoring {
             guard var record = imports.records[id], record.owner == install, record.state == .displaced else { continue }
-            try store.restoreImportedActivity(clientID: record.target)
             record.state = .imported
-            record.fingerprint = store.activityFingerprint(record.target) ?? record.fingerprint
-            record.updatedAt = Date()
-            changed.append(record)
+            record.updatedAt = now
+            items.append(.init(step: .restore, record: record))
         }
         for workout in plan.adding where imports.records[workout.id] == nil {
             let clientID = HealthHistory.activityID(for: workout.id, accountID: accountID)
-            let minutes = min(1440, max(0.1, (workout.minutes * 10).rounded() / 10))
-            try store.saveImportedActivity(ActivityRequest(type: workout.activity, duration: minutes,
-                                                           calories: workout.kilocalories.map { min(20000, max(0, $0.rounded())) },
-                                                           intensity: nil,
-                                                           entryDate: LocalDate(workout.start, in: workout.timeZone ?? timeZone).description,
-                                                           category: "health"),
-                                           clientID: clientID)
-            changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: store.activityFingerprint(clientID) ?? "",
-                                        owner: install, timeZone: timeZone))
+            let activity = HealthWorkoutWork.Activity(type: workout.activity, minutes: min(1440, max(0.1, (workout.minutes * 10).rounded() / 10)),
+                                                      calories: workout.kilocalories.map { min(20000, max(0, $0.rounded())) },
+                                                      day: LocalDate(workout.start, in: workout.timeZone ?? timeZone).description)
+            items.append(.init(step: .save(activity), record: HealthImport(workout: workout, clientID: clientID, fingerprint: "", owner: install,
+                                                                           timeZone: timeZone, now: now)))
         }
         if pending.adopt {
             for id in plan.adoptable {
                 if var record = imports.records[id] {
-                    record.adopt(by: install, at: Date())
-                    changed.append(record)
+                    record.adopt(by: install, at: now)
+                    items.append(.init(step: .none, record: record))
                 } else if let workout = pending.workoutReadings[id] {
                     let clientID = HealthHistory.activityID(for: id, accountID: accountID)
                     guard let print = store.activityFingerprint(clientID) else { continue }
-                    changed.append(HealthImport(workout: workout, clientID: clientID, fingerprint: print, owner: install, generation: 1,
-                                                timeZone: timeZone))
+                    items.append(.init(step: .none, record: HealthImport(workout: workout, clientID: clientID, fingerprint: print, owner: install,
+                                                                         generation: 1, timeZone: timeZone, now: now)))
                 }
             }
+        }
+        return HealthWorkoutWork(items: items, anchor: pending.anchor, turnOn: turningOn)
+    }
+
+    /// Writes the work down in the account's store before anything else, so
+    /// it outlasts a crash, then makes it. Health's anchor moves on only after.
+    private func perform(_ work: HealthWorkoutWork, imports: HealthImportStore) throws {
+        try imports.recordWork(ExerlyJSON.canonical(work))
+        try finish(work, imports: imports)
+    }
+
+    /// Finishes work left written down by a crash or a failure, before anything else is read or saved.
+    private func recover(_ workspace: TrainingWorkspace) throws {
+        guard let data = try workspace.healthImports.pendingWork() else { return }
+        try finish(ExerlyJSON.decoder.decode(HealthWorkoutWork.self, from: data), imports: workspace.healthImports)
+    }
+
+    /// Makes each change to the activity log that isn't made yet, so running
+    /// it again after a crash repeats nothing; then saves the records and
+    /// clears the work in one transaction, and moves Health's anchor on.
+    private func finish(_ work: HealthWorkoutWork, imports: HealthImportStore) throws {
+        let store = activities()
+        var records: [HealthImport] = []
+        for item in work.items {
+            var record = item.record
+            let deleted = store.activityStates([record.target])[record.target]
+            switch item.step {
+            case .save(let activity):
+                if deleted == nil {
+                    try store.saveImportedActivity(ActivityRequest(type: activity.type, duration: activity.minutes, calories: activity.calories,
+                                                                   intensity: nil, entryDate: activity.day, category: "health"),
+                                                   clientID: record.target)
+                }
+                guard let print = store.activityFingerprint(record.target) else { continue }
+                record.fingerprint = print
+            case .delete(let expecting):
+                // Changed since it was planned, as by a sync before a crash was finished: theirs now, its record as it was.
+                if deleted == false {
+                    guard store.activityFingerprint(record.target) == expecting else { continue }
+                    try store.deleteImportedActivity(clientID: record.target)
+                }
+            case .restore:
+                if deleted == true { try store.restoreImportedActivity(clientID: record.target) }
+                record.fingerprint = store.activityFingerprint(record.target) ?? record.fingerprint
+            case .none:
+                break
+            }
+            records.append(record)
+        }
+        try imports.save(records, finishingWork: true)
+        defaults.set(work.anchor, forKey: key + ".anchor." + HealthHistoryKind.workouts.rawValue)
+        if work.turnOn {
+            enabled.insert(.workouts)
+            saveEnabled()
         }
     }
 

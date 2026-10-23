@@ -136,13 +136,26 @@ public final class HealthImportStore {
 
     public func records(_ kind: HealthImport.Kind) -> [HealthImport] { records.values.filter { $0.kind == kind } }
 
-    /// Saves records on their own, as after an activity's change.
-    public func save(_ changed: [HealthImport]) throws {
-        guard !changed.isEmpty else { return }
+    /// Saves records on their own, as after an activity's change. With
+    /// `finishingWork`, the work written down for them (`recordWork`) is
+    /// cleared in the same transaction.
+    public func save(_ changed: [HealthImport], finishingWork: Bool = false) throws {
+        guard !changed.isEmpty || finishingWork else { return }
         try persistence.performAtomically {
+            if finishingWork { try persistence.saveValue(nil, forKey: Self.workKey) }
             persistence.afterCommit(try prepare(changed))
         }
     }
+
+    static let workKey = "health_import.work"
+
+    /// Changes that span this store and another, as an imported workout's
+    /// activity and its record, written down before either is made so a
+    /// crash between them can be finished. Kept on this device only.
+    public func recordWork(_ work: Data) throws { try persistence.saveValue(work, forKey: Self.workKey) }
+
+    /// Work written down and not yet finished, if any.
+    public func pendingWork() throws -> Data? { try persistence.loadValue(forKey: Self.workKey) }
 
     /// Persists records inside the caller's transaction; publish after it commits.
     func prepare(_ changed: [HealthImport]) throws -> () -> Void {
