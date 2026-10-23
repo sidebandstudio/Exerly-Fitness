@@ -33,6 +33,8 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     public private(set) var values: [String: Data] = [:]
     var bases: [String: SyncBase] = [:]
     var documents: [String: [String: Data]] = [:]
+    /// Documents written since sync last found them matching their base.
+    var changed: Set<DocumentRef> = []
 
     public init(sessions: [WorkoutSession] = [], customExercises: [Exercise] = []) {
         for session in sessions { self.sessions[session.id] = session }
@@ -43,9 +45,18 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     public func loadCustomExercises() throws -> [Exercise] {
         customExercises.values.sorted { $0.id < $1.id }
     }
-    public func save(_ session: WorkoutSession) throws { sessions[session.id] = session }
-    public func deleteSession(_ id: UUID) throws { sessions[id] = nil }
-    public func save(_ exercise: Exercise) throws { customExercises[exercise.id] = exercise }
+    public func save(_ session: WorkoutSession) throws {
+        sessions[session.id] = session
+        changed.insert(DocumentRef(kind: TrainingStore.sessionKind, id: session.id.uuidString))
+    }
+    public func deleteSession(_ id: UUID) throws {
+        sessions[id] = nil
+        changed.insert(DocumentRef(kind: TrainingStore.sessionKind, id: id.uuidString))
+    }
+    public func save(_ exercise: Exercise) throws {
+        customExercises[exercise.id] = exercise
+        changed.insert(DocumentRef(kind: TrainingStore.exerciseKind, id: exercise.id.rawValue))
+    }
     public func loadValue(forKey key: String) throws -> Data? { values[key] }
     public func saveValue(_ value: Data?, forKey key: String) throws { values[key] = value }
 
@@ -53,7 +64,7 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
     private var committed: [() -> Void] = []
 
     public func performAtomically(_ body: () throws -> Void) throws {
-        let snapshot = (sessions, customExercises, values, bases, documents)
+        let snapshot = (sessions, customExercises, values, bases, documents, changed)
         depth += 1
         // A rollback drops only what this transaction added; a sibling
         // saved before it keeps its actions.
@@ -61,7 +72,7 @@ public final class InMemoryTrainingPersistence: TrainingPersistence {
         do {
             try body()
         } catch {
-            (sessions, customExercises, values, bases, documents) = snapshot
+            (sessions, customExercises, values, bases, documents, changed) = snapshot
             committed.removeSubrange(added...)
             depth -= 1
             throw error
@@ -84,6 +95,12 @@ extension InMemoryTrainingPersistence: DocumentPersistence {
         (documents[kind] ?? [:]).sorted { $0.key < $1.key }.map(\.value)
     }
 
-    public func saveDocument(kind: String, id: String, payload: Data) throws { documents[kind, default: [:]][id] = payload }
-    public func deleteDocument(kind: String, id: String) throws { documents[kind]?[id] = nil }
+    public func saveDocument(kind: String, id: String, payload: Data) throws {
+        documents[kind, default: [:]][id] = payload
+        changed.insert(DocumentRef(kind: kind, id: id))
+    }
+    public func deleteDocument(kind: String, id: String) throws {
+        documents[kind]?[id] = nil
+        changed.insert(DocumentRef(kind: kind, id: id))
+    }
 }

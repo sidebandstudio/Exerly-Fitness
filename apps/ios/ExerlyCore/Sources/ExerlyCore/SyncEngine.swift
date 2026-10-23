@@ -14,8 +14,12 @@ public protocol DocumentAPI: Sendable {
 /// docs/design/003-document-sync.md.
 ///
 /// A document needs pushing when its canonical JSON differs from the base:
-/// the last version the server acknowledged. Because that is derived rather
-/// than flagged, a crash between saving and syncing can't lose a change.
+/// the last version the server acknowledged. Only documents the store
+/// recorded as written since they last matched are compared, so a launch
+/// with years of history encodes none of them; the record is kept in each
+/// write's own transaction, so a crash between saving and syncing can't
+/// lose a change. Once per app version every document is compared, as a
+/// new version may encode a document differently without writing it.
 /// Conflicts merge three ways, field by field, and are pushed again. When
 /// both devices changed one field differently, or one deleted what the
 /// other changed, the record keeps this device's version or stays deleted,
@@ -51,8 +55,12 @@ public final class SyncEngine {
     @ObservationIgnored private var running: Task<Void, Error>?
     @ObservationIgnored private(set) var isShutDown = false
     @ObservationIgnored private var bases: [String: SyncBase] = [:]
+    /// The recorded changes hold while this does: see `push`.
+    @ObservationIgnored private let changesToken: String
 
     private static let maxAttempts = 4
+    /// Raised when what counts as a change to push does.
+    private static let changesVersion = 1
     /// Kinds a server deployed before them refuses, kept here until it takes them.
     private static let newerKinds: Set<String> = [SyncConflictStore.kind, NutritionStore.linkKind]
 
@@ -60,9 +68,11 @@ public final class SyncEngine {
     /// (custom exercises) arrive before the ones that use them (sessions).
     /// Conflicts sync last; pass the account's store of them to share it
     /// with the review screen, or one is made over `state`.
+    /// `appVersion` is the app's build: a new one compares every document once.
     public init(hosts: [DocumentHost], state: SyncStateStore, api: DocumentAPI, conflicts: SyncConflictStore? = nil,
-                now: @escaping () -> Date = Date.init) {
+                appVersion: String = "", now: @escaping () -> Date = Date.init) {
         let conflicts = conflicts ?? SyncConflictStore(state: state, hosts: hosts, now: now)
+        changesToken = "\(Self.changesVersion)/\(appVersion)"
         self.conflicts = conflicts
         self.hosts = hosts + [conflicts]
         stateStore = state
@@ -234,6 +244,13 @@ public final class SyncEngine {
         var publishConflict: () -> Void = {}
         try stateStore.performAtomically {
             for write in writes { publishes.append(try host.prepareWrite(kind: write.kind, id: write.id, payload: write.payload)) }
+            // Written as the server has it, nothing to push; otherwise, merged
+            // or kept as it is here, it's pushed even if nothing was written.
+            if writes == [DocumentWrite(kind: change.kind, id: change.id, payload: remote)] {
+                try stateStore.markUnchanged(kind: change.kind, id: change.id)
+            } else {
+                try stateStore.markChanged(kind: change.kind, id: change.id)
+            }
             if isBack, writes.contains(where: { $0.id == change.id && $0.payload != nil }) {
                 try conflicts.effects?.broughtBack(kind: change.kind, id: change.id)
             }
@@ -269,36 +286,49 @@ public final class SyncEngine {
 
     // MARK: Push
 
-    /// Pushes every document that differs from its base. Returns whether anything was written.
+    /// Pushes every document that differs from its base: of those recorded
+    /// as changed, or of all of them while the record can't be trusted yet,
+    /// after which it can. Returns whether anything was written.
     private func push() async throws -> Bool {
         let order = kindOrder
-        var documents = Set<SyncBase>()
-        for base in bases.values where base.payload != nil { documents.insert(SyncBase(kind: base.kind, id: base.id, revision: 0)) }
-        for host in hosts {
-            for kind in host.documentKinds {
-                for id in host.documentIDs(kind: kind) { documents.insert(SyncBase(kind: kind, id: id, revision: 0)) }
+        let changed = try stateStore.changedDocuments(token: changesToken)
+        var documents = changed ?? []
+        if changed == nil {
+            try checkActive()
+            // Writes from here on are recorded while every document is compared.
+            try stateStore.resetChanges()
+            for base in bases.values where base.payload != nil { documents.insert(DocumentRef(kind: base.kind, id: base.id)) }
+            for host in hosts {
+                for kind in host.documentKinds {
+                    for id in host.documentIDs(kind: kind) { documents.insert(DocumentRef(kind: kind, id: id)) }
+                }
             }
         }
         let ordered = documents.sorted {
             (order.firstIndex(of: $0.kind) ?? .max, $0.id) < (order.firstIndex(of: $1.kind) ?? .max, $1.id)
         }
         var wrote = false
-        for document in ordered where host(for: document.kind) != nil {
+        for document in ordered {
             if try await pushDocument(document.kind, document.id) { wrote = true }
         }
         // Conflicts found while pushing go out in the same run.
-        for id in conflicts.documentIDs(kind: SyncConflictStore.kind) where try await pushDocument(SyncConflictStore.kind, id) {
+        let found = try stateStore.changedDocuments(token: changesToken)?.filter { $0.kind == SyncConflictStore.kind }.map(\.id)
+        for id in found ?? conflicts.documentIDs(kind: SyncConflictStore.kind) where try await pushDocument(SyncConflictStore.kind, id) {
             wrote = true
+        }
+        if changed == nil {
+            try checkActive()
+            try stateStore.trustChanges(token: changesToken)
         }
         return wrote
     }
 
     private func pushDocument(_ kind: String, _ id: String) async throws -> Bool {
         for _ in 0..<Self.maxAttempts {
-            guard let host = host(for: kind) else { return false }
+            guard let host = host(for: kind) else { return try unchanged(kind, id) }
             let current = try host.payload(kind: kind, id: id)
             var base = bases[Self.key(kind, id)] ?? SyncBase(kind: kind, id: id, revision: 0)
-            if current == base.payload || (current == nil && base.revision == 0) { return false }
+            if current == base.payload || (current == nil && base.revision == 0) { return try unchanged(kind, id) }
             // One key per content and base revision: a lost response is
             // retried with the same key, a merged version gets a new one.
             let hash = SHA256.hash(data: current ?? Data()).map { String(format: "%02x", $0) }.joined() + "@\(base.revision)"
@@ -320,7 +350,7 @@ public final class SyncEngine {
                 try checkActive()
                 try stateStore.removeSyncBase(kind: kind, id: id)
                 bases[Self.key(kind, id)] = nil
-                return false
+                return try unchanged(kind, id)
             } catch APIError.server(status: 400, _) where Self.newerKinds.contains(kind) {
                 // A server from before this kind: keep it here and try next time.
                 return false
@@ -334,6 +364,8 @@ public final class SyncEngine {
             case .applied(let revision):
                 try saveBase(SyncBase(kind: kind, id: id, revision: revision, payload: current,
                                       previous: current == nil ? base.payload ?? base.previous : nil))
+                // Changed again while it was sent, it's still to push.
+                if try host.payload(kind: kind, id: id) == current { _ = try unchanged(kind, id) }
                 return true
             case .conflict(let remote?):
                 // An unreadable server version can't be merged; leave this document.
@@ -344,6 +376,13 @@ public final class SyncEngine {
             }
         }
         throw APIError.server(status: 409, message: "\(kind) \(id) kept changing during sync. Try again.")
+    }
+
+    /// Nothing to push for this document until it's written again.
+    private func unchanged(_ kind: String, _ id: String) throws -> Bool {
+        try checkActive()
+        try stateStore.markUnchanged(kind: kind, id: id)
+        return false
     }
 
     // MARK: Bases

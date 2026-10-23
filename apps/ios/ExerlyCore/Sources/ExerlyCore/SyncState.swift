@@ -47,7 +47,43 @@ public protocol SyncStateStore: AnyObject {
     func saveSyncConflict(id: String, payload: Data?) throws
     /// This device's ID in the conflicts it finds, made once per account.
     func syncDeviceID() throws -> UUID
+    /// Every document written since sync last found it matching its base,
+    /// recorded with the write itself, or nil until `trustChanges(token:)`
+    /// was called with this `token`: then sync compares every document.
+    func changedDocuments(token: String) throws -> Set<DocumentRef>?
+    /// Forgets every change recorded, before sync compares every document.
+    func resetChanges() throws
+    /// Every document has been compared since `resetChanges`: from now on
+    /// the changes recorded are all there is to push, while `token` holds.
+    func trustChanges(token: String) throws
+    /// The document matches its base.
+    func markUnchanged(kind: String, id: String) throws
+    /// The document may differ from its base without a write here, such as
+    /// one kept deleted when the server brought it back.
+    func markChanged(kind: String, id: String) throws
 }
+
+/// A document by kind and ID.
+public struct DocumentRef: Hashable, Sendable {
+    public var kind: String
+    public var id: String
+
+    public init(kind: String, id: String) {
+        self.kind = kind
+        self.id = DocumentWrite.canonicalID(id)
+    }
+}
+
+/// Stores that don't record changes: sync compares every document, as before.
+extension SyncStateStore {
+    public func changedDocuments(token: String) throws -> Set<DocumentRef>? { nil }
+    public func resetChanges() throws {}
+    public func trustChanges(token: String) throws {}
+    public func markUnchanged(kind: String, id: String) throws {}
+    public func markChanged(kind: String, id: String) throws {}
+}
+
+let changesTokenKey = "sync.changes.token"
 
 private let cursorKey = "sync.cursor"
 private let rejectedKey = "sync.rejected"
@@ -79,6 +115,17 @@ private func encodeRejected(_ documents: [RejectedDocument]) throws -> Data? {
 }
 
 extension InMemoryTrainingPersistence: SyncStateStore {
+    public func changedDocuments(token: String) throws -> Set<DocumentRef>? {
+        try loadValue(forKey: changesTokenKey) == Data(token.utf8) ? changed : nil
+    }
+    public func resetChanges() throws {
+        changed = []
+        try saveValue(nil, forKey: changesTokenKey)
+    }
+    public func trustChanges(token: String) throws { try saveValue(Data(token.utf8), forKey: changesTokenKey) }
+    public func markUnchanged(kind: String, id: String) throws { changed.remove(DocumentRef(kind: kind, id: id)) }
+    public func markChanged(kind: String, id: String) throws { changed.insert(DocumentRef(kind: kind, id: id)) }
+
     public func syncBases() throws -> [SyncBase] { Array(bases.values) }
     public func saveSyncBase(_ base: SyncBase) throws { bases["\(base.kind)/\(base.id)"] = base }
     public func removeSyncBase(kind: String, id: String) throws { bases["\(kind)/\(id)"] = nil }
@@ -93,6 +140,29 @@ extension InMemoryTrainingPersistence: SyncStateStore {
 }
 
 extension SQLiteTrainingPersistence: SyncStateStore {
+    public func changedDocuments(token: String) throws -> Set<DocumentRef>? {
+        guard try loadValue(forKey: changesTokenKey) == Data(token.utf8) else { return nil }
+        return Set(try database.query("SELECT kind, id FROM sync_changes").compactMap { row in
+            guard case .text(let kind) = row[0], case .text(let id) = row[1] else { return nil }
+            return DocumentRef(kind: kind, id: id)
+        })
+    }
+
+    public func resetChanges() throws {
+        try performAtomically {
+            try database.execute("DELETE FROM sync_changes")
+            try saveValue(nil, forKey: changesTokenKey)
+        }
+    }
+
+    public func trustChanges(token: String) throws { try saveValue(Data(token.utf8), forKey: changesTokenKey) }
+
+    public func markUnchanged(kind: String, id: String) throws {
+        try database.execute("DELETE FROM sync_changes WHERE kind = ? AND id = ?", kind, DocumentWrite.canonicalID(id))
+    }
+
+    public func markChanged(kind: String, id: String) throws { try recordChange(kind, id) }
+
     public func syncBases() throws -> [SyncBase] {
         try database.query("SELECT kind, id, revision, payload, push_key, push_hash, previous FROM sync_bases").compactMap { row in
             guard case .text(let kind) = row[0], case .text(let id) = row[1], case .integer(let revision) = row[2] else {

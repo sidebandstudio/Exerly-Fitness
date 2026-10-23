@@ -511,3 +511,66 @@ final class Device {
         #expect(phone.training.history.sessions[0].exercises[0].sets[2].primary.load == .kg(1000))
     }
 }
+
+/// A nutrition store that counts how often sync encodes one of its documents.
+@MainActor
+final class CountingHost: DocumentHost {
+    let store: NutritionStore
+    private(set) var encoded = 0
+
+    init(_ store: NutritionStore) { self.store = store }
+
+    var documentKinds: [String] { store.documentKinds }
+    func documentIDs(kind: String) -> [String] { store.documentIDs(kind: kind) }
+    func payload(kind: String, id: String) throws -> Data? {
+        encoded += 1
+        return try store.payload(kind: kind, id: id)
+    }
+    func canonicalize(kind: String, payload: Data) throws -> Data { try store.canonicalize(kind: kind, payload: payload) }
+    func validate(kind: String, id: String, payload: Data) throws { try store.validate(kind: kind, id: id, payload: payload) }
+    func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
+        try store.merge(kind: kind, base: base, local: local, remote: remote)
+    }
+    func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
+        try store.prepareWrite(kind: kind, id: id, payload: payload)
+    }
+}
+
+/// Review round 2, item 6: a launch's sync encodes only documents written
+/// since they last matched the server, so three years of food cost nothing.
+@MainActor
+@Suite struct ChangedDocumentPushTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test(arguments: [false, true])
+    func aPushWithNothingChangedEncodesNoDocument(sqlite: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk: TrainingPersistence & DocumentPersistence & SyncStateStore = sqlite
+            ? try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite")) : InMemoryTrainingPersistence()
+        let server = FakeDocumentServer()
+        let store = try NutritionStore(persistence: disk)
+        let entries = try (0..<50).map { try store.log(Foods.oats, grams: Double(10 + $0), on: monday, meal: "Breakfast") }
+        try await SyncEngine(hosts: [CountingHost(store)], state: disk, api: server, appVersion: "1").sync()
+
+        // A relaunch: a new engine over the same store.
+        let host = CountingHost(store)
+        try await SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1").sync()
+        #expect(host.encoded == 0, "Sync encoded \(host.encoded) unchanged documents")
+
+        var edited = entries[7]
+        edited.grams = 99
+        try store.saveEntry(edited)
+        let after = CountingHost(store)
+        try await SyncEngine(hosts: [after], state: disk, api: server, appVersion: "1").sync()
+        #expect(after.encoded <= 2, "Only the edited entry is encoded")
+        #expect(server.revision(NutritionStore.entryKind, edited.id.uuidString) == 2)
+
+        // A new app version compares everything once, as it may encode differently.
+        let upgraded = CountingHost(store)
+        try await SyncEngine(hosts: [upgraded], state: disk, api: server, appVersion: "2").sync()
+        #expect(upgraded.encoded >= entries.count)
+        #expect(server.writes == entries.count + 1, "Nothing else was pushed")
+    }
+}

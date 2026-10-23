@@ -478,9 +478,10 @@ extension SyncConflictStore: DocumentHost {
         publish()
     }
 
+    /// None for a conflict too large to sync: sync leaves it here.
     public func payload(kind: String, id: String) throws -> Data? {
         guard kind == Self.kind else { return nil }
-        return try conflicts.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
+        return try conflicts.first { $0.id.uuidString == id && $0.tooLarge != true }.map(ExerlyJSON.canonical)
     }
 
     public func canonicalize(kind: String, payload: Data) throws -> Data {

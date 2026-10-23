@@ -155,8 +155,8 @@ extension DocumentHost {
 }
 
 extension TrainingStore: DocumentHost {
-    static let sessionKind = "workout_session"
-    static let exerciseKind = "custom_exercise"
+    nonisolated static let sessionKind = "workout_session"
+    nonisolated static let exerciseKind = "custom_exercise"
 
     public var documentKinds: [String] { [Self.exerciseKind, Self.sessionKind] }
 

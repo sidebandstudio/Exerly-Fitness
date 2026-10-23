@@ -15,7 +15,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         case invalidAccountID(String)
     }
 
-    public nonisolated static let currentSchemaVersion = 5
+    public nonisolated static let currentSchemaVersion = 6
 
     /// Rows that could not be decoded, as `table/id`. They stay in the file
     /// untouched so a later version can read them.
@@ -126,6 +126,13 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         );
         """,
         "ALTER TABLE sync_bases ADD COLUMN previous BLOB;",
+        """
+        CREATE TABLE sync_changes (
+            kind TEXT NOT NULL,
+            id TEXT NOT NULL,
+            PRIMARY KEY (kind, id)
+        );
+        """,
     ]
 
     private func migrate() throws { try Self.migrate(database) }
@@ -190,10 +197,18 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             """,
             session.id.uuidString, session.startedAt, session.endedAt, try encoder.encode(session), Date()
         )
+        try recordChange(TrainingStore.sessionKind, session.id.uuidString)
     }
 
     public func deleteSession(_ id: UUID) throws {
         try database.execute("DELETE FROM sessions WHERE id = ?", id.uuidString)
+        try recordChange(TrainingStore.sessionKind, id.uuidString)
+    }
+
+    /// Sync pushes only documents changed since they matched the server;
+    /// recorded in the write's own transaction, a crash can't lose one.
+    func recordChange(_ kind: String, _ id: String) throws {
+        try database.execute("INSERT OR IGNORE INTO sync_changes (kind, id) VALUES (?, ?)", kind, DocumentWrite.canonicalID(id))
     }
 
     public func save(_ exercise: Exercise) throws {
@@ -204,6 +219,7 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             """,
             exercise.id.rawValue, try encoder.encode(exercise), Date()
         )
+        try recordChange(TrainingStore.exerciseKind, exercise.id.rawValue)
     }
 
     public func loadValue(forKey key: String) throws -> Data? {
@@ -254,9 +270,11 @@ extension SQLiteTrainingPersistence: DocumentPersistence {
             "INSERT INTO documents (kind, id, payload) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET payload = excluded.payload",
             kind, id, payload
         )
+        try recordChange(kind, id)
     }
 
     public func deleteDocument(kind: String, id: String) throws {
         try database.execute("DELETE FROM documents WHERE kind = ? AND id = ?", kind, id)
+        try recordChange(kind, id)
     }
 }

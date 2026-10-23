@@ -2409,3 +2409,20 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   could still reopen it decides, and a device that's gone for good holds nothing up. The
   conflict Undo would reopen is never removed, and one too large to sync is removed only on
   its own device.
+- Every push encoded every document to compare it with its base, about 1 s on the main actor
+  on each launch with three years of history. The store now records which documents were
+  written since sync last found them matching (`sync_changes`, SQLite schema 6, in the
+  write's own transaction, so a crash can't lose one), and push compares only those, so a
+  launch with nothing new encodes none. Of the brief's two options, a stored hash still
+  needs each document encoded to check it, so it saves nothing. A push clears a document only
+  once it matches: unchanged, applied and still as it was sent (one written while its push
+  was in flight stays recorded), or a deletion the server no longer has. A change pulled
+  that leaves a document other than as the server has it (merged, or kept deleted while an
+  original is folded into its replacement) is recorded without a write. Writes that bypass
+  the persistence layer don't exist (every host saves through it); stores that don't
+  record changes compare every document, as before. Every document is still compared once
+  for each new app build (`SyncEngine(appVersion:)`, the build number), since a new version
+  can encode a document differently without writing it, and until such a full comparison has
+  finished, so an interrupted one starts again. One difference: a stored row this device
+  can't read, which sync takes for a deletion, is pushed as one only by such a full
+  comparison, not by every sync as before.

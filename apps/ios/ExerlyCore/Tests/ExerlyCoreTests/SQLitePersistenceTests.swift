@@ -78,7 +78,7 @@ import Testing
             try store.save(session)
         }
         let database = try SQLiteDatabase(url: url)
-        try database.executeScript("DROP TABLE documents; DROP TABLE sync_bases; DROP TABLE settings; PRAGMA user_version = 1;")
+        try database.executeScript("DROP TABLE sync_changes; DROP TABLE documents; DROP TABLE sync_bases; DROP TABLE settings; PRAGMA user_version = 1;")
         let upgraded = try SQLiteTrainingPersistence(url: url)
         #expect(try upgraded.schemaVersion() == SQLiteTrainingPersistence.currentSchemaVersion)
         #expect(try upgraded.loadSessions() == [session])
@@ -93,7 +93,7 @@ import Testing
             try store.saveSyncBase(SyncBase(kind: "food_entry", id: "A", revision: 2, payload: Data("{}".utf8)))
         }
         let database = try SQLiteDatabase(url: url)
-        try database.executeScript("ALTER TABLE sync_bases DROP COLUMN previous; PRAGMA user_version = 4;")
+        try database.executeScript("DROP TABLE sync_changes; ALTER TABLE sync_bases DROP COLUMN previous; PRAGMA user_version = 4;")
         let upgraded = try SQLiteTrainingPersistence(url: url)
         #expect(try upgraded.syncBases() == [SyncBase(kind: "food_entry", id: "A", revision: 2, payload: Data("{}".utf8))])
         let tombstone = SyncBase(kind: "food_entry", id: "A", revision: 3, previous: Data("{}".utf8))

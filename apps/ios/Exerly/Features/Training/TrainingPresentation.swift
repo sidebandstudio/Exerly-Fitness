@@ -76,7 +76,10 @@ final class TrainingWorkspace: ObservableObject {
     func resumeSync(api: AccountAPI) {
         guard api.accountID == accountID, !persistence.isClosed else { return }
         accountAPI = api
-        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api, conflicts: conflicts)
+        // A new build compares every document once; after that, only those written since.
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance], state: persistence, api: api,
+                                     conflicts: conflicts, appVersion: build)
     }
 
     func synchronize() async {
