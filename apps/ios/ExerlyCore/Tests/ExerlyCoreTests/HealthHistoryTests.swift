@@ -29,9 +29,11 @@ import Testing
     }
 
     func plan(_ added: [HealthFoodReading], deleted: Set<UUID> = [], full: Bool = false, records: [HealthImport] = [],
-              live: Set<UUID>? = nil, changed: Set<UUID> = [], preferred: [String] = []) -> HealthImportPlan<HealthFoodReading> {
+              live: Set<UUID>? = nil, changed: Set<UUID> = [], preferred: [String] = [],
+              deferring: Bool = false) -> HealthImportPlan<HealthFoodReading> {
         HealthHistory.plan(added: added, deleted: deleted, full: full, records: records, install: install,
-                           live: live ?? Set(records.map(\.id)), changed: changed, grouping: .day, preferred: preferred, item: item)
+                           live: live ?? Set(records.map(\.id)), changed: changed, grouping: .day, preferred: preferred,
+                           deferring: deferring, item: item)
     }
 
     @Test func eachDaysFoodComesFromItsBestSourceAndIsPreviewedFirst() {
@@ -69,13 +71,19 @@ import Testing
         #expect(plan([], deleted: [soup.id], records: records).removing == [soup.id])
     }
 
-    @Test func whatTheyChangedOrAnotherInstallImportedIsNeverTakenOut() {
+    /// What they changed is never taken out or replaced. Another install's
+    /// import isn't either as Health is read; applied by choice on this
+    /// device, it is, as this install's.
+    @Test func whatTheyChangedIsNeverTakenOutAndAnotherInstallsOnlyByChoice() {
         let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310)
         let changed = plan([better], deleted: [breakfast.id], records: [record(breakfast)], changed: [breakfast.id], preferred: [tracker])
         #expect(changed.removing.isEmpty && changed.displacing.isEmpty && changed.adding.isEmpty, "theirs now, and it holds its day")
         let theirs = [record(breakfast, owner: "phone-b")]
-        let other = plan([better], deleted: [breakfast.id], full: true, records: theirs, preferred: [tracker])
-        #expect(other.removing.isEmpty && other.displacing.isEmpty && other.adding.isEmpty)
+        let read = plan([better], deleted: [breakfast.id], full: true, records: theirs, preferred: [tracker], deferring: true)
+        #expect(read.displacing.isEmpty && read.adding.isEmpty && read.deferred == [better], "the better source waits")
+        #expect(read.removing == [breakfast.id] && read.preview.deferred == 1, "Health's deletion is listed, not made")
+        let chosen = plan([better], deleted: [breakfast.id], records: theirs, preferred: [tracker])
+        #expect(chosen.removing == [breakfast.id] && chosen.adding == [better])
         #expect(plan([breakfast], full: true, records: theirs).adoptable == [breakfast.id], "a full read offers it to keep as this phone's")
         #expect(plan([breakfast], records: theirs).adoptable.isEmpty, "never implicitly")
     }

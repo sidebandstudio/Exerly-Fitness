@@ -35,6 +35,30 @@ final class HealthUITests: ExerlyUITestCase {
         await fulfillment(of: [expectation], timeout: timeout)
     }
 
+    /// Changes from Health waiting, as Today's quiet row and the Health
+    /// screen's card show them: calm, and nothing changes until applied.
+    func testChangesFromHealthCapture() async throws {
+        guard designCapture else { throw XCTSkip("Opt-in visual review of Changes from Health") }
+        try await control([:])
+        let person = try await createAccount(prefix: "health-changes", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_HEALTH_CHANGES_SEED": "1"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.healthChanges"]
+        reveal(row, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        capture(app, "health-changes-today")
+        tap(row, in: app)
+        XCTAssertTrue(app.buttons["health.changes.apply"].waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "health-changes-sheet")
+        tap(app.buttons["health.changes.done"], in: app)
+        openHealthSettings(app)
+        let apply = app.buttons["health.changes.apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "health-changes-card")
+        reveal(apply, in: app)
+        capture(app, "health-changes-card-actions")
+    }
+
     private func openHealthSettings(_ app: XCUIApplication) {
         tap(app.buttons["Profile"], in: app)
         tap(app.buttons["Apple Health"], in: app)

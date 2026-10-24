@@ -4,10 +4,9 @@ import SwiftUI
 /// What importing from Health would add, before anything is saved.
 struct HealthImportPreviewSheet: View {
     let pending: HealthHistoryModel.Pending
-    /// With their choices: remove what's no longer in Health, adopt what another install imported.
-    let onImport: (_ removeMissing: Bool, _ adopt: Bool) -> Void
+    /// With their choice to adopt what another install imported.
+    let onImport: (_ adopt: Bool) -> Void
     let onCancel: () -> Void
-    @State private var removeMissing = false
     @State private var adopt = false
 
     private var preview: HealthHistoryPreview { pending.preview }
@@ -47,9 +46,13 @@ struct HealthImportPreviewSheet: View {
                     }
                 }
                 if preview.missing > 0 {
-                    choice("No longer in Health",
-                           "\(pending.kind.count(preview.missing)) imported on this iPhone aren't in Health now, perhaps only hidden from Exerly. They stay unless you remove them. Removing deletes them from Exerly, not from Health.",
-                           toggle: "Remove these from Exerly", isOn: $removeMissing, identifier: "health.preview.removeMissing")
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        ExEyebrow("No longer in Health").accessibilityAddTraits(.isHeader)
+                        ExCard {
+                            Text("\(pending.kind.count(preview.missing)) imported on this iPhone aren't in Health now, perhaps only hidden from Exerly. They stay, listed in Changes from Health, where you can take them out of Exerly.")
+                                .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 if preview.adoptable > 0 {
                     choice("Imported on another iPhone",
@@ -59,9 +62,9 @@ struct HealthImportPreviewSheet: View {
                 Text(pending.kind == .foods ? "Each goes in the meal for its time and isn't written back to Health."
                     : "Nothing is saved until you import.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
-                Button { onImport(removeMissing, adopt) } label: {
+                Button { onImport(adopt) } label: {
                     Text(preview.adding > 0 ? "Import \(pending.kind.count(preview.adding))"
-                        : !preview.isEmpty || removeMissing || adopt ? "Update" : pending.isCheck ? "Done" : "Turn on")
+                        : waiting > 0 || adopt ? "Update" : pending.isCheck ? "Done" : "Turn on")
                 }
                     .buttonStyle(ExActionStyle()).accessibilityIdentifier("health.preview.import")
             }
@@ -79,12 +82,16 @@ struct HealthImportPreviewSheet: View {
         var notes: [String] = []
         if preview.alreadyIn > 0 { notes.append("\(pending.kind.count(preview.alreadyIn)) already in Exerly.") }
         if preview.leftOut > 0 { notes.append("\(pending.kind.count(preview.leftOut)) set aside for a better source.") }
-        if preview.removing > 0 { notes.append("\(pending.kind.count(preview.removing)) taken out: deleted in Health.") }
-        if preview.displacing > 0 { notes.append("\(pending.kind.count(preview.displacing)) set aside for a better source's, until it goes.") }
-        if preview.restoring > 0 { notes.append("\(pending.kind.count(preview.restoring)) put back: the better source's is gone.") }
+        if preview.removing > 0 { notes.append("\(pending.kind.count(preview.removing)) deleted in Health: listed in Changes from Health.") }
+        if preview.deferred > 0 {
+            notes.append("\(pending.kind.count(preview.deferred)) from a better source: listed in Changes from Health, to replace what's here if you choose.")
+        }
         if preview.outside > 0 { notes.append("\(pending.kind.count(preview.outside)) left in Health: Exerly keeps the last ten years.") }
         return notes
     }
+
+    /// What waits in Changes from Health once this is imported.
+    private var waiting: Int { preview.removing + preview.deferred + preview.missing }
 
     /// A choice off until they turn it on.
     private func choice(_ title: String, _ text: String, toggle: String, isOn: Binding<Bool>, identifier: String) -> some View {

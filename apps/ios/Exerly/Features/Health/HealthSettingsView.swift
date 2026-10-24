@@ -128,6 +128,7 @@ struct HealthKitSettingsView: View {
 
     var body: some View {
         ExScreen {
+            HealthChangesCard(history: history)
             ExCard(accent: true) {
                 HStack(alignment: .firstTextBaseline, spacing: ExSpacing.small) {
                     if !typeSize.isAccessibilitySize {
@@ -177,8 +178,8 @@ struct HealthKitSettingsView: View {
             await history.refresh()
         }
         .sheet(item: $history.pending) { pending in
-            HealthImportPreviewSheet(pending: pending, onImport: { remove, adopt in
-                Task { await history.confirm(removeMissing: remove, adopt: adopt) }
+            HealthImportPreviewSheet(pending: pending, onImport: { adopt in
+                Task { await history.confirm(adopt: adopt) }
             }, onCancel: history.cancel)
         }
         .onDisappear {

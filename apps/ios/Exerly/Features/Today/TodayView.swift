@@ -1104,7 +1104,10 @@ struct TodayView: View {
     private var dayFooter: some View {
         let day = store.day(date)
         let complete = day.status == .complete
+        let healthChanges = workspace.healthImports.queue.count
         return VStack(alignment: .leading, spacing: ExSpacing.small) {
+            // Quiet, under the day's logging, only while changes from Health wait.
+            if isToday, healthChanges > 0 { TodayHealthChangesRow(accountID: workspace.accountID, count: healthChanges) }
             Menu {
                 ForEach(DayStatus.allCases, id: \.self) { status in
                     Button {

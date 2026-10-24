@@ -92,6 +92,9 @@ struct RootView: View {
             // Phrases that name a usual food are built from the account's foods.
             ExerlyShortcuts.updateAppShortcutParameters()
             await SetupWeighIn.recordIfPending(workspace)
+            #if DEBUG
+            try? HealthDebugSeed.seedChanges(workspace, timeZone: .current)
+            #endif
             // Meal reminders name the meal the account usually logs at their time.
             await NotificationService.shared.reschedule()
         }

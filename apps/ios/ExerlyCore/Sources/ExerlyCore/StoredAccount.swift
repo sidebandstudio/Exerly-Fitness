@@ -30,6 +30,8 @@ public struct StoredAccount: Sendable {
     public let healthImports: [HealthImport]
     /// Health import work a crash left unfinished (`HealthImportStore.recordWork`), if any.
     public let healthImportWork: Data?
+    /// The account's changes from Health waiting for the person (`HealthChangeQueue`), if any.
+    public let healthImportQueue: Data?
     /// Rows that couldn't be decoded, as `table/id`; left in the file as they are.
     public let unreadableRows: [String]
 
@@ -85,11 +87,12 @@ public struct StoredAccount: Sendable {
         let customExercises = try rows(Exercise.self, table: "custom_exercises", order: "id")
         let training = Training(sessions: sessions, customExercises: customExercises, unreadable: unreadable)
         let healthImports = try documents(HealthImportStore.kind).map { try decoder.decode(HealthImport.self, from: $0) }
-        var work: Data?
-        if case .blob(let value) = try database.query("SELECT value FROM settings WHERE key = ?", HealthImportStore.workKey).first?.first {
-            work = value
+        func setting(_ key: String) throws -> Data? {
+            if case .blob(let value) = try database.query("SELECT value FROM settings WHERE key = ?", key).first?.first { return value }
+            return nil
         }
-        return StoredAccount(nutrition: nutrition, training: training, healthImports: healthImports, healthImportWork: work,
+        return StoredAccount(nutrition: nutrition, training: training, healthImports: healthImports,
+                             healthImportWork: try setting(HealthImportStore.workKey), healthImportQueue: try setting(HealthImportStore.queueKey),
                              unreadableRows: unreadable)
     }
 }

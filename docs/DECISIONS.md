@@ -2896,3 +2896,49 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   still name the last account's food. The full NotificationActionsUITests
   run caught it, where earlier tests had signed in other accounts with the
   same foods.
+
+## 2026-10-24: Nothing from Health is taken out or replaced without the person
+
+- Coordinator's decision, after four review rounds of races in automatic
+  cross-device removal. Additions stay automatic: new samples are
+  imported, and a day's food comes from its best source when it's first
+  imported. Nothing destructive happens by itself any more. Health's
+  deletions, a later better source that would set aside what's in Exerly,
+  and what Check everything again no longer finds are listed per account
+  in Changes from Health: a card on the Health screen, and a quiet row on
+  Today under the day's logging while something waits. Each row says what
+  applying it does. "Apply changes" applies them on this iPhone; "Keep
+  everything" dismisses them. The preview's "Remove these" choice is gone:
+  what's no longer in Health is listed there instead.
+- The waiting changes are a `HealthChangeQueue` in the account's
+  `settings` table, on this device only, saved in the transaction that
+  adds what the same read found (and, for workouts, in the journal's
+  finishing transaction), so Health's anchor never moves past a change
+  that isn't recorded. They're read with the account's history off the
+  main actor.
+- Applying is the person's choice here, so it needs no cross-device
+  ownership check: the pull-before-delete step is gone. It plans again
+  from the waiting changes against Exerly as it is then: what they changed
+  is kept and holds its day or time, so nothing replaces it; each record
+  changed becomes this install's at the next generation. A food set aside
+  for a better source that's now going is read from Health again to put
+  back, as before.
+- `health_import` merges whole records in real sync: `reviewsConflicts`
+  is false for it, and both merge overloads use the generation rule, so a
+  conflict never yields a record with one side's owner and the other's
+  state.
+- The workout journal keeps each operation's activity apart from the
+  record it leaves, as a removed record is stored without one, and the
+  group (day or time) each belongs to. On replay, a group whose set-aside
+  activity has changed since is left whole: nothing in it is taken out,
+  and its replacement isn't added. Finishing work that carries no anchor,
+  as applying changes doesn't, leaves where reading stopped as it was.
+- A food put back keeps its record and generation, moving one on, so an
+  older copy arriving later doesn't set it aside again.
+- Sign-out, and account deletion, which ends in it, delete Siri's
+  donations for the intents that can carry account data (logging, Undo,
+  repeats, weigh-ins, water, summaries, sets and rest), each type tried
+  three times before it's reported. On the simulator the donation store
+  reports nothing deleted, even straight after a donation, so the hosted
+  test checks the calls the system accepts; that a donation is gone can
+  only be seen on a device.

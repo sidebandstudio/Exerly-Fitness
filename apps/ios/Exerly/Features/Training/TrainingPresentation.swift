@@ -41,7 +41,8 @@ final class TrainingWorkspace: ObservableObject {
         if let stored {
             store = try TrainingStore(persistence: persistence, loaded: stored.training)
             nutrition = NutritionStore(persistence: persistence, loaded: stored.nutrition)
-            healthImports = HealthImportStore(persistence: persistence, loaded: stored.healthImports, work: stored.healthImportWork)
+            healthImports = try HealthImportStore(persistence: persistence, loaded: stored.healthImports, work: stored.healthImportWork,
+                                                  queue: stored.healthImportQueue)
         } else {
             store = try TrainingStore(persistence: persistence)
             nutrition = try NutritionStore(persistence: persistence)

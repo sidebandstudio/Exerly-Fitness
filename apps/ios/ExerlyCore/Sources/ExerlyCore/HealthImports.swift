@@ -150,6 +150,8 @@ public final class HealthImportStore {
     nonisolated static let kind = "health_import"
 
     public private(set) var records: [UUID: HealthImport] = [:]
+    /// Changes from Health waiting for the person (`HealthChangeQueue`).
+    public private(set) var queue = HealthChangeQueue()
 
     @ObservationIgnored let persistence: TrainingPersistence & DocumentPersistence
 
@@ -159,29 +161,49 @@ public final class HealthImportStore {
             let record = try ExerlyJSON.decoder.decode(HealthImport.self, from: data)
             records[record.id] = record
         }
+        queue = try Self.queue(persistence.loadValue(forKey: Self.queueKey))
     }
 
-    /// Starts from records, and any unfinished work, read off the main actor (`StoredAccount`).
-    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: [HealthImport], work: Data? = nil) {
+    /// Starts from records, and any unfinished work and waiting changes, read off the main actor (`StoredAccount`).
+    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: [HealthImport], work: Data? = nil,
+                queue: Data? = nil) throws {
         self.persistence = persistence
         records = Dictionary(loaded.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         openingWork = .some(work)
+        self.queue = try Self.queue(queue)
     }
+
+    private static func queue(_ data: Data?) throws -> HealthChangeQueue {
+        try data.map { try ExerlyJSON.decoder.decode(HealthChangeQueue.self, from: $0) } ?? HealthChangeQueue()
+    }
+
+    /// Dismisses the waiting changes: Keep everything.
+    public func keepEverything() throws { try save([], queue: HealthChangeQueue()) }
 
     public func records(_ kind: HealthImport.Kind) -> [HealthImport] { records.values.filter { $0.kind == kind } }
 
     /// Saves records on their own, as after an activity's change. With
     /// `finishingWork`, the work written down for them (`recordWork`) is
     /// cleared in the same transaction.
-    public func save(_ changed: [HealthImport], finishingWork: Bool = false) throws {
-        guard !changed.isEmpty || finishingWork else { return }
+    public func save(_ changed: [HealthImport], finishingWork: Bool = false, queue: HealthChangeQueue? = nil) throws {
+        guard !changed.isEmpty || finishingWork || queue != nil else { return }
         try persistence.performAtomically {
             if finishingWork {
                 try persistence.saveValue(nil, forKey: Self.workKey)
                 openingWork = nil
             }
-            persistence.afterCommit(try prepare(changed))
+            let publishQueue = try queue.map(prepareQueue)
+            let publishRecords = try prepare(changed)
+            persistence.afterCommit { publishRecords(); publishQueue?() }
         }
+    }
+
+    nonisolated static let queueKey = "health_import.queue"
+
+    /// Saves the account's changes from Health inside the caller's transaction.
+    func prepareQueue(_ queue: HealthChangeQueue) throws -> () -> Void {
+        try persistence.saveValue(queue.isEmpty ? nil : ExerlyJSON.canonical(queue), forKey: Self.queueKey)
+        return { [self] in self.queue = queue }
     }
 
     nonisolated static let workKey = "health_import.work"
@@ -288,15 +310,67 @@ public struct HealthFoodChanges: Sendable {
     /// Entries already in Exerly with no record, as after a reinstall before
     /// sync, to keep as this install's, as they are now.
     public var claiming: [HealthFoodReading] = []
+    /// The account's changes from Health as they stand once these are made,
+    /// saved in the same transaction; nil leaves them as they are.
+    public var queue: HealthChangeQueue?
 
     public init() {}
 }
 
+/// Changes from Health waiting for the person, per account: nothing in
+/// Exerly is taken out, set aside or replaced until they apply them on this
+/// device. Kept on the device, with the account's data.
+public struct HealthChangeQueue: Codable, Sendable, Hashable {
+    /// Imported samples Health deleted.
+    public var deleted: Set<UUID> = []
+    /// This install's imports a full read of Health no longer found.
+    public var missing: Set<UUID> = []
+    /// Better sources' records that would replace what's in Exerly.
+    public var foods: [HealthFoodReading] = []
+    public var workouts: [HealthWorkoutReading] = []
+
+    public init() {}
+
+    public var isEmpty: Bool { deleted.isEmpty && missing.isEmpty && foods.isEmpty && workouts.isEmpty }
+
+    /// How many changes wait.
+    public var count: Int { deleted.union(missing).count + foods.count + workouts.count }
+
+    /// Adds what a read found, each once.
+    public mutating func add(deleted: [UUID] = [], missing: [UUID] = [], foods: [HealthFoodReading] = [],
+                             workouts: [HealthWorkoutReading] = []) {
+        self.deleted.formUnion(deleted)
+        self.missing.formUnion(missing)
+        let knownFoods = Set(self.foods.map(\.id)), knownWorkouts = Set(self.workouts.map(\.id))
+        self.foods += foods.filter { !knownFoods.contains($0.id) }
+        self.workouts += workouts.filter { !knownWorkouts.contains($0.id) }
+    }
+
+    /// These and `other`'s, each once.
+    public func merging(_ other: HealthChangeQueue) -> HealthChangeQueue {
+        var merged = self
+        merged.add(deleted: Array(other.deleted), missing: Array(other.missing), foods: other.foods, workouts: other.workouts)
+        return merged
+    }
+
+    /// What's left once one kind's changes are applied.
+    public func clearing(_ kind: HealthImport.Kind, records: [UUID: HealthImport]) -> HealthChangeQueue {
+        var left = self
+        let theirs = { (id: UUID) in records[id]?.kind == kind }
+        left.deleted = deleted.filter { !theirs($0) }
+        left.missing = missing.filter { !theirs($0) }
+        if kind == .food { left.foods = [] } else { left.workouts = [] }
+        return left
+    }
+}
+
 extension HealthImportStore {
     /// Makes food changes in one transaction with their records. Each
-    /// removal is checked again inside it: only this install's, and only an
-    /// entry still as it was imported. Returns how many entries were added
-    /// and taken out.
+    /// removal is checked again inside it: only an entry still as it was
+    /// imported. Taking out, setting aside and putting back are made only as
+    /// they apply their changes from Health, on this device: each record
+    /// changed so becomes this install's, a generation on. Returns how many
+    /// entries were added and taken out.
     @discardableResult
     public func apply(_ changes: HealthFoodChanges, to nutrition: NutritionStore, install: String, timeZone: TimeZone,
                       now: Date = Date()) throws -> (added: Int, removed: Int) {
@@ -304,14 +378,14 @@ extension HealthImportStore {
         let current = Dictionary(nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         try persistence.performAtomically {
             for (id, state) in HealthImport.outcomes(removing: changes.removing, displacing: changes.displacing) {
-                guard var record = records[id], record.kind == .food, record.owner == install, record.allows(state) else { continue }
+                guard var record = records[id], record.kind == .food, record.allows(state) else { continue }
                 if let entry = current[id] {
                     guard record.state == .imported, HealthImport.fingerprint(entry) == record.fingerprint else { continue }
                     entries.append(DocumentWrite(kind: NutritionStore.entryKind, id: id.uuidString, payload: nil))
                     removed += 1
                 }
+                record.adopt(by: install, at: now)
                 record.state = state
-                record.updatedAt = now
                 changed.append(record)
             }
             for reading in changes.adding where current[reading.id] == nil && records[reading.id] == nil {
@@ -321,11 +395,12 @@ extension HealthImportStore {
                 added += 1
             }
             for reading in changes.restoring where current[reading.id] == nil {
-                guard var record = records[reading.id], record.owner == install, record.state == .displaced else { continue }
+                guard var record = records[reading.id], record.state == .displaced else { continue }
                 let entry = NutritionStore.entry(for: reading, timeZone: timeZone)
                 entries.append(DocumentWrite(kind: NutritionStore.entryKind, id: entry.id.uuidString, payload: try ExerlyJSON.canonical(entry)))
-                // The same record, at its generation, so an older version arriving later doesn't undo this.
-                (record.state, record.target, record.fingerprint, record.updatedAt) = (.imported, entry.id.uuidString, HealthImport.fingerprint(entry), now)
+                // The same record, a generation on, so an older version arriving later doesn't undo this.
+                record.adopt(by: install, at: now)
+                (record.state, record.target, record.fingerprint) = (.imported, entry.id.uuidString, HealthImport.fingerprint(entry))
                 changed.append(record)
                 added += 1
             }
@@ -341,10 +416,14 @@ extension HealthImportStore {
                 guard let entry = current[reading.id] else { continue }
                 changed.append(HealthImport(food: reading, entry: entry, owner: install, generation: 1, now: now))
             }
-            guard !entries.isEmpty || !changed.isEmpty else { return }
+            let publishQueue = try changes.queue.map(prepareQueue)
+            guard !entries.isEmpty || !changed.isEmpty else {
+                if let publishQueue { persistence.afterCommit(publishQueue) }
+                return
+            }
             let publishEntries = try nutrition.prepareWrites(kind: NutritionStore.entryKind, entries)
             let publishRecords = try prepare(changed)
-            persistence.afterCommit { publishEntries(); publishRecords() }
+            persistence.afterCommit { publishEntries(); publishRecords(); publishQueue?() }
         }
         return (added, removed)
     }

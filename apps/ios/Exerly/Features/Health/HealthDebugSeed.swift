@@ -32,6 +32,29 @@ enum HealthDebugSeed {
         }
     }
 
+    /// A UI test's synthetic changes from Health waiting for the person
+    /// (EXERLY_HEALTH_CHANGES_SEED=1): a soup imported yesterday that Health
+    /// then deleted, a better source's breakfast and a watch's run. Once per
+    /// account, saved as a read would save them.
+    @MainActor
+    static func seedChanges(_ workspace: TrainingWorkspace, timeZone: TimeZone) throws {
+        guard ProcessInfo.processInfo.environment["EXERLY_HEALTH_CHANGES_SEED"] == "1",
+              workspace.healthImports.records.isEmpty, workspace.healthImports.queue.isEmpty else { return }
+        let now = Date()
+        let soup = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-26 * 3600), name: "Synthetic lentil soup",
+                                     nutrients: NutrientAmounts([.energy: 320, .protein: 18]), source: "com.example.diary", sourceName: "Diary")
+        let oats = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-50 * 3600), name: "Synthetic oats",
+                                     nutrients: NutrientAmounts([.energy: 380, .protein: 13]), source: "com.example.tracker", sourceName: "Tracker")
+        let start = now.addingTimeInterval(-74 * 3600)
+        let run = HealthWorkoutReading(id: UUID(), start: start, end: start.addingTimeInterval(35 * 60), activity: "Running", kilocalories: 310,
+                                       source: "com.apple.health.debug", sourceName: "Apple Watch")
+        var changes = HealthFoodChanges(), queue = HealthChangeQueue()
+        changes.adding = [soup]
+        queue.add(deleted: [soup.id], foods: [oats], workouts: [run])
+        changes.queue = queue
+        try workspace.healthImports.apply(changes, to: workspace.nutrition, install: HealthImportInstall.id(), timeZone: timeZone)
+    }
+
     static func seedIfRequested(_ client: HealthStoreClient, timeZone: TimeZone) async {
         guard let spec, let service = client as? HealthKitService else { return }
         try? await service.seedDebugWeights(readings(spec, timeZone: timeZone), timeZone: timeZone)

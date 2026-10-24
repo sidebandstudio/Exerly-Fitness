@@ -67,7 +67,7 @@ final class HealthPreviewCaptureTests: XCTestCase {
         let largest = environment["EXERLY_TEST_LARGEST_TYPE"] == "1"
         for (name, pending) in [("health-preview-no-longer-in-health", missing), ("health-preview-adopt", adopt),
                                 ("health-preview-revised", revised)] {
-            let sheet = HealthImportPreviewSheet(pending: pending, onImport: { _, _ in }, onCancel: {})
+            let sheet = HealthImportPreviewSheet(pending: pending, onImport: { _ in }, onCancel: {})
                 .environment(\.dynamicTypeSize, largest ? .accessibility5 : .large)
             let data = try render(sheet, style: style, largest: largest)
             try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
