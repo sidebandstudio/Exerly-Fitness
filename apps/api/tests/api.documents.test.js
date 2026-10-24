@@ -829,10 +829,33 @@ test('a Health import record syncs with its owner and state, and needs them', as
   assert.equal(targetless.status, 400, 'only a record taken out goes without its target');
   const noted = await api.put(
     `/v1/documents/health_import/${otherID}`,
-    { payload: { ...record, id: otherID, alsoIn: ['Tracker'] }, base_revision: 0 },
+    {
+      payload: {
+        ...record,
+        id: otherID,
+        alsoIn: [{ source: 'com.example.tracker', name: 'Tracker' }],
+      },
+      base_revision: 0,
+    },
     { token, headers: key() }
   );
   assert.equal(noted.status, 201, JSON.stringify(noted.body));
+  const sources = (count, name = 'App') =>
+    Array.from({ length: count }, (_, i) => ({ source: `com.example.app${i}`, name }));
+  for (const alsoIn of [
+    sources(6),
+    sources(1, 'N'.repeat(61)),
+    [...sources(1), ...sources(1)],
+    ['Tracker'],
+  ]) {
+    const refusedID = randomUUID().toUpperCase();
+    const refused = await api.put(
+      `/v1/documents/health_import/${refusedID}`,
+      { payload: { ...record, id: refusedID, alsoIn }, base_revision: 0 },
+      { token, headers: key() }
+    );
+    assert.equal(refused.status, 400, JSON.stringify(alsoIn));
+  }
   const asideID = randomUUID().toUpperCase();
   const setAside = await api.put(
     `/v1/documents/health_import/${asideID}`,

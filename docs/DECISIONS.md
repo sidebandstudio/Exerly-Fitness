@@ -2976,3 +2976,25 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - At most 2,000 changes wait. A read whose removals don't all fit adds
   those that do and keeps its anchor, so the rest are read again once
   there's room; nothing is lost.
+
+## 2026-10-24: No cap on Changes from Health; removals belong to who listed them
+
+- Coordinator's decision: the 2,000-entry cap and its held anchor are
+  gone. Every waiting change points at an existing import and settled
+  ones are pruned, so the list is already no longer than the account's
+  imports. The anchor moves on once a read's changes are recorded. Keep
+  everything removes the changes shown, and as the anchor has moved past
+  them, they don't come back. Each full read's "No longer in Health"
+  replaces the last one's, found afresh.
+- A waiting change records the owner and generation of its import when
+  it's listed. The card, Apply changes and a journal's recovery each drop
+  a change whose import has since been adopted by another install, or
+  moved on a generation, so a change listed here never takes out what
+  another iPhone took over.
+- `alsoIn` is one entry per source bundle identifier, with its name: at
+  most five, each name at most 60 characters. Records read back are held
+  to the same, and the API refuses anything else.
+- An imported food's editor shows "From Health · <source>" under its name,
+  where its source was shown before, with "Also in Health from <sources>,
+  not imported" under it; an imported workout's editor shows the same two
+  lines under its date.

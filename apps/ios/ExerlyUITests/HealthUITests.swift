@@ -59,6 +59,24 @@ final class HealthUITests: ExerlyUITestCase {
         capture(app, "health-changes-card-actions")
     }
 
+    /// An import whose day another source also has says so where its source
+    /// is shown, under "From Health", where VoiceOver reads it.
+    func testAnImportSaysWhatElseHealthHasForItsDay() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "health-also-in", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_HEALTH_CHANGES_SEED": "1"])
+        signIn(app, email: person.email)
+        let yogurt = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                                                          "nutrition.entry.", "Synthetic Greek yogurt")).firstMatch
+        XCTAssertTrue(yogurt.waitForExistence(timeout: 20), app.debugDescription)
+        tap(yogurt, in: app)
+        let note = app.staticTexts["health.alsoInHealth"]
+        XCTAssertTrue(note.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(note.label, "Also in Health from Tracker, not imported")
+        XCTAssertEqual(app.staticTexts["health.fromHealth"].label, "From Health · Diary")
+        if designCapture { capture(app, "health-also-in") }
+    }
+
     private func openHealthSettings(_ app: XCUIApplication) {
         tap(app.buttons["Profile"], in: app)
         tap(app.buttons["Apple Health"], in: app)

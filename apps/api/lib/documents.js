@@ -11,6 +11,25 @@ const { proposalProblems, auditEventProblems } = require('./documentSchemas');
 // person's own devices get a light check; agent documents must match what
 // ExerlyCore decodes, because a device can't apply what it can't read.
 // Token writes of training documents are checked in full (routes/documents.js).
+// Sources set aside for a Health import: one per source, at most five,
+// each name at most 60 characters, as the app keeps them.
+function healthAlsoIn(list) {
+  return (
+    Array.isArray(list) &&
+    list.length <= 5 &&
+    list.every(
+      (item) =>
+        item !== null &&
+        typeof item === 'object' &&
+        typeof item.source === 'string' &&
+        item.source.length > 0 &&
+        typeof item.name === 'string' &&
+        [...item.name].length <= 60
+    ) &&
+    new Set(list.map((item) => item.source)).size === list.length
+  );
+}
+
 const KINDS = {
   workout_session: (p) =>
     typeof p.startedAt === 'string' && Array.isArray(p.exercises)
@@ -89,8 +108,7 @@ const KINDS = {
     (typeof p.target === 'string' || p.state === 'removed') &&
     typeof p.owner === 'string' &&
     (p.generation === undefined || (Number.isInteger(p.generation) && p.generation >= 0)) &&
-    (p.alsoIn === undefined ||
-      (Array.isArray(p.alsoIn) && p.alsoIn.every((name) => typeof name === 'string'))) &&
+    (p.alsoIn === undefined || healthAlsoIn(p.alsoIn)) &&
     ['imported', 'removed'].includes(p.state)
       ? []
       : ['a Health import needs a kind, a target, an owner, a whole generation and a state'],

@@ -8,9 +8,9 @@ struct HealthChangeRow: Identifiable, Hashable {
     var detail: String
 }
 
-/// Changes from Health: what Health deleted, what it no longer has, and
-/// better sources' records, each saying what applying it does. Nothing in
-/// Exerly changes until they apply them on this iPhone, or keep everything.
+/// Changes from Health: what Health deleted, and what it no longer has, each
+/// saying what applying it does. Nothing in Exerly changes until they apply
+/// them on this iPhone, or keep everything.
 struct HealthChangesCard: View {
     @ObservedObject var history: HealthHistoryModel
     /// At most this many rows, then a count of the rest.
@@ -106,5 +106,20 @@ struct TodayHealthChangesRow: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("today.healthChanges")
         .sheet(isPresented: $showsChanges) { HealthChangesSheet(accountID: accountID) }
+    }
+}
+
+/// Where an import came from in Health, and what else Health has for its day
+/// or time, as its food entry or activity shows them: "From Health · Diary",
+/// then "Also in Health from Tracker, not imported".
+struct HealthSourceLines: View {
+    let lines: [String]
+
+    var body: some View {
+        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+            Text(line).foregroundStyle(index == 0 ? Color.exTextPrimary : Color.exTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(index == 0 ? "health.fromHealth" : "health.alsoInHealth")
+        }
     }
 }

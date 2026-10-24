@@ -38,12 +38,12 @@ final class HealthHistoryReadsTests: XCTestCase {
 
     /// `phone` and `client` stand for another phone's data and Health.
     private func model(_ account: String = "history", defaults: UserDefaults? = nil, on phone: TrainingWorkspace? = nil,
-                       client: FakeHistoryClient? = nil, queueCap: Int = HealthChangeQueue.cap) -> HealthHistoryModel {
+                       client: FakeHistoryClient? = nil) -> HealthHistoryModel {
         HealthHistoryModel(accountID: account, timeZone: zone, client: client ?? self.client, namespace: "test",
                            defaults: defaults ?? self.defaults, install: install,
                            workspace: { phone ?? self.workspace }, isCurrent: { $0 == self.current },
                            enableWeights: { self.reviewedWeights.append($0); return self.weightsMatch },
-                           activities: { self.activities }, queueCap: queueCap)
+                           activities: { self.activities })
     }
 
     /// Health answering as if it had nothing, as a revoked read does: no samples, and no deletions.
@@ -342,7 +342,7 @@ final class HealthHistoryReadsTests: XCTestCase {
         await history.applyChanges()
         XCTAssertEqual(activities.saved.map(\.clientID), [HealthHistory.activityID(for: app.id, accountID: "history")])
         XCTAssertTrue(activities.deleted.isEmpty)
-        XCTAssertEqual(workspace.healthImports.records[app.id]?.alsoIn, ["Watch"])
+        XCTAssertEqual(workspace.healthImports.records[app.id]?.alsoIn.map(\.name), ["Watch"])
         XCTAssertNil(workspace.healthImports.records[watch.id])
     }
 
@@ -454,26 +454,55 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertTrue(phoneB.healthImports.queue.isEmpty, "And B's list is pruned")
     }
 
-    /// A read whose deletions don't all fit under the cap keeps its anchor;
-    /// read again once there's room, nothing is lost.
-    func testAFullListKeepsItsAnchorAndLosesNothing() async throws {
+    /// Review 6: three deletions kept with Keep everything never come back
+    /// on the next read, and nothing is lost from the diary.
+    func testKeptDeletionsNeverComeBackAndNothingIsLost() async throws {
         let foods = (0..<3).map { food(8 + $0, "com.example.tracker", daysAgo: 1 + $0) }
         client.foods = foods
-        let history = model(queueCap: 2)
+        let history = model()
         await history.begin(.foods)
         await history.confirm()
         client.foods = []
         await history.refresh()
-        XCTAssertEqual(workspace.healthImports.queue.entries.count, 2)
-        let held = try XCTUnwrap(client.anchorsSeen.last)
-        await history.applyChanges()
+        XCTAssertEqual(workspace.healthImports.queue.entries.count, 3)
+        history.keepEverything()
         await history.refresh()
-        XCTAssertEqual(client.anchorsSeen.last, held, "Read again from where the full list stopped it")
-        XCTAssertEqual(workspace.healthImports.queue.entries.count, 1, "The third, listed once there's room")
-        await history.applyChanges()
-        XCTAssertTrue(workspace.nutrition.entries.isEmpty, "Nothing lost")
-        await history.refresh()
-        XCTAssertNotEqual(client.anchorsSeen.last, held, "Moved on once everything fitted")
+        XCTAssertTrue(workspace.healthImports.queue.isEmpty, "Nothing comes back")
+        XCTAssertTrue(history.changeRows().isEmpty)
+        XCTAssertEqual(Set(workspace.nutrition.entries.map(\.id)), Set(foods.map(\.id)), "Nothing lost")
+    }
+
+    /// Review 6: a deletion this phone listed is dropped once another phone
+    /// adopts the import and syncs: the card is empty, and applying removes nothing.
+    func testARemovalListedHereIsDroppedOnceAnotherPhoneAdoptsTheImport() async throws {
+        let server = MemoryDocumentServer()
+        let phoneA = try XCTUnwrap(workspace)
+        phoneA.resumeSync(api: AccountAPI(accountID: "history", transport: server))
+        let phoneB = try TrainingWorkspace(accountID: "history", root: temporaryRoot(), api: AccountAPI(accountID: "history", transport: server))
+        let soup = food(12, "com.example.tracker")
+        client.foods = [soup]
+        let historyA = model()
+        await historyA.begin(.foods)
+        await historyA.confirm()
+        try await phoneA.sync?.sync()
+        try await phoneB.sync?.sync()
+        // B, with the same Health data, keeps it as its own.
+        let healthB = FakeHistoryClient()
+        healthB.foods = [soup]
+        install = "phone-b"
+        let historyB = model(defaults: UserDefaults(suiteName: "b-\(UUID().uuidString)"), on: phoneB, client: healthB)
+        await historyB.checkEverythingAgain(.foods)
+        await historyB.confirm(adopt: true)
+        // Health deletes it: A lists it as its own, then B's adoption arrives.
+        client.foods = []
+        await historyA.refresh()
+        XCTAssertEqual(historyA.changeRows().count, 1)
+        try await phoneB.sync?.sync()
+        try await phoneA.sync?.sync()
+        XCTAssertTrue(historyA.changeRows().isEmpty, "A's card is empty")
+        await historyA.applyChanges()
+        XCTAssertTrue(phoneA.nutrition.entries.contains { $0.id == soup.id }, "Applying removes nothing")
+        XCTAssertEqual(phoneA.healthImports.records[soup.id]?.owner, "phone-b")
     }
 
     /// A crash before or after each write of a workout's journal, adding it
@@ -526,7 +555,8 @@ final class HealthHistoryReadsTests: XCTestCase {
         await history.refresh()
         XCTAssertTrue(workspace.nutrition.entries.contains { $0.id == soup.id }, "Still in the diary")
         XCTAssertEqual(workspace.healthImports.queue.entries,
-                       [HealthChangeQueue.Entry(kind: .food, id: soup.id, target: soup.id.uuidString, fingerprint: record.fingerprint, reason: .deleted)])
+                       [HealthChangeQueue.Entry(kind: .food, id: soup.id, target: soup.id.uuidString, fingerprint: record.fingerprint,
+                                                owner: "this-phone", generation: 0, reason: .deleted)])
         XCTAssertEqual(history.changeRows().map(\.detail), ["Deleted in Health: takes it out of your diary."])
     }
 
@@ -794,7 +824,6 @@ final class FakeHistoryClient: HealthHistoryClient, @unchecked Sendable {
         return changes(workouts, id: \.id, after: anchor)
     }
 
-    func foods(_ ids: Set<UUID>) async throws -> [HealthFoodReading] { revoked ? [] : foods.filter { ids.contains($0.id) } }
 
     func weights() async throws -> [(weight: HealthWeight, source: String)] { weightReadings }
 }

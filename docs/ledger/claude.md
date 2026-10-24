@@ -19,8 +19,8 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
   - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly; preview, Undo, full
     export. Reviews 2–5 fixed restores (3 years in 5 s), moves, measurement edits, barcode. Synthetic.
 - claude/apple (not landed; I04–06, I08, I17–19): Shortcuts, Log by JSON; Spotlight and Siri log with Undo;
-  Health food, workouts, recovery. Review 5: first source wins, later ones noted, never swapped; only
-  removals wait in Changes from Health (card, quiet Today row), capped, applied exactly as shown.
+  Health food, workouts, recovery. Review 6: first source wins, later ones noted in the editor; only
+  this phone's removals wait in Changes from Health (card, Today row), applied exactly as shown.
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 - claude/polish6 (in claude/next 48f64e6d, not on TestFlight): run 7, reviews. Gain or Maintain past
@@ -58,7 +58,7 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 | Branch      | Unlanded                                            | Last landed     |
 | ----------- | --------------------------------------------------- | --------------- |
 | claude/next | nothing                                             | fd55982b (sync) |
-| apple       | 33 commits on fd55982b, for Sol's confirming review | not yet         |
+| apple       | 34 commits on fd55982b, for Sol's confirming review | not yet         |
 
 ## Risks
 

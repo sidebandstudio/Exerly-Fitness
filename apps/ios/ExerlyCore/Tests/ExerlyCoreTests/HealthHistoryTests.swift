@@ -54,7 +54,7 @@ import Testing
         let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310), lunch = food(5, 13, diary, kcal: 500)
         let later = plan([better, lunch], records: [record(breakfast)], preferred: [tracker])
         #expect(later.adding.map(\.id) == [lunch.id], "the day's own source still adds")
-        #expect(later.preview.leftOut == 1 && later.alsoIn == [breakfast.id: [better.sourceName]])
+        #expect(later.preview.leftOut == 1 && later.alsoIn == [breakfast.id: [.init(source: tracker, name: better.sourceName)]])
         let gone = plan([], deleted: [breakfast.id], records: [record(breakfast)], preferred: [tracker])
         #expect(gone.removing == [breakfast.id] && gone.adding.isEmpty, "Health's deletion is listed, and nothing comes in its place")
         func workout(_ start: Date, _ source: String) -> HealthWorkoutReading {
@@ -65,18 +65,61 @@ import Testing
         let ran = HealthImport(workout: run, clientID: "run", fingerprint: "f", owner: install, timeZone: newYork)
         let overlap = HealthHistory.plan(added: [watched], full: false, records: [ran], install: install, live: [ran.id], changed: [],
                                          grouping: .overlap) { HealthHistory.item($0, timeZone: newYork) }
-        #expect(overlap.adding.isEmpty && overlap.alsoIn == [run.id: [watch]], "the watch, Health's own, is noted, not swapped in")
+        #expect(overlap.adding.isEmpty && overlap.alsoIn == [run.id: [.init(source: watch, name: watch)]], "the watch, Health's own, is noted, not swapped in")
     }
 
-    /// Review 5: the queue holds small removal references, each once, up to its cap.
-    @Test func theQueueHoldsSmallRemovalsOnceUpToItsCap() throws {
+    /// Review 6: the queue holds small removal references, each once, with
+    /// no cap; a full read's "No longer in Health" replaces the last one's.
+    @Test func theQueueHoldsSmallRemovalsOnce() throws {
         let ids = (0..<3).map { _ in UUID() }
-        let entries = ids.map { HealthChangeQueue.Entry(kind: .food, id: $0, target: $0.uuidString, fingerprint: "f", reason: .deleted) }
-        let (two, full) = HealthChangeQueue().adding(entries, cap: 2)
-        #expect(two.entries.map(\.id) == Array(ids.prefix(2)) && full)
-        #expect(two.adding([entries[0]], cap: 2) == (two, false), "listed once")
-        #expect(two.removing([ids[0]]).entries.map(\.id) == [ids[1]])
-        #expect(try ExerlyJSON.canonical(two).count < 500, "references, not payloads")
+        let entries = ids.map {
+            HealthChangeQueue.Entry(kind: .food, id: $0, target: $0.uuidString, fingerprint: "f", owner: install, generation: 0, reason: .missing)
+        }
+        let all = HealthChangeQueue().adding(entries)
+        #expect(all.entries.map(\.id) == ids && all.adding([entries[0]]) == all, "listed once")
+        #expect(all.removing([ids[0]]).entries.map(\.id) == Array(ids.dropFirst()))
+        #expect(all.adding([entries[2]], replacingMissing: .food).entries.map(\.id) == [ids[2]], "a full read finds them afresh")
+        #expect(try ExerlyJSON.canonical(all).count < 800, "references, not payloads")
+    }
+
+    /// Review 6: a removal listed for this install is dropped once another
+    /// install adopts the import, a generation on.
+    @Test func aListedRemovalIsDroppedOnceAnotherInstallAdoptsTheImport() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let store = try NutritionStore(persistence: persistence), imports = try HealthImportStore(persistence: persistence)
+        let soup = food(5, 12, tracker, kcal: 250)
+        var changes = HealthFoodChanges()
+        changes.adding = [soup]
+        try imports.apply(changes, to: store, install: install, timeZone: newYork)
+        let listed = HealthChangeQueue.Entry(try #require(imports.records[soup.id]), reason: .deleted)
+        changes = HealthFoodChanges()
+        changes.adopting = [soup.id]
+        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork)
+        #expect(!listed.stillFor(try #require(imports.records[soup.id])))
+        #expect(try imports.applyRemovals([listed], to: store, install: install) == 0)
+        #expect(store.entries.map(\.id) == [soup.id] && imports.records[soup.id]?.owner == "phone-b")
+    }
+
+    /// Review 6: sources set aside are noted once each, at most five, each
+    /// name at most 60 characters, and a record read back is held to the same.
+    @Test func sourcesSetAsideAreNotedOnceEachWithinLimits() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let store = try NutritionStore(persistence: persistence), imports = try HealthImportStore(persistence: persistence)
+        let soup = food(5, 12, tracker, kcal: 250)
+        var changes = HealthFoodChanges()
+        changes.adding = [soup]
+        try imports.apply(changes, to: store, install: install, timeZone: newYork)
+        let long = String(repeating: "N", count: 90)
+        let sources = (0..<7).map { HealthImport.AlsoIn(source: "com.example.app\($0)", name: $0 == 0 ? long : "App \($0)") }
+        let noted = try #require(imports.noting([soup.id: sources + [.init(source: "com.example.app1", name: "App 1 again")]], now: at(6, 0)).first)
+        #expect(noted.alsoIn.count == 5 && Set(noted.alsoIn.map(\.source)).count == 5)
+        #expect(noted.alsoIn.allSatisfy { $0.name.count <= 60 })
+        var object = try #require(try JSONSerialization.jsonObject(with: ExerlyJSON.canonical(record(soup))) as? [String: Any])
+        object["alsoIn"] = (0..<8).map { ["source": "com.example.dup\($0 % 6)", "name": long] }
+        let read = try ExerlyJSON.decoder.decode(HealthImport.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(read.alsoIn.count == 5 && Set(read.alsoIn.map(\.source)).count == 5 && read.alsoIn.allSatisfy { $0.name.count == 60 })
+        #expect(read.sourceLines == ["From Health · \(soup.sourceName)",
+                                     "Also in Health from \(ListFormatter.localizedString(byJoining: read.alsoIn.map(\.name))), not imported"])
     }
 
     @Test func nothingIsTakenOutForBeingMissingOnlyForHealthsDeletions() {

@@ -39,9 +39,30 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
     public var fingerprint: String
     public var state: State
     public var updatedAt: Date
-    /// Other sources Health also has for its day or time, by name, set aside
-    /// because this was imported first: "Also in Health from Tracker, not imported".
-    public var alsoIn: [String] = []
+    /// Other sources Health also has for its day or time, set aside because
+    /// this was imported first: "Also in Health from Tracker, not imported".
+    /// One per source, at most `AlsoIn.limit`.
+    public var alsoIn: [AlsoIn] = []
+
+    /// A source set aside: its bundle identifier, and its name as Health shows it.
+    public struct AlsoIn: Sendable, Codable, Hashable {
+        public var source: String
+        public var name: String
+
+        public static let limit = 5
+        public static let nameLimit = 60
+
+        public init(source: String, name: String) {
+            self.source = source
+            self.name = String(name.prefix(Self.nameLimit))
+        }
+
+        /// One per source, the first kept, at most `limit`, each name at most `nameLimit` characters.
+        public static func limited(_ sources: [AlsoIn]) -> [AlsoIn] {
+            var seen = Set<String>()
+            return Array(sources.filter { seen.insert($0.source).inserted }.prefix(limit)).map { AlsoIn(source: $0.source, name: $0.name) }
+        }
+    }
 
     public init(id: UUID, kind: Kind, target: String, owner: String, generation: Int = 0, source: String, sourceName: String,
                 start: Date, end: Date, day: LocalDate, fingerprint: String, state: State = .imported, updatedAt: Date) {
@@ -83,7 +104,7 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
         end = tombstone ? Self.none : try container.decode(Date.self, forKey: .end)
         day = tombstone ? LocalDate(Self.none, in: Self.utc) : try container.decode(LocalDate.self, forKey: .day)
         fingerprint = tombstone ? "" : try container.decode(String.self, forKey: .fingerprint)
-        alsoIn = tombstone ? [] : try container.decodeIfPresent([String].self, forKey: .alsoIn) ?? []
+        alsoIn = tombstone ? [] : AlsoIn.limited(try container.decodeIfPresent([AlsoIn].self, forKey: .alsoIn) ?? [])
     }
 
     /// Retention: a removed record keeps only what stops its sample being
@@ -110,7 +131,13 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
 
     /// What `alsoIn` says, nil when there's no other source.
     public var alsoInNote: String? {
-        alsoIn.isEmpty ? nil : "Also in Health from \(ListFormatter.localizedString(byJoining: alsoIn)), not imported"
+        alsoIn.isEmpty ? nil : "Also in Health from \(ListFormatter.localizedString(byJoining: alsoIn.map(\.name))), not imported"
+    }
+
+    /// Where an import came from, and what else Health has for it, as its
+    /// entry or activity shows them: "From Health · Diary", then the note.
+    public var sourceLines: [String] {
+        ["From Health · \(sourceName)"] + (alsoInNote.map { [$0] } ?? [])
     }
 
     private static let none = Date(timeIntervalSince1970: 0)
@@ -334,7 +361,7 @@ public struct HealthFoodChanges: Sendable {
     /// sync, to keep as this install's, as they are now.
     public var claiming: [HealthFoodReading] = []
     /// Sources set aside for what's imported, to note on its record.
-    public var alsoIn: [UUID: Set<String>] = [:]
+    public var alsoIn: [UUID: [HealthImport.AlsoIn]] = [:]
     /// The account's changes from Health as they stand once these are made,
     /// saved in the same transaction; nil leaves them as they are.
     public var queue: HealthChangeQueue?
@@ -345,9 +372,9 @@ public struct HealthFoodChanges: Sendable {
 /// Changes from Health waiting for the person, per account: only removals,
 /// of this install's imports Health deleted or no longer has. Nothing is
 /// taken out until they apply them on this device. Each is a small
-/// reference, kept on the device with the account's data, and there are
-/// at most `cap`: a read that would go past it keeps its anchor, and reads
-/// the rest again once there's room.
+/// reference, kept on the device with the account's data. Each points at an
+/// import, and those already settled are pruned, so there are never more
+/// than the account's imports.
 public struct HealthChangeQueue: Codable, Sendable, Hashable {
     public struct Entry: Codable, Sendable, Hashable, Identifiable {
         public enum Reason: String, Codable, Sendable { case deleted, missing }
@@ -358,19 +385,29 @@ public struct HealthChangeQueue: Codable, Sendable, Hashable {
         public var target: String
         /// The entry or activity as it was when listed: once it differs, it's theirs, and the change is dropped.
         public var fingerprint: String
+        /// Whose import it was, at which generation, when listed: once another
+        /// install adopts it, the change is no longer this install's to make.
+        public var owner: String
+        public var generation: Int
         public var reason: Reason
 
-        public init(kind: HealthImport.Kind, id: UUID, target: String, fingerprint: String, reason: Reason) {
-            (self.kind, self.id, self.target, self.fingerprint, self.reason) = (kind, id, target, fingerprint, reason)
+        public init(kind: HealthImport.Kind, id: UUID, target: String, fingerprint: String, owner: String, generation: Int, reason: Reason) {
+            (self.kind, self.id, self.target, self.fingerprint) = (kind, id, target, fingerprint)
+            (self.owner, self.generation, self.reason) = (owner, generation, reason)
         }
 
         /// The change for an imported record, as it is now.
         public init(_ record: HealthImport, reason: Reason) {
-            self.init(kind: record.kind, id: record.id, target: record.target, fingerprint: record.fingerprint, reason: reason)
+            self.init(kind: record.kind, id: record.id, target: record.target, fingerprint: record.fingerprint, owner: record.owner,
+                      generation: record.generation, reason: reason)
+        }
+
+        /// Whether `record` is still the import it was listed for: imported,
+        /// owned by the same install at the same generation, as imported then.
+        public func stillFor(_ record: HealthImport) -> Bool {
+            record.state == .imported && record.owner == owner && record.generation == generation && record.fingerprint == fingerprint
         }
     }
-
-    public static let cap = 2000
 
     public var entries: [Entry] = []
 
@@ -378,21 +415,14 @@ public struct HealthChangeQueue: Codable, Sendable, Hashable {
 
     public var isEmpty: Bool { entries.isEmpty }
 
-    /// Adds entries not already listed, as many as `cap` allows. `full` when
-    /// some didn't fit: the read that found them keeps its anchor.
-    public func adding(_ new: [Entry], cap: Int = HealthChangeQueue.cap) -> (queue: HealthChangeQueue, full: Bool) {
+    /// Adds entries not already listed. A full read's `missing` of a kind
+    /// replaces those listed before, as each full read finds them afresh.
+    public func adding(_ new: [Entry], replacingMissing kind: HealthImport.Kind? = nil) -> HealthChangeQueue {
         var queue = self
-        var listed = Set(entries.map(\.id))
-        var full = false
-        for entry in new where !listed.contains(entry.id) {
-            guard queue.entries.count < cap else {
-                full = true
-                break
-            }
-            queue.entries.append(entry)
-            listed.insert(entry.id)
-        }
-        return (queue, full)
+        if let kind { queue.entries.removeAll { $0.kind == kind && $0.reason == .missing } }
+        var listed = Set(queue.entries.map(\.id))
+        for entry in new where listed.insert(entry.id).inserted { queue.entries.append(entry) }
+        return queue
     }
 
     /// Without exactly these, as once they're applied or kept.
@@ -445,12 +475,12 @@ extension HealthImportStore {
 
     /// Imported records with the sources set aside for them added to their
     /// note, those whose note already has them left out.
-    public func noting(_ alsoIn: [UUID: Set<String>], except: Set<UUID> = [], now: Date) -> [HealthImport] {
-        alsoIn.sorted { $0.key.uuidString < $1.key.uuidString }.compactMap { id, names in
+    public func noting(_ alsoIn: [UUID: [HealthImport.AlsoIn]], except: Set<UUID> = [], now: Date) -> [HealthImport] {
+        alsoIn.sorted { $0.key.uuidString < $1.key.uuidString }.compactMap { id, sources in
             guard !except.contains(id), var record = records[id], record.state == .imported else { return nil }
-            let noted = Set(record.alsoIn).union(names)
-            guard noted.count > record.alsoIn.count else { return nil }
-            record.alsoIn = noted.sorted()
+            let noted = HealthImport.AlsoIn.limited(record.alsoIn + sources.sorted { $0.source < $1.source })
+            guard noted != record.alsoIn else { return nil }
+            record.alsoIn = noted
             record.updatedAt = now
             return record
         }
@@ -458,10 +488,11 @@ extension HealthImportStore {
 
     /// Takes out the foods of `entries` they chose to apply, in one
     /// transaction with their records and the queue. Each is checked again
-    /// inside it: still imported, its entry still as it was listed and as
-    /// imported. Those that pass are taken out and become this install's, a
-    /// generation on; the rest are dropped. Exactly these entries leave the
-    /// queue. Returns how many entries were taken out.
+    /// inside it: still imported by the install and at the generation it was
+    /// listed for, its entry still as it was listed and as imported. Those
+    /// that pass are taken out and become this install's, a generation on;
+    /// the rest are dropped. Exactly these entries leave the queue. Returns
+    /// how many entries were taken out.
     @discardableResult
     public func applyRemovals(_ entries: [HealthChangeQueue.Entry], to nutrition: NutritionStore, install: String,
                               now: Date = Date()) throws -> Int {
@@ -471,9 +502,9 @@ extension HealthImportStore {
         var deletes: [DocumentWrite] = [], changed: [HealthImport] = []
         try persistence.performAtomically {
             for listed in foods {
-                guard var record = records[listed.id], record.kind == .food, record.state == .imported,
+                guard var record = records[listed.id], record.kind == .food, listed.stillFor(record),
                       let entry = UUID(uuidString: record.target).flatMap({ current[$0] }),
-                      HealthImport.fingerprint(entry) == listed.fingerprint, listed.fingerprint == record.fingerprint else { continue }
+                      HealthImport.fingerprint(entry) == listed.fingerprint else { continue }
                 deletes.append(DocumentWrite(kind: NutritionStore.entryKind, id: entry.id.uuidString, payload: nil))
                 record.adopt(by: install, at: now)
                 record.state = .removed

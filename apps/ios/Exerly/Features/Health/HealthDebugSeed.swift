@@ -34,8 +34,9 @@ enum HealthDebugSeed {
 
     /// A UI test's synthetic changes from Health waiting for the person
     /// (EXERLY_HEALTH_CHANGES_SEED=1): a soup imported yesterday that Health
-    /// then deleted, and oats a full read no longer found. Once per account,
-    /// saved as reads would save them.
+    /// then deleted, and oats a full read no longer found, and today's yogurt
+    /// with the tracker's set aside for it. Once per account, saved as reads
+    /// would save them.
     @MainActor
     static func seedChanges(_ workspace: TrainingWorkspace, timeZone: TimeZone) throws {
         guard ProcessInfo.processInfo.environment["EXERLY_HEALTH_CHANGES_SEED"] == "1",
@@ -45,10 +46,14 @@ enum HealthDebugSeed {
                                      nutrients: NutrientAmounts([.energy: 320, .protein: 18]), source: "com.example.diary", sourceName: "Diary")
         let oats = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-50 * 3600), name: "Synthetic oats",
                                      nutrients: NutrientAmounts([.energy: 380, .protein: 13]), source: "com.example.tracker", sourceName: "Tracker")
+        // Today's yogurt, from the diary app; the tracker's for the same day was set aside.
+        let yogurt = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-3600), name: "Synthetic Greek yogurt",
+                                       nutrients: NutrientAmounts([.energy: 150, .protein: 15]), source: "com.example.diary", sourceName: "Diary")
         var changes = HealthFoodChanges()
-        changes.adding = [soup, oats]
+        changes.adding = [soup, oats, yogurt]
         let imports = workspace.healthImports
         try imports.apply(changes, to: workspace.nutrition, install: HealthImportInstall.id(), timeZone: timeZone)
+        try imports.save(imports.noting([yogurt.id: [.init(source: "com.example.tracker", name: "Tracker")]], now: now))
         let listed = [(soup.id, HealthChangeQueue.Entry.Reason.deleted), (oats.id, .missing)].compactMap { id, reason in
             imports.records[id].map { HealthChangeQueue.Entry($0, reason: reason) }
         }

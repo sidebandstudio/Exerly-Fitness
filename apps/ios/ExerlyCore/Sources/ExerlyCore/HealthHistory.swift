@@ -60,7 +60,7 @@ public struct HealthHistoryPreview: Sendable, Hashable {
         public var name: String
         /// Records it would add.
         public var adding: Int
-        /// Records set aside because a better source covered the same day or time.
+        /// Records set aside: another source ranked first, or imported first, for the same day or time.
         public var leftOut: Int
     }
 
@@ -107,7 +107,7 @@ public struct HealthImportPlan<Reading> {
     /// Imports this install could adopt: another's, or entries with no record.
     public var adoptable: [UUID]
     /// Imported records a later source also has, with that source's names.
-    public var alsoIn: [UUID: Set<String>] = [:]
+    public var alsoIn: [UUID: [HealthImport.AlsoIn]] = [:]
 }
 
 /// What a reading is, for grouping and priority.
@@ -183,7 +183,7 @@ public enum HealthHistory {
         }
         let order = HealthSourcePriority.order(Dictionary(members.map { ($0.item.source, 1) }, uniquingKeysWith: +), preferred: preferred)
         let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: min)
-        var adding: [T] = [], leftOut: [T] = [], alsoIn: [UUID: Set<String>] = [:]
+        var adding: [T] = [], leftOut: [T] = [], alsoIn: [UUID: [HealthImport.AlsoIn]] = [:]
         for (_, those) in Dictionary(grouping: members, by: { group[$0.item.id] ?? 0 }) {
             let imported = those.compactMap(\.record)
             // Already imported: more from the same source joins it, and another source is set aside and noted.
@@ -197,7 +197,9 @@ public enum HealthHistory {
                     adding.append(reading)
                 } else {
                     leftOut.append(reading)
-                    for record in imported { alsoIn[record.id, default: []].insert(member.item.sourceName) }
+                    for record in imported where !(alsoIn[record.id] ?? []).contains(where: { $0.source == member.item.source }) {
+                        alsoIn[record.id, default: []].append(HealthImport.AlsoIn(source: member.item.source, name: member.item.sourceName))
+                    }
                 }
             }
         }
