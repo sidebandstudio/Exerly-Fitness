@@ -241,6 +241,15 @@ extension HealthImportStore: DocumentHost {
         return theirs.updatedAt > mine.updatedAt ? remote : local
     }
 
+    /// The same whole-record rule, field by field never: a record mixing an
+    /// adoption's owner with a stale owner's state would be neither.
+    public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        MergeOutcome(merged: try merge(kind: kind, base: base, local: local, remote: remote), conflicts: [])
+    }
+
+    /// Generation and time settle every clash, with nothing for a person to choose.
+    public func reviewsConflicts(kind: String) -> Bool { false }
+
     public func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
         try prepareWrites(kind: kind, [DocumentWrite(kind: kind, id: id, payload: payload)])
     }

@@ -220,6 +220,37 @@ import Testing
         #expect(try ExerlyJSON.decoder.decode(HealthImport.self, from: ExerlyJSON.canonical(kept)) == kept, "one still in keeps it all")
     }
 
+    /// Review 4, item 1: through sync, a stale owner's removal at generation
+    /// 0 meets another phone's adoption at 1. Both phones end with the
+    /// adoption whole, never fields of each.
+    @Test func conflictingRecordsMergeWholeByGenerationThroughSync() async throws {
+        let server = FakeDocumentServer()
+        func phone() throws -> (InMemoryTrainingPersistence, NutritionStore, HealthImportStore, SyncEngine) {
+            let disk = InMemoryTrainingPersistence()
+            let store = try NutritionStore(persistence: disk), imports = try HealthImportStore(persistence: disk)
+            return (disk, store, imports, SyncEngine(hosts: [store, imports], state: disk, api: server))
+        }
+        let a = try phone(), b = try phone()
+        let soup = food(5, 12, tracker, kcal: 250)
+        var adding = HealthFoodChanges()
+        adding.adding = [soup]
+        try a.2.apply(adding, to: a.1, install: "phone-a", timeZone: newYork, now: at(5, 13))
+        try await a.3.sync()
+        try await b.3.sync()
+        var adopted = try #require(b.2.records[soup.id])
+        adopted.adopt(by: "phone-b", at: at(6, 9))
+        try b.2.save([adopted])
+        try await b.3.sync()
+        var stale = try #require(a.2.records[soup.id])
+        stale.state = .removed
+        stale.updatedAt = at(7, 9)
+        try a.2.save([stale])
+        try await a.3.sync()
+        try await b.3.sync()
+        #expect(a.2.records[soup.id] == adopted, "the removal from before the adoption doesn't stand")
+        #expect(b.2.records[soup.id] == adopted)
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))
