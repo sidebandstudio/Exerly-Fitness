@@ -2543,3 +2543,11 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   to take a tap and saves only once the picker shows the choice, choosing again if the tap
   was lost; 10 of 10 passed after it, with the second choice never needed. The app wasn't
   at fault: a person's tap lands on an open menu.
+
+## 2026-10-23: Conflict review, round 5
+
+- A full comparison clears every change record before it compares, and a server from before
+  `sync_conflict` or `food_entry_link` answers those with 400, which push treated as "try
+  next time" without recording anything: the comparison then marked the records trusted,
+  so after the API deploy those documents were never sent. That fallback now records the
+  document as changed again, so the next sync sends it without an edit or a new build.

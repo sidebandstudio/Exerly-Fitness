@@ -394,6 +394,9 @@ public final class SyncEngine {
                 return try unchanged(kind, id)
             } catch APIError.server(status: 400, _) where Self.newerKinds.contains(kind) {
                 // A server from before this kind: keep it here and try next time.
+                // A full comparison cleared every record first, so this one is restored.
+                try checkActive()
+                try stateStore.markChanged(kind: kind, id: id)
                 return false
             } catch APIError.server(status: 413, _) where kind == SyncConflictStore.kind {
                 // Too large to send: it stays on this device, and the rest syncs.

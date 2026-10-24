@@ -16,6 +16,8 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     var offline = false
     /// Refuses larger payloads with 413, as the API's 256 KB body limit does.
     var maxPayloadBytes: Int?
+    /// Kinds refused with 400, as a server deployed before them does.
+    var refusedKinds: Set<String> = []
     private(set) var writes = 0
     /// Every write the server received, including ones refused as conflicts.
     private(set) var attempts: [(id: String, baseRevision: Int)] = []
@@ -40,6 +42,7 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     private func write(_ kind: String, _ id: String, _ payload: Data?, _ base: Int, _ idempotency: String) throws -> DocumentWriteResult {
         try lock.withLock {
             if offline { throw Offline() }
+            if refusedKinds.contains(kind) { throw APIError.server(status: 400, message: "Unknown document kind \(kind)") }
             if let maxPayloadBytes, (payload?.count ?? 0) > maxPayloadBytes {
                 throw APIError.server(status: 413, message: "request entity too large")
             }
@@ -745,5 +748,40 @@ extension SQLiteDatabase {
         #expect(conflict.resolution?.choice.rawValue == "average")
         let payload = try #require(try phone.conflicts.payload(kind: SyncConflictStore.kind, id: id.uuidString))
         #expect(String(decoding: payload, as: UTF8.self).contains(#""choice":"average""#), "Kept as it came")
+    }
+}
+
+/// Review round 5, finding 1: a server from before a kind refuses it while a
+/// first sync compares every document; once the server takes the kind, the
+/// next sync sends it, with nothing edited and no new build.
+@MainActor
+@Suite struct NewerKindRetryTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test(arguments: [false, true])
+    func aKindTheServerRefusedDuringAFullComparisonIsSentOnceItTakesIt(sqlite: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk: TrainingPersistence & DocumentPersistence & SyncStateStore = sqlite
+            ? try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite")) : InMemoryTrainingPersistence()
+        let server = FakeDocumentServer()
+        server.refusedKinds = [NutritionStore.linkKind]
+        let store = try NutritionStore(persistence: disk)
+        let library = BarcodeLibrary(persistence: disk)
+        let code = try #require(GTIN("0012345678905"))
+        _ = await library.resolve(code, meal: "Lunch", date: monday) { _ in .unavailable }
+        await library.resolveWaiting { _ in .found(Foods.oats, attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Foods.oats, grams: 40)]
+        let first = try library.log(plate, consuming: [[scan.id]], to: store, on: monday, meal: "Lunch")
+        try library.undo(Set(first.map(\.id)), from: store)
+        let again = try library.log(plate, consuming: [[scan.id]], to: store, on: monday, meal: "Lunch")
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1")
+        try await sync.sync()
+        #expect(server.stored(NutritionStore.linkKind, again[0].id.uuidString) == nil, "Refused by the older server")
+        server.refusedKinds = []
+        try await sync.sync()
+        #expect(server.stored(NutritionStore.linkKind, again[0].id.uuidString)?.payload != nil, "Sent once the server takes it")
     }
 }
