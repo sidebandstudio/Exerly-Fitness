@@ -44,7 +44,16 @@ enum FoodFormat {
             let noun = String(serving.name.dropFirst(2))
             if count < 1 { name = "\(shown) \(noun)" } else if noun == "serving" { name = "\(shown) servings" }
         }
-        return "\(name) · \(weight(grams, unit: unit))"
+        return "\(name) · \(Self.measure(grams, of: food, unit: unit))"
+    }
+
+    /// How much of a food that is: a liquid's volume, else its weight, in the person's units.
+    static func measure(_ grams: Double, of food: ExerlyCore.Food, unit: MassUnit) -> String {
+        guard let milliliters = food.milliliters(grams: grams) else { return weight(grams, unit: unit) }
+        if unit == .pounds {
+            return "\(USUnits.fluidOunces(milliliters: milliliters).formatted(.number.precision(.fractionLength(0...1)))) fl oz"
+        }
+        return "\(milliliters.formatted(.number.precision(.fractionLength(0...(milliliters < 10 ? 1 : 0))))) ml"
     }
 
     /// A weight in the person's units.
@@ -165,11 +174,9 @@ struct FoodQuickRow: View {
                     }
                 }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
-                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(amounts.map { "\(name), \(detail), \(FoodFormat.kcal($0[.energy])) kilocalories, \(FoodMacroLine.spoken($0))" }
                     ?? "\(name), \(detail)")
                 .accessibilityHint(openHint)
-                .accessibilityAddTraits(.isButton)
                 .accessibilityIdentifier(openIdentifier)
             add
         }.padding(.vertical, 6)

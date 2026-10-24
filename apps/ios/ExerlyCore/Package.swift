@@ -14,7 +14,9 @@ let package = Package(
         ),
         .testTarget(
             name: "ExerlyCoreTests",
-            dependencies: ["ExerlyCore"]
+            dependencies: ["ExerlyCore"],
+            // Synthetic codes for the scanner benchmark; see BarcodeBenchmarkTests.
+            resources: [.copy("BarcodeFixtures")]
         ),
     ]
 )

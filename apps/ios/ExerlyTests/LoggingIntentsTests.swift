@@ -189,6 +189,130 @@ final class LoggingIntentsTests: XCTestCase {
                        "You've eaten 0 kcal and have 2,300 left of 2,300. Protein 0 of 160 g.", "Each day counts on its own")
     }
 
+    func testLogFoodByNameOrBarcodeFindsOnlyTheirOwnFoods() throws {
+        let account = try account()
+        let store = account.store
+        let bar = ExerlyCore.Food(name: "Synthetic protein bar", per100g: NutrientAmounts([.energy: 400]),
+                                  servings: [Serving("bar", grams: 60)], barcode: "036000291452")
+        try store.saveFood(bar)
+        try store.log(bar, serving: bar.servings[0], quantity: 1, on: today.adding(days: -1), meal: "Snacks")
+
+        var (text, entry) = try logged(store) { try LoggingActions.logFood(named: "protein BAR", servings: nil, meal: nil, in: account, now: time(15)) }
+        XCTAssertEqual(entry.food.foodID, bar.id)
+        XCTAssertEqual(entry.quantity, 1)
+        XCTAssertTrue(text.hasPrefix("Logged Synthetic protein bar, "), text)
+        (text, entry) = try logged(store) { try LoggingActions.logBarcode("0036000291452", servings: 2, meal: "Lunch", in: account, now: time(15)) }
+        XCTAssertEqual(entry.food.foodID, bar.id, "Leading zeros don't matter")
+        XCTAssertEqual(entry.meal, "Lunch")
+        XCTAssertEqual(entry.grams, 120)
+
+        let count = store.entries.count
+        XCTAssertThrowsError(try LoggingActions.logFood(named: "pizza", servings: nil, meal: nil, in: account)) { error in
+            XCTAssertEqual(self.invalid(error), "None of your foods is called pizza. Search for it in Exerly.")
+        }
+        XCTAssertThrowsError(try LoggingActions.logBarcode("4006381333931", servings: nil, meal: nil, in: account)) { error in
+            XCTAssertEqual(self.invalid(error), "That barcode isn't one of your foods yet. Scan it once in Exerly, and after that this logs it.")
+        }
+        XCTAssertThrowsError(try LoggingActions.logBarcode("12ab", servings: nil, meal: nil, in: account)) { error in
+            XCTAssertEqual(self.invalid(error), "Enter the 8 to 14 digits under the barcode.")
+        }
+        XCTAssertEqual(store.entries.count, count, "Nothing else was logged")
+    }
+
+    /// PARITY I17: a usual food chosen in Spotlight logs in one tap; a saved
+    /// food never logged opens its portion sheet.
+    func testAFoodChosenInSpotlightLogsIfUsualElseOpensItsPortion() throws {
+        let account = try account()
+        let store = account.store
+        let oats = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        let soup = ExerlyCore.Food(name: "Synthetic soup", per100g: NutrientAmounts([.energy: 60]), servings: [Serving("bowl", grams: 300)])
+        try store.saveFood(oats)
+        try store.saveFood(soup)
+        try store.log(oats, grams: 80, on: today.adding(days: -1), meal: "Breakfast")
+
+        let before = Set(store.entries.map(\.id))
+        let link = try LoggingActions.open(oats.id, in: account, now: time(8))
+        let entry = try XCTUnwrap(store.entries.first { !before.contains($0.id) })
+        XCTAssertEqual(entry.grams, 80)
+        XCTAssertEqual(entry.date, today)
+        // Today opens on its confirmation, whose Undo takes back this entry, for this account only.
+        let toast = try XCTUnwrap(TodayView.confirmation(for: link, in: account.workspace))
+        XCTAssertEqual(toast.message, "Logged Synthetic oats to Breakfast")
+        XCTAssertEqual(toast.undo, .remove([entry]))
+        XCTAssertNil(TodayView.confirmation(for: ExerlyLinks.logged(entry.id, accountID: "someone-else"), in: account.workspace),
+                     "Another account's link says nothing here")
+        XCTAssertNil(TodayView.confirmation(for: ExerlyLinks.logged(UUID(), accountID: "intents"), in: account.workspace),
+                     "Nor one for an entry that's gone")
+        let count = store.entries.count
+        XCTAssertEqual(try LoggingActions.open(soup.id, in: account, now: time(8)), ExerlyLinks.food(soup.id))
+        XCTAssertEqual(store.entries.count, count, "Its portion is checked first")
+    }
+
+    /// Decision 4: Log a food logs once, in place, and its answer's Undo
+    /// takes back that entry, for its account only, and is harmless again.
+    func testLogAFoodsAnswerUndoesItsEntryOnceForItsAccountOnly() throws {
+        let account = try account()
+        let store = account.store
+        let oats = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        try store.saveFood(oats)
+        try store.log(oats, grams: 80, on: today.adding(days: -1), meal: "Breakfast")
+        let logged = try LoggingActions.loggedFood(oats.id, servings: nil, in: account, now: time(8))
+        XCTAssertTrue(logged.text.hasPrefix("Logged Synthetic oats"))
+        XCTAssertEqual(LoggingActions.logged(entry: logged.entry.id, accountID: "intents", in: account)?.meal, "Breakfast",
+                       "The snippet reads what was logged, logging nothing")
+        let count = store.entries.count
+        XCTAssertFalse(try LoggingActions.undo(entry: logged.entry.id, accountID: "someone-else", in: account))
+        XCTAssertEqual(store.entries.count, count, "Another account's Undo takes nothing")
+        XCTAssertTrue(try LoggingActions.undo(entry: logged.entry.id, accountID: "intents", in: account))
+        XCTAssertFalse(store.entries.contains { $0.id == logged.entry.id })
+        XCTAssertFalse(try LoggingActions.undo(entry: logged.entry.id, accountID: "intents", in: account), "Again, it does nothing")
+        XCTAssertNil(LoggingActions.logged(entry: logged.entry.id, accountID: "intents", in: account), "The snippet says it's taken back")
+        XCTAssertEqual(store.entries.count, count - 1)
+    }
+
+    func testRepeatDayCopiesTheLastDayWithFoodOnlyIntoAnEmptyDay() throws {
+        let account = try account()
+        let store = account.store
+        let oats = ExerlyCore.Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380]))
+        let rice = ExerlyCore.Food(name: "Synthetic rice", per100g: NutrientAmounts([.energy: 130]))
+        try store.log(oats, grams: 100, on: today.adding(days: -2), meal: "Breakfast")
+        try store.log(rice, grams: 200, on: today.adding(days: -2), meal: "Dinner")
+        try store.log(rice, grams: 100, on: today.adding(days: -9), meal: "Lunch")
+
+        let text = try LoggingActions.repeatDay(in: account, now: time(9))
+        XCTAssertTrue(text.hasSuffix("'s food: 2 foods, 640 kcal."), text)
+        XCTAssertEqual(Set(store.entries(on: today).map(\.meal)), ["Breakfast", "Dinner"], "Each food into its own meal")
+        XCTAssertEqual(try LoggingActions.repeatDay(in: account, now: time(10)), "Today already has food, so nothing was repeated.")
+        XCTAssertEqual(store.entries(on: today).count, 2)
+
+        let empty = try self.account()
+        XCTAssertEqual(try LoggingActions.repeatDay(in: empty), "There's no day with food in the last week to repeat.")
+    }
+
+    func testLogByJSONLogsOnlyValidFoodsAndTheSummaryIsTheirDayAsJSON() throws {
+        let account = try account()
+        try setTargets(account)
+        let store = account.store
+        let shake = #"{ "name": "Synthetic shake", "source": "synthetic-app", "nutrients": { "energy": 240, "protein": 48 }, "serving": "one" }"#
+        let (text, entry) = try logged(store) { try LoggingActions.logJSON(shake, meal: nil, in: account, now: time(16)) }
+        XCTAssertEqual(text, "Logged Synthetic shake, 240 kcal, to Snacks. 2,060 kcal left today.")
+        XCTAssertEqual(entry.nutrients[.protein], 48)
+
+        for (bad, reason) in [("{ name: ", "Nothing was logged: that isn't JSON."),
+                              (#"{ "name": "X", "nutrients": {}, "serving": "one" }"#,
+                               "Nothing was logged: source is required, so entries can be traced to the shortcut.")] {
+            XCTAssertThrowsError(try LoggingActions.logJSON(bad, meal: "Lunch", in: account, now: time(16))) { error in
+                XCTAssertEqual(self.invalid(error), reason)
+            }
+        }
+        XCTAssertEqual(store.entries.count, 1)
+
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(LoggingActions.todaySummary(in: account, now: time(17)).utf8))
+            as? [String: [String: Any]])
+        XCTAssertEqual(json["consumed"]?["energy"] as? Double, 240)
+        XCTAssertEqual(json["remaining"]?["protein"] as? [String: Double], ["target": 112])
+    }
+
     // MARK: Opening the app
 
     func testOpenTheAppIntentsHandTheAppTheirLink() async throws {

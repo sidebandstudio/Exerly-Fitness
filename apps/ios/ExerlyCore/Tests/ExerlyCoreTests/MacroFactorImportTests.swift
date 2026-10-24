@@ -115,6 +115,78 @@ import Testing
         #expect(total.loggedAt == WeightTrend.noon(on: LocalDate("2026-09-29")!, in: newYork))
     }
 
+    /// PARITY N21-N27: a column for each of Exerly's 51 micronutrients arrives
+    /// in its own nutrient, in Exerly's unit, and none is left over. Only a few
+    /// of MacroFactor's real headers are known (MacroFactorColumns.swift:72-75);
+    /// the others are common spellings, so this tests the matching, not the
+    /// real export's 50 columns.
+    @Test func everyMicronutrientColumnArrivesInItsOwnNutrientAndUnit() throws {
+        let columns: [(header: String, nutrient: Nutrient, cell: Double, expected: Double)] = [
+            ("B1, Thiamine (mg)", .thiamin, 1.2, 1.2), ("B2, Riboflavin (mg)", .riboflavin, 1.3, 1.3),
+            ("B3, Niacin (mg)", .niacin, 16, 16), ("B5, Pantothenic Acid (mg)", .pantothenicAcid, 5, 5),
+            ("B6, Pyridoxine (mg)", .vitaminB6, 1.7, 1.7), ("B12, Cobalamin (mcg)", .vitaminB12, 2.4, 2.4),
+            ("Folate (mcg DFE)", .folate, 400, 400),
+            ("Vitamin A (mcg)", .vitaminA, 900, 900), ("Vitamin C (mg)", .vitaminC, 90, 90), ("Vitamin D (mcg)", .vitaminD, 15, 15),
+            ("Vitamin E (mg)", .vitaminE, 15.5, 15.5), ("Vitamin K (mcg)", .vitaminK, 120, 120),
+            ("Calcium (mg)", .calcium, 1000, 1000), ("Copper (mg)", .copper, 0.9, 0.9), ("Iron (mg)", .iron, 8, 8),
+            ("Magnesium (mg)", .magnesium, 420, 420), ("Manganese (mg)", .manganese, 2.3, 2.3),
+            ("Phosphorus (mg)", .phosphorus, 700, 700), ("Potassium (mg)", .potassium, 3400, 3400),
+            ("Selenium (mcg)", .selenium, 55, 55), ("Sodium (mg)", .sodium, 2300, 2300), ("Zinc (mg)", .zinc, 11, 11),
+            ("Histidine (g)", .histidine, 1.1, 1.1), ("Isoleucine (g)", .isoleucine, 1.4, 1.4), ("Leucine (g)", .leucine, 2.7, 2.7),
+            ("Lysine (g)", .lysine, 2.1, 2.1), ("Methionine (g)", .methionine, 0.7, 0.7), ("Phenylalanine (g)", .phenylalanine, 1.3, 1.3),
+            ("Threonine (g)", .threonine, 1.1, 1.1), ("Tryptophan (g)", .tryptophan, 0.3, 0.3), ("Valine (g)", .valine, 1.6, 1.6),
+            ("Cysteine (mg)", .cystine, 450, 0.45), ("Tyrosine (g)", .tyrosine, 1.2, 1.2),
+            ("Monounsaturated Fat (g)", .monounsaturatedFat, 25, 25), ("Polyunsaturated Fat (g)", .polyunsaturatedFat, 15, 15),
+            ("Saturated Fat (g)", .saturatedFat, 20, 20), ("Trans Fat (g)", .transFat, 0.5, 0.5),
+            ("Omega-3 Total (g)", .omega3, 2, 2), ("Omega-3 ALA (g)", .omega3ALA, 1.5, 1.5), ("Omega-3 EPA (g)", .omega3EPA, 0.25, 0.25),
+            ("Omega-3 DHA (g)", .omega3DHA, 0.25, 0.25), ("Omega-6 (g)", .omega6, 12, 12),
+            ("Fiber (g)", .fiber, 30, 30), ("Starch (g)", .starch, 90, 90), ("Sugars (g)", .sugars, 50, 50),
+            ("Sugars Added (g)", .addedSugars, 20, 20),
+            ("Alcohol (g)", .alcohol, 14, 14), ("Caffeine (mg)", .caffeine, 95, 95), ("Cholesterol (mg)", .cholesterol, 250, 250),
+            ("Choline (mg)", .choline, 550, 550), ("Water (g)", .water, 2500, 2500),
+        ]
+        #expect(Set(columns.map(\.nutrient)).count == columns.count, "One column per nutrient")
+        let date = TestCell.date(MacroFactorFixture.serial(LocalDate("2026-09-29")!))
+        let export = try read([
+            ("Calories & Macros", [MacroFactorFixture.header(["Date", "Calories (kcal)", "Protein (g)", "Carbs (g)", "Fat (g)"]),
+                                   [date, .n(2200), .n(150), .n(240), .n(70)]]),
+            ("Micronutrients", [MacroFactorFixture.header(["Date"] + columns.map(\.header)), [date] + columns.map { TestCell.n($0.cell) }]),
+        ])
+        #expect(export.report.unknownColumns["Micronutrients"] == nil && export.report.unusedColumns["Micronutrients"] == nil)
+        let amounts = try #require(export.dayTotals.first).nutrients
+        for column in columns {
+            #expect(close(amounts[column.nutrient], column.expected), "\(column.header) → \(column.nutrient): \(String(describing: amounts[column.nutrient]))")
+        }
+        // The omega-3 total is its own column, not the sum of its parts added again.
+        #expect(amounts[.omega3] == 2)
+    }
+
+    /// PARITY S06: a weight goal's starting and ending scale and trend weights
+    /// aren't kept. Exerly draws the start of a goal's path from its own trend.
+    @Test func aWeightGoalsStartAndEndWeightsAreLeftOut() throws {
+        let export = try read([("Weight Goals", [
+            MacroFactorFixture.header(["Goal", "Start Date", "End Date", "Goal Weight (kg)", "Goal Rate per Week (%)",
+                                       "Starting Scale Weight (kg)", "Starting Trend Weight (kg)", "Ending Scale Weight (kg)",
+                                       "Ending Trend Weight (kg)"]),
+            [.s("Lose"), .date(MacroFactorFixture.serial(LocalDate("2026-09-01")!)), .date(MacroFactorFixture.serial(LocalDate("2026-09-28")!)),
+             .n(78), .n(0.5), .n(83), .n(82.6), .n(81), .n(81.2)],
+        ])])
+        #expect(export.report.unusedColumns["Weight Goals"] == ["Starting Scale Weight (kg)", "Starting Trend Weight (kg)",
+                                                                "Ending Scale Weight (kg)", "Ending Trend Weight (kg)"])
+    }
+
+    /// PARITY N31: a day total, or a row without a time, has no time of day.
+    /// It's stamped at noon for the trend, but timing doesn't count it at 12:00.
+    @Test func importedDayTotalsAreLeftOutOfTimingByHour() throws {
+        let (_, nutrition, training) = try stores()
+        let export = try read()
+        #expect(MacroFactorImport(export, nutrition: nutrition, training: training).save(nutrition: nutrition, training: training)
+            .failures.isEmpty)
+        let timing = nutrition.timing(from: LocalDate("2026-09-29")!, through: LocalDate("2026-09-30")!, timeZone: newYork)
+        #expect(timing.hours[12].entries == 0 && timing.untimedEntries == export.dayTotals.count)
+        #expect(export.dayTotals.allSatisfy { $0.timeUnknown == true })
+    }
+
     @Test func dayFlagsGiveFastingPartialAndCompleteDaysWithNotes() throws {
         let days = try read().days
         #expect(days.map(\.date.description) == ["2026-09-29", "2026-09-30", "2026-10-01", "2026-10-02", "2026-10-03"])
@@ -184,6 +256,43 @@ import Testing
         #expect(export.report.unmappedExercises == ["Synthetic Zercher Hop": 1])
         #expect(export.report.skipped.contains { $0.sheet == "Workouts" && $0.row == 8 && $0.reason.contains("Back Squat") },
                 "A squat without a weight isn't a loggable set")
+    }
+
+    @Test func aWorkoutKeepsItsIDWhenTheFileIsReadInAnotherZone() throws {
+        let london = MacroFactorExport(try Spreadsheet.xlsx(XLSXBuilder(MacroFactorFixture.sheets).data()),
+                                       timeZone: TimeZone(identifier: "Europe/London")!, unit: .kilograms,
+                                       locale: Locale(identifier: "en_US"), now: Fixture.instant())
+        #expect(london.sessions.map(\.id) == (try read()).sessions.map(\.id), "Known by the start the file writes, not an instant")
+    }
+
+    /// An import's writes show once the outermost transaction commits, never on
+    /// a rollback, and hidden suggestions are a kind it can write.
+    @Test func writeAllPublishesAfterTheCommitAndTakesHiddenSuggestions() throws {
+        let (_, source, _) = try stores()
+        let oats = try source.log(Food(name: "Synthetic oats", per100g: NutrientAmounts([.energy: 380])), grams: 80,
+                                  on: LocalDate("2026-10-01")!, meal: "Breakfast", at: Fixture.instant())
+        try source.hideSuggestion(oats.food)
+        let hidden = try #require(source.hiddenSuggestions.first)
+        let entry = try #require(try source.payload(kind: NutritionStore.entryKind, id: oats.id.uuidString))
+        let suggestion = try #require(try source.payload(kind: NutritionStore.hiddenKind, id: hidden.id))
+
+        let (persistence, store, _) = try stores()
+        try persistence.performAtomically {
+            try store.writeAll(kind: NutritionStore.entryKind, [(oats.id.uuidString, entry)])
+            #expect(store.entries.isEmpty, "Not shown while the caller's transaction is open")
+        }
+        #expect(store.entries.map(\.id) == [oats.id], "Shown once it commits")
+        try store.writeAll(kind: NutritionStore.hiddenKind, [(hidden.id, suggestion)])
+        #expect(store.hiddenSuggestions.map(\.id) == [hidden.id])
+
+        struct Abandoned: Error {}
+        #expect(throws: Abandoned.self) {
+            try persistence.performAtomically {
+                try store.writeAll(kind: NutritionStore.entryKind, [(oats.id.uuidString, nil)])
+                throw Abandoned()
+            }
+        }
+        #expect(store.entries.map(\.id) == [oats.id], "A rolled-back removal isn't shown")
     }
 
     @Test func skippedRowsUnknownColumnsAndLeftOutSheetsAreReported() throws {
@@ -305,16 +414,16 @@ import Testing
         #expect(MacroFactorImport(try read(), nutrition: nutrition, training: training).steps.isEmpty)
     }
 
-    @Test func eachKindSavesAsOneUnit() throws {
+    @Test func theWholeImportSavesAsOneUnit() throws {
         let persistence = InMemoryTrainingPersistence()
         let nutrition = try NutritionStore(persistence: persistence, now: { Fixture.instant() })
         // A library without the bench press: the workouts can't be saved.
         let library = try ExerciseLibrary(exercises: ExerciseLibrary.bundled.exercises.filter { $0.id != "barbell-bench-press" })
         let training = try TrainingStore(persistence: persistence, library: library, now: { Fixture.instant() })
         let result = MacroFactorImport(try read(), nutrition: nutrition, training: training).save(nutrition: nutrition, training: training)
-        #expect(Array(result.failures.keys) == [.workouts])
+        #expect(Set(result.failures.keys) == Set(MacroFactorImportSummary.Kind.allCases))
         #expect(training.history.sessions.isEmpty && persistence.sessions.isEmpty, "Neither workout was saved")
-        #expect(nutrition.entries.count == 8 && nutrition.weights.count == 4, "The other kinds were")
+        #expect(nutrition.entries.isEmpty && nutrition.weights.isEmpty, "Nor anything else: no half-import")
     }
 
     @Test func yearsOfHistoryImportInOnePass() throws {

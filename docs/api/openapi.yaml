@@ -123,6 +123,61 @@ paths:
         '200': { $ref: '#/components/responses/SignedIn' }
         '401': { $ref: '#/components/responses/Problem' }
 
+  /auth/password/forgot:
+    post:
+      operationId: requestPasswordReset
+      tags: [Sessions]
+      summary: Email a password reset code
+      description: |
+        Always answers 202 with the same message, at once, before the address is
+        looked up; the code is issued and mailed afterwards. A new code ends
+        earlier ones. 5 requests per 15 minutes per address, 3 per hour per
+        email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '202': { description: Requested }
+        '400': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      tags: [Sessions]
+      summary: Choose a new password with a mailed code
+      description: |
+        The code lasts 15 minutes, works once and is used up by five wrong
+        guesses. Success revokes every session and personal access token; sign
+        in again with the new password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, example: ABCD-EFGH }
+                newPassword: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { description: Password changed }
+        '400':
+          description: A weak password, or `details.code = reset_code_invalid` for any wrong, used, expired or unknown case.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
   /auth/logout:
     post:
       operationId: signOut
@@ -137,6 +192,14 @@ paths:
       operationId: connectApple
       tags: [Account]
       summary: Connect Sign in with Apple to the signed-in account
+      description: |
+        `identityToken` and `nonce` are the Apple ID to connect. The session
+        alone isn't enough: send `password` for a password account, or for an
+        account without one, `currentIdentityToken` and `currentNonce` from a
+        Sign in with Apple in the last ten minutes as an Apple ID it already
+        has. Errors are as for deleting the account, including the shared
+        budget of ten failed confirmations per account per hour. A refused or
+        reused new token is a 403 (`apple_not_confirmed`).
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -149,18 +212,38 @@ paths:
               properties:
                 identityToken: { type: string }
                 nonce: { type: string }
+                password: { type: string }
+                currentIdentityToken: { type: string }
+                currentNonce: { type: string }
       responses:
         '200': { description: Already connected }
         '201': { description: Connected }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: disconnectApple
       tags: [Account]
       summary: Disconnect Sign in with Apple
-      description: Refused when the account has no password, because the person could not sign in again.
+      description: |
+        Needs `password`. Refused when the account has no password, because the
+        person could not sign in again. Wrong passwords count against the
+        shared budget of ten failed confirmations per account per hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
       responses:
         '200': { description: Disconnected }
         '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 
   /api/account:
     delete:
@@ -168,10 +251,19 @@ paths:
       tags: [Account]
       summary: Delete the account and all of its data
       description: |
-        Removes every row the account owns in one transaction. When the account
-        uses Sign in with Apple and the server can revoke Apple tokens, send
-        `appleAuthorizationCode` from a fresh Apple sign-in; revocation happens
-        first, and if it fails nothing is deleted (`502`).
+        Needs proof of identity as well as the session: `password` for a
+        password account, even one with Apple connected; for an account without
+        a password, `identityToken` and raw `nonce` from a Sign in with Apple
+        authorization in the last ten minutes for an Apple ID connected to it.
+        Wrong passwords and refused Apple confirmations share one budget of
+        ten per account per hour with the other routes that ask for proof;
+        past it, `429` with `details.code = too_many_attempts`. Removes every row the account owns,
+        including every session and token, in one transaction. When the account
+        uses Sign in with Apple and the server can revoke Apple tokens, also
+        send `appleAuthorizationCode` from the same authorization, or, for a
+        password account, from a fresh Sign in with Apple alongside the
+        password. Without it the answer is 400 `apple_reauthorization_required`.
+        Revocation happens first, and if it fails nothing is deleted (`502`).
       requestBody:
         required: true
         content:
@@ -181,6 +273,9 @@ paths:
               required: [confirm]
               properties:
                 confirm: { const: true }
+                password: { type: string }
+                identityToken: { type: string }
+                nonce: { type: string }
                 appleAuthorizationCode: { type: string }
       responses:
         '200':
@@ -194,10 +289,20 @@ paths:
                   apple_revoked: { type: boolean }
                   removed: { type: object, additionalProperties: { type: integer } }
         '400':
-          description: Missing confirmation, or `details.code = apple_reauthorization_required`.
+          description: |
+            Missing confirmation, or missing proof: `details.code` is
+            `password_required` or `apple_reauthorization_required`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: |
+            Wrong proof: `details.code` is `wrong_password` or
+            `apple_not_confirmed`. The session stays valid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
         '502': { $ref: '#/components/responses/Problem' }
 
   /api/export:
@@ -252,7 +357,10 @@ paths:
         (file pending proposals) and `write` (change documents directly). A
         token reaches only `/v1/*` and `/mcp`, never token management or
         the account, and can never decide a proposal. Every token write and
-        filed proposal adds an audit event.
+        filed proposal adds an audit event. A token outlives the session, so
+        creating one needs the same proof as deleting the account: `password`,
+        or for an account without one, `identityToken` and `nonce` from a
+        fresh Sign in with Apple. 30 per account per hour.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -269,6 +377,9 @@ paths:
                   minItems: 1
                   items: { type: string, enum: [read, propose, write] }
                 expires_in_days: { type: integer, minimum: 1, maximum: 3650 }
+                password: { type: string }
+                identityToken: { type: string }
+                nonce: { type: string }
       responses:
         '201':
           description: The token, including its secret, shown only now.
@@ -282,7 +393,9 @@ paths:
                     properties:
                       token: { type: string, example: exr_... }
         '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
 
   /v1/tokens/{id}:
     delete:
@@ -441,8 +554,16 @@ paths:
       description: |
         The body is `/api/export`'s JSON, up to 25 MB. Documents are checked as
         writes, then added with their exported revisions; one the account
-        already has is kept, so a second import changes nothing. Legacy tables
-        are listed, not imported. The app only: tokens get 403.
+        already has is kept, so a second import changes nothing. The older
+        tables (food, measurements, weights, water, diary days and the rest)
+        are restored with this account as owner and new row IDs, matched on
+        their natural keys so a second import adds nothing, and a day the
+        account already has keeps its own row. Each row passes the checks its
+        routes make; one that fails is listed in `skipped` with its `table`.
+        `restore_id` names what was restored, for `/v1/import/undo`. Sign-in
+        identities, webhooks and setup drafts are never restored
+        (`not_restored` says why). The app only: tokens get 403. 10 a minute
+        per account.
       requestBody:
         required: true
         content:
@@ -462,12 +583,76 @@ paths:
                     items:
                       type: object
                       properties:
-                        kind: { type: string }
-                        id: { type: string }
+                        kind: { type: string, description: A document's kind. }
+                        table: { type: string, description: An older table's name. }
+                        id: { type: string, nullable: true }
                         reason: { type: string }
+                  skipped_count: { type: integer, description: All left out; `skipped` lists 50. }
+                  restore_id: { type: string, description: Absent when nothing was restored. }
                   ignored_tables: { type: array, items: { type: string } }
+                  tables:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        restored: { type: integer }
+                        kept: { type: integer }
+                        skipped: { type: integer }
+                  restored:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        table: { type: string }
+                        id: { type: string }
+                        revision: { type: integer, nullable: true }
+                  not_restored: { type: object, additionalProperties: { type: string } }
         '400': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
+
+  /v1/import/undo:
+    post:
+      tags: [Sync]
+      operationId: undoImportRestore
+      summary: Undo a restore of the older tables
+      description: |
+        Removes the rows the restore named by `restore_id` added, in one
+        transaction. A row whose content changed since is kept. `rows`, if
+        sent, must be among them; any other row is refused. Rows a phone syncs
+        are marked deleted, with a change in its feed. Sent again, it answers
+        with the first Undo's counts and `already_undone: true`, so a client
+        that lost the answer can finish. The app only, 10 a minute per
+        account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restore_id]
+              properties:
+                restore_id: { type: string }
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      table: { type: string }
+                      id: { type: string }
+      responses:
+        '200':
+          description: What was removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed: { type: integer }
+                  kept: { type: integer }
+                  already_undone: { type: boolean }
+        '400': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
 
   /v1/documents/{kind}/{id}:
     parameters:
@@ -765,6 +950,9 @@ components:
           - experiment
           - gym_profile
           - hidden_suggestion
+          - import_provenance
+          - sync_conflict
+          - food_entry_link
           - proposal
           - audit_event
       description: |

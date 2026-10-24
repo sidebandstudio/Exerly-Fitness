@@ -283,7 +283,7 @@ final class NutritionEntryDraft: ObservableObject {
 
     var publishedServings: [Serving] {
         guard snapshot.unweighed != true else { return [] }
-        return (food.servings + food.recipePortions).reduce(into: []) { result, serving in
+        return (food.servings + food.recipePortions + food.kitchenMeasures).reduce(into: []) { result, serving in
             // Reopened entries also carry a synthetic oz/ml/fl oz serving.
             // Those are measures, not portions supplied by the food label.
             guard case .serving = NutritionPortionMeasure.saved(serving, food: food) else { return }
@@ -318,7 +318,7 @@ final class NutritionEntryDraft: ObservableObject {
     var canAddServing: Bool {
         guard snapshot.unweighed != true, let saved = store.food(food.id), saved.archivedAt == nil,
               [.custom, .imported].contains(saved.source), saved.ingredients == nil else { return false }
-        return publishedServings.isEmpty
+        return publishedServings.allSatisfy(food.kitchenMeasures.contains)
     }
 
     /// Saves a serving such as "1 slice" (a name without a count gets "1 ")
@@ -504,8 +504,13 @@ final class NutritionDiaryActions: ObservableObject {
     @Published private(set) var deleted: FoodEntry?
     @Published private(set) var error: String?
     private let store: NutritionStore
+    /// Undo of a delete goes through it, so an edit another device made since isn't overwritten.
+    private let conflicts: SyncConflictStore?
 
-    init(store: NutritionStore) { self.store = store }
+    init(store: NutritionStore, conflicts: SyncConflictStore? = nil) {
+        self.store = store
+        self.conflicts = conflicts
+    }
 
     func clearError() { error = nil }
 
@@ -551,7 +556,7 @@ final class NutritionDiaryActions: ObservableObject {
             return false
         }
         do {
-            try store.saveEntry(deleted)
+            if let conflicts { try conflicts.restore(deleted) } else { try store.saveEntry(deleted) }
             self.deleted = nil
             return true
         } catch {

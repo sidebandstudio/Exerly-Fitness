@@ -147,3 +147,35 @@ That's all. I'll enable the capability on `com.exerly.fitness` and the widgets
 extension, and regenerate the App Store profiles, through the API. Nothing is
 blocked meanwhile: the workout Live Activity and Dynamic Island don't need it,
 and the widgets ship once the group exists.
+
+## 2026-10-12 (Claude): PR #56 needs your review to reach `main`
+
+On 2026-10-11 you added `.github/CODEOWNERS` ("the maintainer reviews every
+file") and a ruleset requiring a pull request for `main`. GitHub now marks my PRs
+"review required", so `main` takes nothing from me without your approval, and
+the brief's daily merge is no longer something I can do on my own.
+
+Body tracking, diary depth and two bug fixes are in PR #56
+(https://github.com/sidebandstudio/Exerly-Fitness/pull/56); its checks run
+there. Merging deploys the API changes those features need, so the matching
+TestFlight build waits for it. Which do you want from now on?
+
+1. **You review and merge each PR.** I open one per landing and upload to
+   TestFlight after you merge.
+2. **Let me merge once checks pass.** Allow it in the ruleset (or add me as a
+   bypass actor), and I'll merge my own PRs as the brief describes.
+
+## 2026-10-20 (Claude): an email provider for password reset codes
+
+Forgot password is built: the API mails a short code and the app asks for it.
+The API has never sent email, so in production nothing goes out yet. Requests
+answer normally and the server logs that no mail was sent. Sending needs an
+account with a transactional email provider, which is your call (money and a
+new account). I haven't signed up for anything.
+
+What it needs from you: pick a provider (Postmark, Resend, or SMTP
+from the mail host behind sideband.studio), verify `sideband.studio` as a
+sending domain with its SPF/DKIM DNS records, and put the API key in
+DigitalOcean. Mail comes from `Exerly <hello@sideband.studio>` unless you set
+`MAIL_FROM`. Tell me which provider, and I'll add its transport to
+`apps/api/lib/mail.js` with tests.

@@ -16,6 +16,49 @@ public protocol SessionTransport: Sendable {
               as accountID: String) async throws -> (status: Int, data: Data)
 }
 
+/// How the person shows it's them, not just someone holding the session,
+/// before the account is deleted, Apple is connected or disconnected, or an
+/// agent token is created. A password account always uses `.password`, even
+/// with Apple connected; an account without one uses `.apple`.
+public enum AccountConfirmation: Sendable, Equatable {
+    /// The account's password. When the account also has Apple connected and
+    /// the server revokes Apple's authorization on deletion, deleting needs
+    /// the authorization code of a fresh Sign in with Apple as well; the
+    /// server asks with `appleReauthorizationRequired`.
+    case password(String, authorizationCode: String? = nil)
+    /// A Sign in with Apple authorization from moments ago, as an Apple ID the
+    /// account already has: its identity token and raw nonce, and its
+    /// authorization code, with which the server revokes Apple's authorization
+    /// when the account is deleted.
+    case apple(identityToken: String, rawNonce: String, authorizationCode: String?)
+
+    var fields: [String: Any] {
+        switch self {
+        case .password(let password, _): ["password": password]
+        case let .apple(identityToken, rawNonce, _): ["identityToken": identityToken, "nonce": rawNonce]
+        }
+    }
+
+    var body: [String: Any] {
+        var body = fields.merging(["confirm": true]) { current, _ in current }
+        switch self {
+        case .password(_, let authorizationCode?), .apple(_, _, let authorizationCode?):
+            body["appleAuthorizationCode"] = authorizationCode
+        default: break
+        }
+        return body
+    }
+
+    /// Connecting Apple sends the new Apple ID as `identityToken`, so an Apple
+    /// confirmation travels as `currentIdentityToken`.
+    var linkFields: [String: Any] {
+        switch self {
+        case .password(let password, _): ["password": password]
+        case let .apple(identityToken, rawNonce, _): ["currentIdentityToken": identityToken, "currentNonce": rawNonce]
+        }
+    }
+}
+
 /// One account's endpoints: documents and the account lifecycle. Every request
 /// is bound to `accountID`, so work started for one account can never read or
 /// write as another.
@@ -57,20 +100,23 @@ public struct AccountAPI: DocumentAPI {
 
     // MARK: Account lifecycle
 
-    /// Connects Sign in with Apple to this account. Throws `linkConflict`
-    /// when that Apple ID belongs to another Exerly account.
-    public func connectApple(identityToken: String, rawNonce: String) async throws {
-        let (status, json) = try await sendJSON("POST", "/api/account/identities/apple",
-                                                body: ["identityToken": identityToken, "nonce": rawNonce])
+    /// Connects Sign in with Apple to this account, once `confirmation` shows
+    /// it's the account's owner. Throws `linkConflict` when that Apple ID
+    /// belongs to another Exerly account, and the confirmation errors
+    /// `deleteAccount(confirmation:)` describes.
+    public func connectApple(identityToken: String, rawNonce: String,
+                             confirmation: AccountConfirmation) async throws {
+        let body = confirmation.linkFields.merging(["identityToken": identityToken, "nonce": rawNonce]) { _, new in new }
+        let (status, json) = try await sendJSON("POST", "/api/account/identities/apple", body: body)
         if status == 409 { throw APIError.linkConflict }
-        guard status == 200 || status == 201 else { throw Wire.failure(status, json) }
+        guard status == 200 || status == 201 else { throw Self.confirmationFailure(status, json) }
     }
 
-    /// Disconnects Sign in with Apple. Refused for an account with no password,
-    /// which could not sign in again.
-    public func disconnectApple() async throws {
-        let (status, json) = try await sendJSON("DELETE", "/api/account/identities/apple", body: nil)
-        guard status == 200 else { throw Wire.failure(status, json) }
+    /// Disconnects Sign in with Apple, given the account's password. Refused
+    /// for an account with no password, which could not sign in again.
+    public func disconnectApple(password: String) async throws {
+        let (status, json) = try await sendJSON("DELETE", "/api/account/identities/apple", body: ["password": password])
+        guard status == 200 else { throw Self.confirmationFailure(status, json) }
     }
 
     /// The full JSON export.
@@ -89,30 +135,57 @@ public struct AccountAPI: DocumentAPI {
     }
 
     /// Restores an Exerly JSON export, as `exportAccount()` returns it, into
-    /// this account. Documents the account already has are kept; importing
-    /// twice changes nothing.
+    /// this account: its documents and the server's older tables. Anything the
+    /// account already has is kept; importing twice changes nothing.
     public func importExport(_ export: Data) async throws -> ImportResult {
         let (status, data) = try await send("POST", "/v1/import", body: export, headers: ["Content-Type": "application/json"])
         let json = try? JSONSerialization.jsonObject(with: data)
         guard status == 200, let result = json as? [String: Any], let imported = result["imported"] as? Int,
               let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
-        let skipped = (result["skipped"] as? [[String: Any]] ?? []).compactMap { $0["reason"] as? String }
+        // A row of an older table says which table, by the name it has here.
+        let skipped = (result["skipped"] as? [[String: Any]] ?? []).compactMap { row -> String? in
+            guard let reason = row["reason"] as? String else { return nil }
+            guard let table = row["table"] as? String else { return reason }
+            return "\(ExerlyExportFile.restorable[table] ?? table): \(reason)"
+        }
+        let restored = (result["restored"] as? [[String: Any]] ?? []).compactMap { row -> RestoredRow? in
+            guard let table = row["table"] as? String, let id = row["id"] as? String else { return nil }
+            return RestoredRow(table: table, id: id, revision: (row["revision"] as? NSNumber)?.intValue)
+        }
         return ImportResult(imported: imported, kept: kept, skipped: skipped,
-                            ignoredTables: result["ignored_tables"] as? [String] ?? [])
+                            ignoredTables: result["ignored_tables"] as? [String] ?? [], restored: restored,
+                            notRestored: result["not_restored"] as? [String: String] ?? [:],
+                            restoreID: result["restore_id"] as? String,
+                            skippedCount: (result["skipped_count"] as? Int) ?? skipped.count)
     }
 
-    /// Deletes the account and everything in it on the server. Throws
-    /// `appleReauthorizationRequired` when the server needs a fresh Sign in
-    /// with Apple authorization code. The session owner then forgets the session.
-    public func deleteAccount(appleAuthorizationCode: String?) async throws {
-        var body: [String: Any] = ["confirm": true]
-        if let appleAuthorizationCode { body["appleAuthorizationCode"] = appleAuthorizationCode }
-        let (status, json) = try await sendJSON("DELETE", "/api/account", body: body)
-        guard status == 200 else {
-            if status == 400, Wire.code(json) == "apple_reauthorization_required" {
-                throw APIError.appleReauthorizationRequired
-            }
-            throw Wire.failure(status, json)
+    /// Undoes a restore of the server's older tables: the server removes the
+    /// rows it recorded for `restoreID`, except any changed since. All or nothing.
+    public func undoRestore(_ restoreID: String) async throws -> (removed: Int, kept: Int) {
+        let body: [String: Any] = ["restore_id": restoreID]
+        let (status, json) = try await sendJSON("POST", "/v1/import/undo", body: body)
+        guard status == 200, let result = json as? [String: Any], let removed = result["removed"] as? Int,
+              let kept = result["kept"] as? Int else { throw Wire.failure(status, json) }
+        return (removed, kept)
+    }
+
+    /// Deletes the account and everything in it on the server, once
+    /// `confirmation` shows it's the account's owner. Throws `wrongPassword`
+    /// for a wrong password, `passwordRequired` when the account needs its
+    /// password, and `appleReauthorizationRequired` when it needs a fresh Sign
+    /// in with Apple. Nothing is deleted then, and the session stays. After a
+    /// deletion the session owner forgets the session.
+    public func deleteAccount(confirmation: AccountConfirmation) async throws {
+        let (status, json) = try await sendJSON("DELETE", "/api/account", body: confirmation.body)
+        guard status == 200 else { throw Self.confirmationFailure(status, json) }
+    }
+
+    private static func confirmationFailure(_ status: Int, _ json: Any?) -> Error {
+        switch (status, Wire.code(json)) {
+        case (400, "apple_reauthorization_required"): APIError.appleReauthorizationRequired
+        case (400, "password_required"): APIError.passwordRequired
+        case (403, "wrong_password"): APIError.wrongPassword
+        default: Wire.failure(status, json)
         }
     }
 
@@ -127,16 +200,19 @@ public struct AccountAPI: DocumentAPI {
         return try rows.map(AccessToken.init(json:))
     }
 
-    /// Creates a token for the person's own agent. Every token can read;
-    /// `propose` lets it file proposals and `write` lets it change data. The
-    /// secret is returned here once and never again.
-    public func createAccessToken(name: String, scopes: Set<AccessToken.Scope>,
-                                  expiresInDays: Int? = nil) async throws -> CreatedAccessToken {
+    /// Creates a token for the person's own agent, once `confirmation` shows
+    /// it's the account's owner: a token outlives the session. Every token can
+    /// read; `propose` lets it file proposals and `write` lets it change data.
+    /// The secret is returned here once and never again. Throws the
+    /// confirmation errors `deleteAccount(confirmation:)` describes.
+    public func createAccessToken(name: String, scopes: Set<AccessToken.Scope>, expiresInDays: Int? = nil,
+                                  confirmation: AccountConfirmation) async throws -> CreatedAccessToken {
         let all = scopes.union([.read])
         var body: [String: Any] = ["name": name, "scopes": AccessToken.Scope.allCases.filter(all.contains).map(\.rawValue)]
         if let expiresInDays { body["expires_in_days"] = expiresInDays }
+        body.merge(confirmation.fields) { current, _ in current }
         let (status, json) = try await sendJSON("POST", "/v1/tokens", body: body)
-        guard status == 201, let row = json as? [String: Any] else { throw Wire.failure(status, json) }
+        guard status == 201, let row = json as? [String: Any] else { throw Self.confirmationFailure(status, json) }
         guard let secret = row["token"] as? String else {
             throw APIError.server(status: 409, message: "The token was created, but its secret can only be shown once. Revoke it and create another.")
         }
@@ -268,8 +344,30 @@ public struct ImportResult: Sendable, Hashable {
     public var kept: Int
     /// Documents that failed the server's checks, with the reasons (at most 50).
     public var skipped: [String]
-    /// Legacy tables in the export, which aren't imported.
+    /// Tables in the export the server doesn't know.
     public var ignoredTables: [String]
+    /// Rows of the server's older tables it restored, for Undo.
+    public var restored: [RestoredRow] = []
+    /// Tables never restored into another account, with why.
+    public var notRestored: [String: String] = [:]
+    /// The server's record of the restore, which Undo names; nil when it restored nothing.
+    public var restoreID: String?
+    /// How many documents and rows failed the checks; `skipped` lists at most 50.
+    public var skippedCount = 0
+}
+
+/// A row of the server's older tables that an import restored.
+public struct RestoredRow: Sendable, Hashable, Codable {
+    public var table: String
+    public var id: String
+    /// Its revision when restored; a row changed since is kept by Undo.
+    public var revision: Int?
+
+    public init(table: String, id: String, revision: Int?) {
+        self.table = table
+        self.id = id
+        self.revision = revision
+    }
 }
 
 /// A personal access token for the person's own agent, without its secret.
@@ -349,7 +447,8 @@ enum Wire {
         else { throw APIError.invalidResponse }
         let payload = try (json["payload"] as? [String: Any]).map { try JSONSerialization.data(withJSONObject: $0) }
         return RemoteDocument(kind: kind, id: id, revision: revision, deleted: deleted, payload: payload,
-                              sequence: json["sequence"] as? Int)
+                              sequence: json["sequence"] as? Int,
+                              updatedAt: (json["updated_at"] as? String).flatMap(ISOMilliseconds.parse).map(Date.milliseconds))
     }
 
     static func writeResult(_ status: Int, _ data: Data) throws -> DocumentWriteResult {

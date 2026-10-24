@@ -81,6 +81,9 @@ final class HealthSync: ObservableObject {
     /// A write is waiting for its delay or still running.
     var hasPendingWrite: Bool { scheduled != nil }
     private var rerun: (reading: Bool, pending: Bool, asked: Bool) = (false, false, false)
+    /// The weigh-ins a preview showed before Read weigh-ins was turned on.
+    /// Its next read imports only these, or nothing when Health has others.
+    private var reviewedWeights: Set<UUID>?
 
     static let writeCategories: [HealthCategory] = [.writeFood, .writeWeights, .writeWorkouts]
     static let observingKey = "health.observeWeights"
@@ -118,6 +121,7 @@ final class HealthSync: ObservableObject {
         self.workspace = workspace
         self.timeZone = timeZone
         accountID = workspace?.accountID
+        reviewedWeights = nil
         foodRecords = [:]
         foodFingerprints = [:]
         notices = [:]
@@ -147,13 +151,7 @@ final class HealthSync: ObservableObject {
         guard let workspace else { return }
         notices[category] = nil
         guard enabled else {
-            preferences.enabledAt[category] = nil
-            savePreferences()
-            if category == .readWeights {
-                // Another account turning it on here registers again.
-                defaults.set(false, forKey: Self.observingKey)
-                client.stopObservingWeights()
-            }
+            turnOff(category)
             return
         }
         guard client.isAvailable else {
@@ -179,10 +177,32 @@ final class HealthSync: ObservableObject {
         if category == .readWeights {
             startObserving()
             #if DEBUG
-            await HealthDebugSeed.seedIfRequested(client, timeZone: timeZone)
+            // A preview already seeded the readings it showed.
+            if reviewedWeights == nil { await HealthDebugSeed.seedIfRequested(client, timeZone: timeZone) }
             #endif
         }
         await sync()
+    }
+
+    /// Turns Read weigh-ins on after its preview, importing only the
+    /// readings shown. False when Health had others, so nothing was imported
+    /// and the switch stayed off for a preview of them.
+    func enableReadingWeights(reviewed: Set<UUID>) async -> Bool {
+        reviewedWeights = reviewed
+        await setEnabled(.readWeights, true)
+        if !preferences.isOn(.readWeights) { reviewedWeights = nil }
+        return notices[.readWeights] != Self.reviewChangedNotice
+    }
+
+    private func turnOff(_ category: HealthCategory) {
+        preferences.enabledAt[category] = nil
+        savePreferences()
+        if category == .readWeights {
+            reviewedWeights = nil
+            // Another account turning it on here registers again.
+            defaults.set(false, forKey: Self.observingKey)
+            client.stopObservingWeights()
+        }
     }
 
     /// Leaves a switch request in flight without letting it turn the switch on.
@@ -194,6 +214,8 @@ final class HealthSync: ObservableObject {
     }
 
     static let deniedNotice = "Health doesn't allow this. Allow it in the Health app: your profile › Apps › Exerly."
+    static let reviewChangedNotice = "Health has weigh-ins the preview didn't show. Turn this on to see them first."
+    private struct ReviewChanged: Error {}
 
     // MARK: Syncing
 
@@ -241,6 +263,9 @@ final class HealthSync: ObservableObject {
                 // Send them to the account now, as screens do after a change,
                 // so other devices see them; offline, they wait in the queue.
                 if imported.added + imported.updated + imported.removed > 0 { Task { await workspace.synchronize() } }
+            } catch is ReviewChanged {
+                turnOff(.readWeights)
+                notices[.readWeights] = Self.reviewChangedNotice
             } catch {
                 failure = "Weigh-ins from Health couldn't be read. Exerly will try again."
             }
@@ -285,6 +310,15 @@ final class HealthSync: ObservableObject {
             let knownMass = Set(mass.map(\.id)), knownFat = Set(bodyFat.map(\.id))
             mass += around.mass.filter { !knownMass.contains($0.id) }
             bodyFat += around.bodyFat.filter { !knownFat.contains($0.id) }
+        }
+        if let reviewed = reviewedWeights {
+            // Every weigh-in about to be saved, the pairing read's too, was
+            // shown or is already here. Exerly's own, from the watch, aren't previewed.
+            reviewedWeights = nil
+            let here = Set(nutrition.weights.map(\.id))
+            guard mass.allSatisfy({ reviewed.contains($0.id) || here.contains($0.id) || $0.source?.hasPrefix("com.exerly.") == true }) else {
+                throw ReviewChanged()
+            }
         }
         let paired = HealthWeightPairing.pair(mass, bodyFat)
         let imported = try nutrition.importHealthWeights(paired.weights, deleted: delta.deletedMass, timeZone: timeZone)

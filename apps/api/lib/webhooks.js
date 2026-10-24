@@ -203,30 +203,26 @@ async function deliverDue({ now = new Date(), send = post } = {}) {
     } catch (failure) {
       error = String(failure?.message ?? failure).slice(0, 200);
     }
+    // Results are written only while the webhook is still on. If it was
+    // paused while this delivery was in flight (a new password pauses
+    // webhooks made from a session), a stale result must not undo that.
+    const stillOn = { id: row.id, disabled_at: null };
     if (error) {
       const failures = row.failures + 1;
-      await store.update(
-        'webhooks',
-        { id: row.id },
-        {
-          failures,
-          last_error: error,
-          next_attempt_at: new Date(now.getTime() + retryDelay(failures)),
-          disabled_at: failures >= MAX_FAILURES ? now : null,
-        }
-      );
+      await store.update('webhooks', stillOn, {
+        failures,
+        last_error: error,
+        next_attempt_at: new Date(now.getTime() + retryDelay(failures)),
+        ...(failures >= MAX_FAILURES ? { disabled_at: now } : {}),
+      });
     } else {
-      await store.update(
-        'webhooks',
-        { id: row.id },
-        {
-          delivered_sequence: sequence,
-          failures: 0,
-          last_error: null,
-          last_delivery_at: now,
-          next_attempt_at: now,
-        }
-      );
+      await store.update('webhooks', stillOn, {
+        delivered_sequence: sequence,
+        failures: 0,
+        last_error: null,
+        last_delivery_at: now,
+        next_attempt_at: now,
+      });
     }
   }
   return rows.length;

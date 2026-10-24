@@ -51,6 +51,8 @@ enum JSONValue: Codable, Equatable {
 @MainActor
 final class SyncEngine: ObservableObject {
     static let shared = SyncEngine()
+    /// The app's store, for an intent that runs before any screen opens it.
+    static var launchContainer: ModelContainer?
     @Published private(set) var pendingCount = 0
     @Published private(set) var attentionCount = 0
     @Published private(set) var isSyncing = false
@@ -243,15 +245,16 @@ final class SyncEngine: ObservableObject {
     }
 
     @discardableResult
-    func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, commit: Bool = true) throws -> String {
+    func saveMeasurement(_ request: BodyMeasurementRequest, editing: BodyMeasurementDTO? = nil, clientID: String? = nil,
+                         commit: Bool = true) throws -> String {
         guard let accountID, let context else { throw APIError.unauthorized }
-        guard ["waist", "chest", "hips", "arms", "thighs", "neck", "calves", "body_fat"].contains(request.type),
+        guard BodySite(rawValue: request.type) != nil,
               request.value.isFinite, request.value > 0, request.value <= (request.type == "body_fat" ? 100 : 1000),
               request.unit == (request.type == "body_fat" ? "%" : "cm") else {
             throw APIError.serverError(400, "Enter a valid measurement.")
         }
         let old = try ownedResources().first { $0.kind == "measurement" && $0.entityID == editing?.client_id }
-        let entityID = old?.entityID ?? editing?.client_id ?? UUID().uuidString.lowercased()
+        let entityID = old?.entityID ?? editing?.client_id ?? clientID ?? UUID().uuidString.lowercased()
         var body = try object(JSONEncoder().encode(request))
         body["client_id"] = entityID
         let payload = try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
@@ -281,6 +284,138 @@ final class SyncEngine: ObservableObject {
             if automaticallySync { Task { await synchronize() } }
         }
         return entityID
+    }
+
+    /// Saves new measurements as one change: all of them or, on any error, none.
+    func saveMeasurements(_ requests: [BodyMeasurementRequest]) throws {
+        guard let context else { throw APIError.unauthorized }
+        do {
+            for request in requests { try saveMeasurement(request, commit: false) }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+    }
+
+    // MARK: Imported measurements
+
+    /// Everything a measurement says, from its payload; nil if it can't be read.
+    private func measurementState(_ resource: SyncedResource) -> MeasurementState? {
+        guard let body = try? object(resource.payload), let type = body["type"] as? String, let value = body["value"] as? Double,
+              let unit = body["unit"] as? String, let date = body["entry_date"] as? String else { return nil }
+        return MeasurementState(type: type, value: value, unit: unit, date: date, source: body["source"] as? String,
+                                note: body["note"] as? String, deleted: resource.tombstoned)
+    }
+
+    private static func state(of request: BodyMeasurementRequest) -> MeasurementState {
+        MeasurementState(type: request.type, value: request.value, unit: request.unit, date: request.entry_date,
+                         source: request.source, note: request.note)
+    }
+
+    /// The states of the measurements with these client IDs, deleted ones included.
+    func measurementStates(_ clientIDs: [String]) throws -> [String: MeasurementState] {
+        let wanted = Set(clientIDs)
+        var states: [String: MeasurementState] = [:]
+        for resource in try ownedResources() where resource.kind == "measurement" && wanted.contains(resource.entityID) {
+            states[resource.entityID] = measurementState(resource)
+        }
+        return states
+    }
+
+    /// Saves measurements with the client IDs an import chose: all or none.
+    /// One deleted here is brought back, keeping its server identity, and then
+    /// changed if the import's version differs, rather than created twice.
+    func saveImportedMeasurements(_ measurements: [(clientID: String, request: BodyMeasurementRequest)]) throws {
+        guard let context else { throw APIError.unauthorized }
+        let deleted = try ownedResources().filter { $0.kind == "measurement" && $0.tombstoned }
+        do {
+            for measurement in measurements {
+                if let resource = deleted.first(where: { $0.entityID == measurement.clientID }) {
+                    try queueUndoDeletion(resource)
+                    guard measurementState(resource) != Self.state(of: measurement.request),
+                          let current = try? JSONDecoder().decode(BodyMeasurementDTO.self, from: resource.payload) else { continue }
+                    try saveMeasurement(measurement.request, editing: current, commit: false)
+                } else {
+                    try saveMeasurement(measurement.request, clientID: measurement.clientID, commit: false)
+                }
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+    }
+
+    /// Changes measurements an import saved, all or none, each only while it's
+    /// still exactly in the state it's changed from.
+    func updateImportedMeasurements(_ changes: [(clientID: String, from: MeasurementState, request: BodyMeasurementRequest)]) throws
+        -> (updated: Int, kept: Int) {
+        guard let context else { throw APIError.unauthorized }
+        var updated = 0, kept = 0
+        let resources = try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned }
+        do {
+            for change in changes {
+                guard let resource = resources.first(where: { $0.entityID == change.clientID }) else { continue }
+                guard measurementState(resource) == change.from,
+                      let current = try? JSONDecoder().decode(BodyMeasurementDTO.self, from: resource.payload) else {
+                    kept += 1
+                    continue
+                }
+                try saveMeasurement(change.request, editing: current, commit: false)
+                updated += 1
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+        return (updated, kept)
+    }
+
+    /// Deletes the measurements an import saved, all or none, keeping any that
+    /// differ in any way from the state the import left.
+    func removeImportedMeasurements(_ measurements: [(clientID: String, state: MeasurementState)]) throws -> (removed: Int, kept: Int) {
+        guard let accountID, let context else { throw APIError.unauthorized }
+        var removed = 0, kept = 0
+        let resources = try ownedResources().filter { $0.kind == "measurement" && !$0.tombstoned }
+        do {
+            for measurement in measurements {
+                guard let resource = resources.first(where: { $0.entityID == measurement.clientID }) else { continue }
+                guard measurementState(resource) == measurement.state else {
+                    kept += 1
+                    continue
+                }
+                let pending = try operations().contains { $0.entityID == resource.entityID && $0.kind == "measurement" }
+                context.insert(PendingMutation(accountID: accountID, entityID: resource.entityID, kind: "measurement", method: "DELETE",
+                                               endpoint: "/api/measurements/{id}", payload: Data("{}".utf8),
+                                               baseRevision: pending ? nil : resource.revision))
+                resource.tombstoned = true
+                resource.syncState = "pending"
+                removed += 1
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize() } }
+        return (removed, kept)
+    }
+
+    /// Takes back deletions of these measurements, all or none: a deletion not
+    /// yet sent is cancelled, and one sent is reversed with the server's restore.
+    func restoreImportedMeasurements(_ clientIDs: [String]) throws {
+        guard let context else { throw APIError.unauthorized }
+        let wanted = Set(clientIDs)
+        do {
+            for resource in try ownedResources() where resource.kind == "measurement" && resource.tombstoned && wanted.contains(resource.entityID) {
+                try queueUndoDeletion(resource)
+            }
+            try context.save()
+        } catch { context.rollback(); throw error }
+        changeToken += 1
+        refreshCounts()
+        if automaticallySync { Task { await synchronize(force: true) } }
     }
 
     func importLegacyMeasurements(_ reviewed: [LegacyMeasurementImport]) throws {
@@ -361,7 +496,7 @@ final class SyncEngine: ObservableObject {
     }
 
     @discardableResult
-    func saveActivity(_ request: ActivityRequest, editing: ActivityDTO? = nil) throws -> String {
+    func saveActivity(_ request: ActivityRequest, editing: ActivityDTO? = nil, clientID: String? = nil) throws -> String {
         guard !request.type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, request.type.utf16.count <= 120,
               request.duration.isFinite, (0.1...1440).contains(request.duration),
               (request.intensity?.utf16.count ?? 0) <= 32, (request.category?.utf16.count ?? 0) <= 48,
@@ -371,8 +506,42 @@ final class SyncEngine: ObservableObject {
         var body = try object(JSONEncoder().encode(request))
         body["activity"] = request.type.trimmingCharacters(in: .whitespacesAndNewlines)
         body["entry_date"] = request.entryDate ?? today.rawValue
-        return try saveLog(kind: "activity", body: body, entityID: editing?.clientID, serverID: editing?.id,
+        return try saveLog(kind: "activity", body: body, entityID: editing?.clientID ?? clientID, serverID: editing?.id,
             revision: editing?.revision, createdAt: editing?.createdAt)
+    }
+
+    /// An activity's fingerprint as it's saved now (`HealthImport.fingerprint`),
+    /// nil when there's none or it was deleted.
+    func activityFingerprint(_ clientID: String) -> String? {
+        guard let resource = try? ownedResources().first(where: { $0.kind == "activity" && $0.entityID == clientID }), !resource.tombstoned,
+              let fields = try? object(resource.payload) else { return nil }
+        return HealthImport.fingerprint(activity: fields)
+    }
+
+    /// Reads the account's activities on these days from the server and
+    /// keeps them here. False when the server couldn't be reached, even if a
+    /// saved copy was read instead.
+    func refreshActivities(from: String, to: String) async -> Bool {
+        guard let owner = accountID, let path = try? collectionPath("activity") else { return false }
+        var page = 1
+        do {
+            while true {
+                let data = try await read("\(path)?from=\(from)&to=\(to)&include_deleted=true&limit=500&page=\(page)")
+                guard accountID == owner, !isOffline,
+                      let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return false }
+                for row in rows { try adoptLog(row, kind: "activity") }
+                if rows.count < 500 { return true }
+                page += 1
+            }
+        } catch { return false }
+    }
+
+    /// Which of these activities this phone has for the account, each true
+    /// if it was deleted.
+    func activityStates(_ clientIDs: Set<String>) -> [String: Bool] {
+        let resources = (try? ownedResources()) ?? []
+        return Dictionary(resources.filter { $0.kind == "activity" && clientIDs.contains($0.entityID) }.map { ($0.entityID, $0.tombstoned) },
+                          uniquingKeysWith: { first, _ in first })
     }
 
     @discardableResult
@@ -486,6 +655,11 @@ final class SyncEngine: ObservableObject {
     @discardableResult
     func deleteActivity(_ item: ActivityDTO) throws -> String { try deleteLog(kind: "activity", entityID: item.clientID, revision: item.revision) }
     @discardableResult
+    func deleteActivity(clientID: String) throws -> String {
+        guard let resource = try ownedResources().first(where: { $0.kind == "activity" && $0.entityID == clientID }) else { throw APIError.unknown }
+        return try deleteResource(resource)
+    }
+    @discardableResult
     func deleteSleep(_ item: SleepDTO) throws -> String { try deleteLog(kind: "sleep", entityID: item.clientID, revision: item.revision) }
     private func deleteLog(kind: String, entityID: String?, revision: Int) throws -> String {
         guard let resource = try ownedResources().first(where: { $0.kind == kind && $0.entityID == entityID }) else { throw APIError.unknown }
@@ -528,25 +702,34 @@ final class SyncEngine: ObservableObject {
         try undoDeletion(kind: "measurement", entityID: entityID)
     }
     private func undoDeletion(kind: String, entityID: String) throws {
-        guard let accountID, let context,
+        guard let context,
               let resource = try ownedResources().first(where: { $0.kind == kind && $0.entityID == entityID }) else { throw APIError.unknown }
-        let path = try collectionPath(kind)
-        let queue = try operations().filter { $0.entityID == entityID && $0.kind == kind }
         do {
-            if let deletion = queue.last, deletion.method == "DELETE", deletion.attempts == 0 {
-                context.delete(deletion)
-                resource.syncState = queue.count == 1 ? "synced" : "pending"
-            } else {
-                let operation = PendingMutation(accountID: accountID, entityID: entityID, kind: kind, method: "POST", endpoint: "\(path)/{id}/restore", payload: Data("{}".utf8), baseRevision: queue.isEmpty ? resource.revision : nil)
-                context.insert(operation)
-                resource.syncState = "pending"
-            }
-            resource.tombstoned = false
+            try queueUndoDeletion(resource)
             try context.save()
         } catch { context.rollback(); throw error }
         changeToken += 1
         refreshCounts()
         if automaticallySync { Task { await synchronize(force: true) } }
+    }
+
+    /// Takes back a deletion without saving: one never sent is cancelled; one
+    /// sent is reversed with the server's restore, keeping its server ID.
+    private func queueUndoDeletion(_ resource: SyncedResource) throws {
+        guard let accountID, let context else { throw APIError.unauthorized }
+        let path = try collectionPath(resource.kind)
+        let queue = try operations().filter { $0.entityID == resource.entityID && $0.kind == resource.kind }
+        if let deletion = queue.last, deletion.method == "DELETE", deletion.attempts == 0 {
+            context.delete(deletion)
+            resource.syncState = queue.count == 1 ? "synced" : "pending"
+        } else {
+            let operation = PendingMutation(accountID: accountID, entityID: resource.entityID, kind: resource.kind, method: "POST",
+                                            endpoint: "\(path)/{id}/restore", payload: Data("{}".utf8),
+                                            baseRevision: queue.isEmpty ? resource.revision : nil)
+            context.insert(operation)
+            resource.syncState = "pending"
+        }
+        resource.tombstoned = false
     }
 
     enum ChangeIntent { case save, delete, restore }
@@ -775,18 +958,23 @@ final class SyncEngine: ObservableObject {
     }
     func undoWeightDeletion(entityID: String) throws { try undoDeletion(kind: "weight", entityID: entityID) }
 
-    func addWater(_ current: WaterDayDTO, milliliters: Int) throws {
+    /// Adds water to a day, or takes it off when `milliliters` is negative,
+    /// down to zero as the server does. Returns the change queued, for undo.
+    @discardableResult
+    func addWater(_ current: WaterDayDTO, milliliters: Int) throws -> Int {
         guard let accountID, let context else { throw APIError.unauthorized }
-        guard (1...5000).contains(milliliters) else { throw APIError.serverError(400, "Enter 1 to 5,000 ml.") }
+        guard (1...5000).contains(abs(milliliters)) else { throw APIError.serverError(400, "Enter 1 to 5,000 ml.") }
         let day = current.entry_date
         let old = try ownedResources().first { $0.kind == "water" && $0.entityID == day }
         let snapshot = try old.map { try JSONDecoder().decode(WaterDayDTO.self, from: $0.payload) } ?? current
-        let body: [String: Any] = ["entry_date": day, "deltaMl": milliliters]
+        let change = WaterDay.change(milliliters, to: snapshot.ml)
+        guard change != 0 else { throw APIError.serverError(400, "There's no water to remove on this day.") }
+        let body: [String: Any] = ["entry_date": day, "deltaMl": change]
         let payload = try JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
         let resource = old ?? SyncedResource(accountID: accountID, kind: "water", entityID: day, payload: payload)
         do {
             if old == nil { context.insert(resource); resource.revision = current.revision }
-            resource.payload = try JSONEncoder().encode(WaterDayDTO(entry_date: day, ml: snapshot.ml + milliliters, revision: resource.revision))
+            resource.payload = try JSONEncoder().encode(WaterDayDTO(entry_date: day, ml: snapshot.ml + change, revision: resource.revision))
             resource.syncState = "pending"
             resource.updatedAt = Date()
             context.insert(PendingMutation(accountID: accountID, entityID: day, kind: "water", method: "POST", endpoint: "/api/water", payload: payload, baseRevision: nil))
@@ -795,6 +983,7 @@ final class SyncEngine: ObservableObject {
         changeToken += 1
         refreshCounts()
         if automaticallySync { Task { await synchronize() } }
+        return change
     }
 
     func saveDiaryDay(_ current: DiaryDayDTO, status: DiaryLoggingStatus, note: String) throws {
@@ -988,7 +1177,7 @@ final class SyncEngine: ObservableObject {
                         // and subsequent feed read recover intervening device changes.
                         var projected = value
                         projected["ml"] = try remaining.reduce(value["ml"] as? Int ?? 0) { total, pending in
-                            total + (try object(pending.payload)["deltaMl"] as? Int ?? 0)
+                            max(0, total + (try object(pending.payload)["deltaMl"] as? Int ?? 0))
                         }
                         resource.payload = try JSONSerialization.data(withJSONObject: projected)
                     }

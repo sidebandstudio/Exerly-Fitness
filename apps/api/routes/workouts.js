@@ -66,3 +66,4 @@ router.delete(
 );
 
 module.exports = router;
+module.exports.readExercises = readExercises;

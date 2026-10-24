@@ -5,7 +5,7 @@ struct BarcodeScannerView: View {
     var initialDate: CalendarDay
     var initialMealType = "snack"
     var onLogged: () -> Void = {}
-    @StateObject private var camera = CameraCaptureController()
+    @StateObject private var camera = BarcodeCamera()
     @State private var foundFood: OpenFoodItem?
     @State private var code = ""
     @State private var format = "ean13"
@@ -20,7 +20,7 @@ struct BarcodeScannerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if cameraAllowed {
-                    CameraPreview(controller: camera)
+                    CameraPreview(camera: camera, viewfinder: .zero)
                         .frame(height: 280)
                         .overlay { RoundedRectangle(cornerRadius: 12).stroke(.white, lineWidth: 2).padding(.horizontal, 24).padding(.vertical, 52).allowsHitTesting(false) }
                         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -71,7 +71,7 @@ struct BarcodeScannerView: View {
                     foundFood = nil
                     message = nil
                     isLoading = false
-                    camera.resumeScanning()
+                    camera.start()
                 }.frame(minHeight: 44)
                 NavigationLink("Create food with this barcode") {
                     CreateFoodView(initialBarcode: code) { food in foundFood = food }
@@ -89,10 +89,9 @@ struct BarcodeScannerView: View {
             }
         }
         .task { await checkPermission() }
-        .onChange(of: camera.detected) { _, detected in
-            guard let detected else { return }
-            code = detected.value
-            format = detected.symbology
+        .onReceive(camera.accepted) { detected in
+            code = detected.gtin.key
+            format = "gtin14"
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             beginLookup()
         }

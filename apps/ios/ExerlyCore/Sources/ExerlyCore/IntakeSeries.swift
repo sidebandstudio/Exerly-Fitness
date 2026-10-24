@@ -38,8 +38,9 @@ public struct IntakeDay: Sendable, Hashable, Identifiable {
     public var totals: NutrientAmounts
 
     public var id: LocalDate { date }
-    /// Food was logged but the day doesn't count, so it isn't known intake.
-    public var isPartial: Bool { !counted && entries > 0 }
+    /// Marked partial, or food was logged but the day doesn't count, so it
+    /// isn't known intake.
+    public var isPartial: Bool { !counted && (entries > 0 || status == .partial) }
 
     public init(date: LocalDate, status: DayStatus, counted: Bool, entries: Int, totals: NutrientAmounts) {
         self.date = date
@@ -106,7 +107,9 @@ public struct IntakeSeries: Sendable, Hashable {
 
     public var countedDays: Int { days.filter(\.counted).count }
     public var partialDays: Int { days.filter(\.isPartial).count }
-    /// Days with nothing logged and no fast.
+    /// Counted days marked as a fast, a known zero or what was logged on them.
+    public var fastedDays: Int { days.filter { $0.counted && $0.status == .fasting }.count }
+    /// Days with nothing logged, not marked partial and no fast: unknown, not zero.
     public var emptyDays: Int { days.count - countedDays - partialDays }
 
     /// The goal on a date, from the plan version in force then.

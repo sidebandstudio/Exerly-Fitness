@@ -11,10 +11,10 @@ with Apple to an existing password account, sign in first, then open Profile,
 Account settings. An Apple-only account must keep Apple connected so you can
 continue signing in.
 
-The current internal TestFlight build connects to private staging on devbox1.
-Turn on Tailscale before signing in or syncing. It uses a separate account
-service from the public website. Internal test credentials are provided
-privately; they are not a public demo account.
+Forgot your password? On the sign-in screen, choose Forgot password and enter
+your email. Exerly emails a code that works for 15 minutes. Enter it with a new
+password; every device is then signed out, so sign in again with the new
+password. If no email arrives, check spam, then choose Send a new code.
 
 ## Log food and training
 
@@ -48,12 +48,13 @@ are not troubleshooting steps for unsynced records.
 
 ## Apple Health and progress photos
 
-Profile, Apple Health controls whether Exerly reads today's steps and active
-Calories. Missing data can mean there are no samples or that read access is
+Profile, Apple Health has a switch for each kind of data: reading weigh-ins
+and body fat, reading steps and active Calories, and saving food, weigh-ins and
+workouts. Missing data can mean there are no samples or that read access is
 off. Check permissions in the Health app. Exerly does not infer which read
 permissions you declined.
 
-Progress, Photos stores selected photos on this device. Choose Compare and
+Progress, Photos stores photos you take or choose on this device. Choose Compare and
 select two photos to compare them. Account JSON exports do not include progress
 photos, and photos are not uploaded to Exerly's account service.
 
@@ -63,9 +64,9 @@ Open Profile, Account settings, Export data. Share account export prepares a
 JSON file of your records. Offline, Share device export includes only records
 available on this device.
 
-Delete account shows a confirmation before deleting. Apple-linked accounts may
-need to authorize the deletion through Apple. A failed request keeps the account
-available so you can retry. If the service confirms deletion but local cleanup
+Delete account offers an export first and lists what is removed. Confirm with
+your password, or with Sign in with Apple for an Apple-linked account. A wrong
+password or a failed request deletes nothing, so you can retry. If the service confirms deletion but local cleanup
 fails, keep the app installed and use the cleanup retry.
 
 Account deletion does not remove data from Apple Health or files and copies

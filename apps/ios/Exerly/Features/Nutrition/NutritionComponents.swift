@@ -7,11 +7,17 @@ struct NutritionNumberInput: View {
     var identifier = ""
     var integer = false
     var placeholder = "Unknown"
+    @State private var focusRequest = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // The caption is part of the field: a tap on it starts typing, which
+            // matters when the keyboard's bar leaves only the caption showing.
             Text(title).font(.exLabel).foregroundStyle(Color.exTextSecondary)
-            ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, identifier: identifier)
+                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                .onTapGesture { focusRequest += 1 }
+            ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, identifier: identifier,
+                               focusRequest: focusRequest)
                 .padding(ExSpacing.item).background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))
         }
     }
@@ -263,12 +269,7 @@ enum NutritionFormat {
     /// DatePicker needs a Date; keep its calendar day in the account's time zone.
     /// The same time of day on another day, so moving an entry's day keeps when it was eaten.
     static func sameTime(_ instant: Date, on day: LocalDate, timeZone: TimeZone) -> Date {
-        guard LocalDate(instant, in: timeZone) != day else { return instant }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        var parts = calendar.dateComponents([.hour, .minute, .second, .nanosecond], from: instant)
-        (parts.year, parts.month, parts.day) = (day.year, day.month, day.day)
-        return calendar.date(from: parts)?.roundedToMilliseconds ?? instant
+        day.sameTime(as: instant, in: timeZone)
     }
 
     /// Hour and minute on the account's clock.

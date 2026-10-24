@@ -89,6 +89,9 @@ struct NutritionEntryNutrientsEditor: View {
                     errorsFocused = true
                 }
             }
+            .exFieldOrder(([Nutrient.energy, .protein, .carbohydrate, .fat]
+                + Nutrient.Group.allCases.filter { $0 != .energy && $0 != .macros }.flatMap { group in Nutrient.allCases.filter { $0.group == group } })
+                .map { "nutrition.correction.\($0.rawValue)" })
             .navigationTitle("Entry nutrition").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -121,7 +124,7 @@ struct NutritionEntryNutrientsEditor: View {
         NutritionNumberInput(title: "\(nutrient == .energy ? "Calories" : nutrient.name) (\(nutrient.unit.rawValue))", text: Binding(
             get: { draft.fields[nutrient]?.text ?? "" },
             set: { draft.fields[nutrient]?.text = $0 }
-        ))
+        ), identifier: "nutrition.correction.\(nutrient.rawValue)")
         .accessibilityIdentifier("nutrition.correction.\(nutrient.rawValue)")
     }
 

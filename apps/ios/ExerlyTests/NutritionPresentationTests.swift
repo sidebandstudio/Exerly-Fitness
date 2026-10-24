@@ -1,4 +1,5 @@
 import ExerlyCore
+import SwiftUI
 import XCTest
 @testable import Exerly
 
@@ -17,7 +18,9 @@ final class NutritionPresentationTests: XCTestCase {
         let entry = try XCTUnwrap(draft.save())
         let reopened = NutritionEntryDraft(store: store, food: entry.food.foodForLogging(serving: entry.serving),
                                           date: date, meal: "Lunch", editing: entry)
-        XCTAssertEqual(reopened.publishedServings, [scoop])
+        // Its label's scoop, then a liquid's spoons and cups; never the synthetic fl oz.
+        XCTAssertEqual(reopened.publishedServings, [scoop] + food.kitchenMeasures)
+        XCTAssertEqual(food.kitchenMeasures.map(\.name), ["1 tbsp", "1 tsp", "1 cup"])
         XCTAssertEqual(reopened.measure, .fluidOunces)
         XCTAssertEqual(try reopened.preview().grams, entry.grams)
         XCTAssertFalse(reopened.selectPortion(try XCTUnwrap(entry.serving)))
@@ -754,6 +757,64 @@ final class NutritionPresentationTests: XCTestCase {
         XCTAssertEqual(workspace.nutrition.entries.first, entry)
         XCTAssertNil(actions.deleted)
         XCTAssertNotNil(actions.error)
+    }
+
+    /// Review round 1: Next went by place on screen and skipped Fat when
+    /// "Carbohydrate (g)" wrapped. It follows the form's declared order.
+    func testNextFollowsTheFormsDeclaredOrder() {
+        let order = NutritionFoodEditor.fieldOrder
+        XCTAssertEqual(Array(order.prefix(5)), ["nutrition.labelGrams", "nutrition.nutrient.energy", "nutrition.nutrient.protein",
+                                                "nutrition.nutrient.carbohydrate", "nutrition.nutrient.fat"])
+        XCTAssertEqual(ExFieldOrder.following("nutrition.nutrient.carbohydrate", in: order).first, "nutrition.nutrient.fat")
+        XCTAssertEqual(Set(order).count, order.count, "Each field once")
+        XCTAssertTrue(ExFieldOrder.following("nutrition.nutrient.energy", in: ["nutrition.nutrient.energy"]).isEmpty, "Last: no Next")
+        XCTAssertTrue(ExFieldOrder.following("elsewhere", in: order).isEmpty, "A field outside the order has no Next")
+        XCTAssertTrue(ExFieldOrder.following("", in: order).isEmpty)
+    }
+
+    /// Confirming review: the declared order alone didn't prove that Next
+    /// follows it, and on an iPhone the four numbers never fall out of line.
+    /// On an iPad at the largest text size they take two columns, where
+    /// "Carbohydrate (g)" wraps and "Fat (g)" beside it doesn't, so Fat's
+    /// field sits higher and, by place on screen, Next skipped it.
+    func testNextWalksTheMacrosInOrderWhenOnlyCarbohydratesCaptionWraps() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "next-order-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = try TrainingWorkspace(accountID: "next-order", root: root)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        // An 11-inch iPad Air in portrait, tall enough to lay out every field.
+        window.frame = CGRect(x: 0, y: 0, width: 820, height: 2400)
+        let editor = UIHostingController(rootView: NutritionFoodEditor(workspace: workspace) { _ in })
+        editor.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+        window.rootViewController = editor
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        func field(_ nutrient: String) -> UITextField? {
+            var found: UITextField?
+            func search(_ view: UIView) {
+                if let text = view as? UITextField, text.accessibilityIdentifier == "nutrition.nutrient.\(nutrient)" { found = text }
+                view.subviews.forEach(search)
+            }
+            search(window)
+            return found
+        }
+        for _ in 0..<100 where field("fat") == nil { try await Task.sleep(for: .milliseconds(20)) }
+        try await Task.sleep(for: .milliseconds(300))
+        let carbohydrate = try XCTUnwrap(field("carbohydrate"))
+        let fat = try XCTUnwrap(field("fat"))
+        let carbohydrateFrame = carbohydrate.convert(carbohydrate.bounds, to: window)
+        let fatFrame = fat.convert(fat.bounds, to: window)
+        XCTAssertGreaterThan(fatFrame.minX, carbohydrateFrame.maxX, "Fat is beside Carbohydrate")
+        XCTAssertGreaterThan(carbohydrateFrame.minY - fatFrame.minY, 8, "Carbohydrate's caption wraps and Fat's doesn't")
+
+        let order = ["energy", "protein", "carbohydrate", "fat"]
+        for (index, nutrient) in order.enumerated() {
+            let current = try XCTUnwrap(field(nutrient))
+            let coordinator = try XCTUnwrap(current.delegate as? ExNumericTextField.Coordinator)
+            let expected = index + 1 < order.count ? "nutrition.nutrient.\(order[index + 1])" : nil
+            XCTAssertEqual(coordinator.field(after: current)?.accessibilityIdentifier, expected, "Next after \(nutrient)")
+        }
     }
 }
 

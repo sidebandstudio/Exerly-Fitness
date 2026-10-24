@@ -121,22 +121,3 @@ struct NutritionCopyView: View {
         return defaults + [source]
     }
 }
-
-struct NutritionDateView: View {
-    @Binding var date: LocalDate
-    let timeZone: TimeZone
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                DatePicker("Diary date", selection: Binding(
-                    get: { NutritionFormat.pickerDate(date, timeZone: timeZone) },
-                    set: { date = LocalDate($0, in: timeZone) }), displayedComponents: .date)
-                    .datePickerStyle(.graphical).padding()
-            }
-            .navigationTitle("Choose a date").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }.environment(\.timeZone, timeZone)
-    }
-}

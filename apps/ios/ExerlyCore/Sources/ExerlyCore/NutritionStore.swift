@@ -16,7 +16,7 @@ public final class NutritionStore {
 
     public private(set) var foods: [Food] = []
     /// Oldest first.
-    public private(set) var entries: [FoodEntry] = []
+    public private(set) var entries: [FoodEntry] = [] { didSet { entryPositions = nil } }
     public private(set) var days: [LocalDate: NutritionDay] = [:]
     /// Oldest first.
     public private(set) var weights: [WeightEntry] = []
@@ -24,14 +24,21 @@ public final class NutritionStore {
     public private(set) var plans: [NutritionPlan] = []
     /// Foods the person asked not to be suggested, the latest first.
     public private(set) var hiddenSuggestions: [HiddenSuggestion] = []
+    /// The entries each entry logged from an undone scan stands in for, by its ID.
+    public private(set) var links: [UUID: EntryLink] = [:]
 
-    static let foodKind = "saved_food"
-    static let entryKind = "food_entry"
-    static let dayKind = "nutrition_day"
-    static let weightKind = "weight_entry"
+    nonisolated static let foodKind = "saved_food"
+    nonisolated static let entryKind = "food_entry"
+    nonisolated static let dayKind = "nutrition_day"
+    nonisolated static let weightKind = "weight_entry"
     nonisolated static let planKind = "nutrition_plan"
-    static let hiddenKind = "hidden_suggestion"
+    nonisolated static let hiddenKind = "hidden_suggestion"
+    nonisolated static let linkKind = "food_entry_link"
 
+    /// Each entry's place in `entries` by ID, built when first needed after
+    /// they change: a sync looks every entry up, and a scan for each took 30 s
+    /// on the main actor with three years of food (PARITY B03).
+    @ObservationIgnored private var entryPositions: [String: Int]?
     @ObservationIgnored let persistence: TrainingPersistence & DocumentPersistence
     @ObservationIgnored let now: () -> Date
 
@@ -51,15 +58,32 @@ public final class NutritionStore {
             .sorted(by: Self.planOrder)
         hiddenSuggestions = try persistence.loadDocuments(kind: Self.hiddenKind)
             .map { try decoder.decode(HiddenSuggestion.self, from: $0) }.sorted(by: Self.hiddenOrder)
+        links = Dictionary(try persistence.loadDocuments(kind: Self.linkKind)
+            .map { try decoder.decode(EntryLink.self, from: $0) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
-    static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
+    /// Starts from documents already read and decoded off the main actor
+    /// (StoredAccount), so a long history opens without blocking it.
+    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: StoredAccount.Nutrition,
+                now: @escaping () -> Date = Date.init) {
+        self.persistence = persistence
+        self.now = { now().roundedToMilliseconds }
+        foods = loaded.foods
+        entries = loaded.entries
+        days = loaded.days
+        weights = loaded.weights
+        plans = loaded.plans
+        hiddenSuggestions = loaded.hidden
+        links = Dictionary(loaded.links.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
 
-    static func planOrder(_ a: NutritionPlan, _ b: NutritionPlan) -> Bool {
+    nonisolated static func hiddenOrder(_ a: HiddenSuggestion, _ b: HiddenSuggestion) -> Bool { (a.hiddenAt, a.id) > (b.hiddenAt, b.id) }
+
+    nonisolated static func planOrder(_ a: NutritionPlan, _ b: NutritionPlan) -> Bool {
         (a.startDate, a.createdAt, a.id.uuidString) < (b.startDate, b.createdAt, b.id.uuidString)
     }
 
-    static func entryOrder(_ a: FoodEntry, _ b: FoodEntry) -> Bool {
+    nonisolated static func entryOrder(_ a: FoodEntry, _ b: FoodEntry) -> Bool {
         (a.date, a.loggedAt, a.id.uuidString) < (b.date, b.loggedAt, b.id.uuidString)
     }
 
@@ -135,10 +159,24 @@ public final class NutritionStore {
         try commit(Self.entryKind, entry.id.uuidString, entry)
     }
 
+    /// Deletes these entries, those still logged, inside the caller's
+    /// transaction; returns those it deleted. Hand `publish` to `afterCommit`.
+    func writeDeletes(_ ids: [UUID]) throws -> (ids: [UUID], publish: () -> Void) {
+        let deleted = ids.filter { id in entries.contains { $0.id == id } }
+        let publish = try deleted.map { try prepareWrite(kind: Self.entryKind, id: $0.uuidString, payload: nil) }
+        return (deleted, { publish.forEach { $0() } })
+    }
+
+    /// Deletes these entries, those still logged, together, or none of them
+    /// if saving fails.
+    public func deleteEntries(_ ids: [UUID]) throws {
+        try persistence.performAtomically { persistence.afterCommit(try writeDeletes(ids).publish) }
+    }
+
     public func deleteEntry(_ id: UUID) throws {
         guard entries.contains(where: { $0.id == id }) else { throw StoreError.notFound }
         let publish = try prepareWrite(kind: Self.entryKind, id: id.uuidString, payload: nil)
-        publish()
+        persistence.afterCommit(publish)
     }
 
     /// Copies a day's entries (or one meal's) to another day, as new entries.
@@ -205,6 +243,20 @@ public final class NutritionStore {
     /// Logs several foods to one meal at once, all or none. Each problem names its food.
     @discardableResult
     public func log(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date? = nil) throws -> [FoodEntry] {
+        var entries: [FoodEntry] = []
+        try persistence.performAtomically {
+            let written = try writeLog(plate, on: date, meal: meal, at: time)
+            entries = written.entries
+            persistence.afterCommit(written.publish)
+        }
+        return entries
+    }
+
+    /// Writes a plate's entries inside the caller's transaction without
+    /// publishing them. Hand `publish` to `afterCommit`, so a failed commit
+    /// leaves memory as untouched as the disk.
+    func writeLog(_ plate: [PlateItem], on date: LocalDate, meal: String, at time: Date?, replacing: [[UUID]] = []) throws
+        -> (entries: [FoodEntry], publish: () -> Void) {
         let loggedAt = time?.roundedToMilliseconds ?? now()
         var problems: [String] = []
         var logged: [FoodEntry] = []
@@ -218,8 +270,15 @@ public final class NutritionStore {
             }
         }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
-        try saveAll(logged)
-        return logged
+        var seen = Set<String>()
+        let invalid = logged.flatMap(\.problems).filter { seen.insert($0).inserted }
+        guard invalid.isEmpty else { throw StoreError.invalid(invalid) }
+        var publish = try logged.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+        for (entry, replaced) in zip(logged, replacing) where !replaced.isEmpty {
+            let link = EntryLink(id: entry.id, replaces: replaced)
+            publish.append(try prepareWrite(kind: Self.linkKind, id: entry.id.uuidString, payload: ExerlyJSON.canonical(link)))
+        }
+        return (logged, { publish.forEach { $0() } })
     }
 
     /// Copies entries to a day as new entries, into `meal` or each into its own.
@@ -316,11 +375,10 @@ public final class NutritionStore {
         var seen = Set<String>()
         let problems = batch.flatMap(\.problems).filter { seen.insert($0).inserted }
         guard problems.isEmpty else { throw StoreError.invalid(problems) }
-        var publish: [() -> Void] = []
         try persistence.performAtomically {
-            publish = try batch.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+            let publish = try batch.map { try prepareWrite(kind: Self.entryKind, id: $0.id.uuidString, payload: ExerlyJSON.canonical($0)) }
+            persistence.afterCommit { publish.forEach { $0() } }
         }
-        publish.forEach { $0() }
     }
 
     // MARK: Days
@@ -397,7 +455,7 @@ public final class NutritionStore {
             throw StoreError.invalid(["This weigh-in comes from Apple Health. Delete it in the Health app and Exerly will follow."])
         }
         let publish = try prepareWrite(kind: Self.weightKind, id: id.uuidString, payload: nil)
-        publish()
+        persistence.afterCommit(publish)
     }
 
     // MARK: Plans
@@ -445,62 +503,79 @@ public final class NutritionStore {
     /// publishes them in one step, so an import of thousands doesn't sort the
     /// log once per document. Callers check the documents first.
     func writeAll(kind: String, _ documents: [(id: String, payload: Data?)]) throws {
-        let decoder = ExerlyJSON.decoder
-        let removed = Set(documents.filter { $0.payload == nil }.map(\.id))
-        var changed = Set<String>()
-        var publish: () -> Void = {}
+        // Published once the outermost transaction commits, never on a rollback.
         try persistence.performAtomically {
-            var canonical: [Data] = []
-            for document in documents {
-                if let payload = document.payload {
-                    let data = try canonicalize(kind: kind, payload: payload)
-                    try persistence.saveDocument(kind: kind, id: document.id, payload: data)
-                    canonical.append(data)
-                    changed.insert(document.id)
-                } else {
-                    try persistence.deleteDocument(kind: kind, id: document.id)
-                }
-            }
-            let kept = { (id: String) in !changed.contains(id) && !removed.contains(id) }
-            switch kind {
-            case Self.foodKind:
-                let added = try canonical.map { try decoder.decode(Food.self, from: $0) }
-                publish = { [self] in
-                    foods = (foods.filter { kept($0.id) } + added)
-                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                }
-            case Self.entryKind:
-                let added = try canonical.map { try decoder.decode(FoodEntry.self, from: $0) }
-                publish = { [self] in entries = (entries.filter { kept($0.id.uuidString) } + added).sorted(by: Self.entryOrder) }
-            case Self.dayKind:
-                let added = try canonical.map { try decoder.decode(NutritionDay.self, from: $0) }
-                publish = { [self] in
-                    for id in removed { if let date = LocalDate(id) { days[date] = nil } }
-                    for day in added { days[day.date] = day }
-                }
-            case Self.weightKind:
-                let added = try canonical.map { try decoder.decode(WeightEntry.self, from: $0) }
-                publish = { [self] in weights = (weights.filter { kept($0.id.uuidString) } + added).sorted { $0.at < $1.at } }
-            case Self.planKind:
-                let added = try canonical.map { try decoder.decode(NutritionPlan.self, from: $0) }
-                publish = { [self] in plans = (plans.filter { kept($0.id.uuidString) } + added).sorted(by: Self.planOrder) }
-            default:
-                throw DocumentError(message: "Unknown kind \(kind)")
+            persistence.afterCommit(try prepareWrites(kind: kind, documents.map { DocumentWrite(kind: kind, id: $0.id, payload: $0.payload) }))
+        }
+    }
+
+    /// Persists documents of one kind and returns one step that publishes them
+    /// all. Call inside `performAtomically`.
+    public func prepareWrites(kind: String, _ writes: [DocumentWrite]) throws -> () -> Void {
+        let decoder = ExerlyJSON.decoder
+        let removed = Set(writes.filter { $0.payload == nil }.map(\.id))
+        var changed = Set<String>()
+        var canonical: [Data] = []
+        for write in writes {
+            if let payload = write.payload {
+                let data = try canonicalize(kind: kind, payload: payload)
+                try persistence.saveDocument(kind: kind, id: write.id, payload: data)
+                canonical.append(data)
+                changed.insert(write.id)
+            } else {
+                try persistence.deleteDocument(kind: kind, id: write.id)
             }
         }
-        publish()
+        let kept = { (id: String) in !changed.contains(id) && !removed.contains(id) }
+        switch kind {
+        case Self.foodKind:
+            let added = try canonical.map { try decoder.decode(Food.self, from: $0) }
+            return { [self] in
+                foods = (foods.filter { kept($0.id) } + added)
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            }
+        case Self.entryKind:
+            let added = try canonical.map { try decoder.decode(FoodEntry.self, from: $0) }
+            return { [self] in entries = (entries.filter { kept($0.id.uuidString) } + added).sorted(by: Self.entryOrder) }
+        case Self.dayKind:
+            let added = try canonical.map { try decoder.decode(NutritionDay.self, from: $0) }
+            return { [self] in
+                for id in removed { if let date = LocalDate(id) { days[date] = nil } }
+                for day in added { days[day.date] = day }
+            }
+        case Self.weightKind:
+            let added = try canonical.map { try decoder.decode(WeightEntry.self, from: $0) }
+            return { [self] in weights = (weights.filter { kept($0.id.uuidString) } + added).sorted { $0.at < $1.at } }
+        case Self.planKind:
+            let added = try canonical.map { try decoder.decode(NutritionPlan.self, from: $0) }
+            return { [self] in plans = (plans.filter { kept($0.id.uuidString) } + added).sorted(by: Self.planOrder) }
+        case Self.hiddenKind:
+            let added = try canonical.map { try decoder.decode(HiddenSuggestion.self, from: $0) }
+            return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { kept($0.id) } + added).sorted(by: Self.hiddenOrder) }
+        case Self.linkKind:
+            let added = try canonical.map { try decoder.decode(EntryLink.self, from: $0) }
+            return { [self] in
+                for id in removed { if let id = UUID(uuidString: id) { links[id] = nil } }
+                for link in added { links[link.id] = link }
+            }
+        default:
+            throw DocumentError(message: "Unknown kind \(kind)")
+        }
     }
 
     // MARK: Private
 
     func commit<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws {
         let publish = try prepareWrite(kind: kind, id: id, payload: ExerlyJSON.canonical(value))
-        publish()
+        persistence.afterCommit(publish)
     }
 }
 
 extension NutritionStore: DocumentHost {
-    public var documentKinds: [String] { [Self.foodKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind, Self.hiddenKind] }
+    /// Links arrive before entries, so an entry coming back finds what stands in for it.
+    public var documentKinds: [String] {
+        [Self.foodKind, Self.linkKind, Self.entryKind, Self.dayKind, Self.weightKind, Self.planKind, Self.hiddenKind]
+    }
 
     public func documentIDs(kind: String) -> [String] {
         switch kind {
@@ -510,6 +585,7 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: weights.map(\.id.uuidString)
         case Self.planKind: plans.map(\.id.uuidString)
         case Self.hiddenKind: hiddenSuggestions.map(\.id)
+        case Self.linkKind: links.keys.map(\.uuidString)
         default: []
         }
     }
@@ -517,13 +593,21 @@ extension NutritionStore: DocumentHost {
     public func payload(kind: String, id: String) throws -> Data? {
         switch kind {
         case Self.foodKind: return try food(id).map(ExerlyJSON.canonical)
-        case Self.entryKind: return try entries.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
+        case Self.entryKind: return try entry(id).map(ExerlyJSON.canonical)
         case Self.dayKind: return try LocalDate(id).flatMap { days[$0] }.map(ExerlyJSON.canonical)
         case Self.weightKind: return try weights.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.planKind: return try plans.first { $0.id.uuidString == id }.map(ExerlyJSON.canonical)
         case Self.hiddenKind: return try hiddenSuggestions.first { $0.id == id }.map(ExerlyJSON.canonical)
+        case Self.linkKind: return try UUID(uuidString: id).flatMap { links[$0] }.map(ExerlyJSON.canonical)
         default: return nil
         }
+    }
+
+    private func entry(_ id: String) -> FoodEntry? {
+        if entryPositions == nil {
+            entryPositions = Dictionary(entries.indices.map { (entries[$0].id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        return entryPositions?[id].map { entries[$0] }
     }
 
     public func canonicalize(kind: String, payload: Data) throws -> Data {
@@ -535,6 +619,10 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: return try ExerlyJSON.canonical(decoder.decode(WeightEntry.self, from: payload))
         case Self.planKind: return try ExerlyJSON.canonical(decoder.decode(NutritionPlan.self, from: payload))
         case Self.hiddenKind: return try ExerlyJSON.canonical(decoder.decode(HiddenSuggestion.self, from: payload))
+        case Self.linkKind:
+            // Bounded and never naming itself, whatever another device sent.
+            let link = try decoder.decode(EntryLink.self, from: payload)
+            return try ExerlyJSON.canonical(EntryLink(id: link.id, replaces: link.replaces))
         default: throw DocumentError(message: "Unknown kind \(kind)")
         }
     }
@@ -561,6 +649,10 @@ extension NutritionStore: DocumentHost {
         case Self.hiddenKind:
             let hidden = try decoder.decode(HiddenSuggestion.self, from: payload)
             problems = (hidden.id == id ? [] : ["the ID doesn't match"]) + hidden.problems
+        case Self.linkKind:
+            let link = try decoder.decode(EntryLink.self, from: payload)
+            problems = (link.id.uuidString == id ? [] : ["the ID doesn't match"])
+                + (link.replaces == EntryLink.bounded(link.replaces, for: link.id) ? [] : ["a link names itself, twice or too many"])
         default:
             throw DocumentError(message: "Unknown kind \(kind)")
         }
@@ -580,6 +672,10 @@ extension NutritionStore: DocumentHost {
         case Self.weightKind: return try whole(WeightEntry.self)
         case Self.planKind: return try whole(NutritionPlan.self)
         case Self.hiddenKind: return try whole(HiddenSuggestion.self)
+        case Self.linkKind:
+            // Everything either side links stays linked.
+            let mine = try decoder.decode(EntryLink.self, from: local), theirs = try decoder.decode(EntryLink.self, from: remote)
+            return try ExerlyJSON.canonical(EntryLink(id: mine.id, replaces: mine.replaces + theirs.replaces))
         case Self.dayKind:
             let original = try base.map { try decoder.decode(NutritionDay.self, from: $0) }
             var merged = try decoder.decode(NutritionDay.self, from: local)
@@ -596,6 +692,85 @@ extension NutritionStore: DocumentHost {
         }
     }
 
+    public func fieldGroups(kind: String) -> [[String]] { Self.fieldGroups(of: kind) }
+
+    nonisolated static func fieldGroups(of kind: String) -> [[String]] {
+        switch kind {
+        case entryKind: [["grams", "serving", "quantity", "amountChanged"]]
+        case weightKind: [["at", "date"]]
+        default: []
+        }
+    }
+
+    /// The entry logged again from the scan of `id`, an entry Undo removed.
+    public func replacement(kind: String, id: String) -> String? {
+        guard kind == Self.entryKind, let entry = UUID(uuidString: id) else { return nil }
+        let standIns = links.values.filter { $0.replaces.contains(entry) }.map(\.id)
+        return standIns.isEmpty ? nil : entries.first { standIns.contains($0.id) }?.id.uuidString
+    }
+
+    /// An entry and the one logged again from its scan never both stand:
+    /// one coming back where the other is logged becomes its change, merged
+    /// against the version both devices last agreed on, and stays deleted.
+    /// The device holding the entry logged again does this when the other
+    /// comes back, so every device ends with the one entry.
+    /// A field both changed differently takes `prefer`'s value and waits in
+    /// a conflict about the entry logged again with the other value.
+    public func reconcile(kind: String, id: String, payload: Data, isBack: Bool, preferring prefer: Merge.Preference,
+                          agreed: (String) -> Data?) throws -> Reconciliation? {
+        guard kind == Self.entryKind else { return nil }
+        let decoder = ExerlyJSON.decoder
+        let entry = try decoder.decode(FoodEntry.self, from: payload)
+        guard isBack, let standIn = replacement(kind: kind, id: id).flatMap(UUID.init),
+              let target = entries.first(where: { $0.id == standIn }) else { return nil }
+        // The original as the entry logged again, so only what was changed differs.
+        func asTarget(_ data: Data) throws -> Data {
+            var version = try decoder.decode(FoodEntry.self, from: data)
+            version.id = target.id
+            return try ExerlyJSON.canonical(version)
+        }
+        let base = try agreed(entry.id.uuidString).map(asTarget), mine = try ExerlyJSON.canonical(target), theirs = try asTarget(payload)
+        let folded = try merge(kind: kind, base: base, local: mine, remote: theirs, preferring: prefer)
+        let link = EntryLink(id: target.id, replaces: (links[target.id]?.replaces ?? []) + (links[entry.id]?.replaces ?? []) + [entry.id])
+        var clashes: [Reconciliation.Clash] = []
+        if !folded.conflicts.isEmpty {
+            let other = try merge(kind: kind, base: base, local: mine, remote: theirs, preferring: prefer == .local ? .remote : .local)
+            clashes = [Reconciliation.Clash(kind: kind, id: target.id.uuidString, base: base, local: folded.merged, remote: other.merged,
+                                            fields: folded.conflicts)]
+        }
+        return Reconciliation(writes: [DocumentWrite(kind: kind, id: target.id.uuidString, payload: folded.merged),
+                                       DocumentWrite(kind: Self.linkKind, id: target.id.uuidString, payload: try ExerlyJSON.canonical(link)),
+                                       DocumentWrite(kind: kind, id: id, payload: nil)],
+                              clashes: clashes)
+    }
+
+    /// Hiding a food again elsewhere, or linking an entry, needs no review.
+    public func reviewsConflicts(kind: String) -> Bool { kind != Self.hiddenKind && kind != Self.linkKind }
+
+    /// Field by field: an entry's amount (grams, serving, quantity) and a
+    /// weigh-in's time and day each change together. A day without a common
+    /// version starts from an empty one. Hidden suggestions never conflict.
+    public func merge(kind: String, base: Data?, local: Data, remote: Data, preferring prefer: Merge.Preference) throws -> MergeOutcome {
+        switch kind {
+        case Self.entryKind, Self.weightKind:
+            return try fieldMerge(kind: kind, base: base, local: local, remote: remote, groups: fieldGroups(kind: kind), preferring: prefer)
+        case Self.hiddenKind, Self.linkKind:
+            return MergeOutcome(merged: try merge(kind: kind, base: base, local: local, remote: remote), conflicts: [])
+        case Self.dayKind:
+            let decoder = ExerlyJSON.decoder
+            var merged = try decoder.decode(NutritionDay.self, from: local)
+            let original = try base.map { try decoder.decode(NutritionDay.self, from: $0) } ?? NutritionDay(date: merged.date)
+            let other = try decoder.decode(NutritionDay.self, from: remote)
+            let recorder = Merge.Recorder(prefer)
+            merged.status = Merge.value(original.status, merged.status, other.status, recorder, "status")
+            merged.notes = Merge.value(original.notes, merged.notes, other.notes, recorder, "notes")
+            merged.tags = try decoder.decode(NutritionDay.self, from: merge(kind: kind, base: base, local: local, remote: remote)).tags
+            return MergeOutcome(merged: try ExerlyJSON.canonical(merged), conflicts: recorder.conflicts)
+        default:
+            return try fieldMerge(kind: kind, base: base, local: local, remote: remote, preferring: prefer)
+        }
+    }
+
     public func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
         let decoder = ExerlyJSON.decoder
         guard let payload else {
@@ -608,6 +783,7 @@ extension NutritionStore: DocumentHost {
                 case Self.weightKind: weights.removeAll { $0.id.uuidString == id }
                 case Self.planKind: plans.removeAll { $0.id.uuidString == id }
                 case Self.hiddenKind: hiddenSuggestions.removeAll { $0.id == id }
+                case Self.linkKind: if let id = UUID(uuidString: id) { links[id] = nil }
                 default: break
                 }
             }
@@ -633,6 +809,9 @@ extension NutritionStore: DocumentHost {
         case Self.hiddenKind:
             let hidden = try decoder.decode(HiddenSuggestion.self, from: canonical)
             return { [self] in hiddenSuggestions = (hiddenSuggestions.filter { $0.id != id } + [hidden]).sorted(by: Self.hiddenOrder) }
+        case Self.linkKind:
+            let link = try decoder.decode(EntryLink.self, from: canonical)
+            return { [self] in links[link.id] = link }
         default:
             let plan = try decoder.decode(NutritionPlan.self, from: canonical)
             return { [self] in plans = (plans.filter { $0.id != plan.id } + [plan]).sorted(by: Self.planOrder) }

@@ -253,40 +253,34 @@ final class ProductionUITests: ExerlyUITestCase {
         signIn(app, email: person.email)
         tap(app.buttons["Progress"], in: app)
         selectProgress("Photos", in: app)
-        tap(app.buttons["Add photo"], in: app)
-        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 10))
-        dismissPhotoPickerIntroduction(in: app)
+        tap(app.buttons["photos.add"], in: app)
         // The opt-in simulator has two freshly imported geometric PNGs first.
         let libraryPhotos = app.images.matching(identifier: "PXGGridLayout-Info")
-        choosePickerPhoto(libraryPhotos.element(boundBy: 0), in: app)
-        let photos = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "progress.photo."))
+        for (index, pose) in ["front", "side"].enumerated() {
+            tap(app.buttons["photoAdd.slot.\(pose)"], in: app)
+            tap(app.buttons["Photo library"], in: app)
+            XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 10))
+            dismissPhotoPickerIntroduction(in: app)
+            choosePickerPhoto(libraryPhotos.element(boundBy: index), in: app)
+            XCTAssertTrue(app.buttons["photoAdd.slot.\(pose)"].waitForExistence(timeout: 10))
+        }
+        XCTAssertEqual(app.buttons["photoAdd.save"].label, "Save 2 photos")
+        tap(app.buttons["photoAdd.save"], in: app)
+        let photos = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "photos.slot.", "Front photo"))
         XCTAssertTrue(photos.firstMatch.waitForExistence(timeout: 10))
-        tap(app.buttons["progress.addPhoto"], in: app)
-        dismissPhotoPickerIntroduction(in: app)
-        choosePickerPhoto(libraryPhotos.element(boundBy: 1), in: app)
-        XCTAssertTrue(photos.element(boundBy: 1).waitForExistence(timeout: 10))
-        XCTAssertEqual(photos.count, 2)
         capture(app, "design-photos-populated")
-        tap(app.buttons["Compare"], in: app)
-        tap(photos.element(boundBy: 0), in: app)
-        tap(photos.element(boundBy: 1), in: app)
-        revealAbove(app.staticTexts["Compare photos"], in: app)
-        XCTAssertTrue(app.staticTexts["Compare photos"].exists)
-        capture(app, "design-photos-comparison")
-        tap(app.buttons["Done"], in: app)
         tap(photos.firstMatch, in: app)
-        XCTAssertTrue(app.navigationBars["Progress photo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["photoViewer.share"].waitForExistence(timeout: 5))
         capture(app, "design-photo-detail")
-        tap(app.buttons["Close"], in: app)
+        tap(app.buttons["photoViewer.done"], in: app)
         app.terminate()
         app.launchArguments.removeAll { $0 == "--ui-testing" }
         app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 20))
         tap(app.buttons["Progress"], in: app)
         selectProgress("Photos", in: app)
-        reveal(photos.element(boundBy: 1), in: app)
-        XCTAssertTrue(photos.element(boundBy: 1).waitForExistence(timeout: 10))
-        XCTAssertEqual(photos.count, 2)
+        XCTAssertTrue(photos.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Side photo")).firstMatch.exists)
         capture(app, "design-photos-relaunched")
     }
 
@@ -661,13 +655,15 @@ final class ProductionUITests: ExerlyUITestCase {
         let app = launch(resetSession: true, accountControls: "delete-error")
         XCTAssertTrue(app.staticTexts["morgan@example.test"].waitForExistence(timeout: 10))
         tap(app.buttons["account.delete"], in: app)
-        tap(app.buttons["account.confirmDelete"], in: app)
+        replace(app.secureTextFields["account.deletePassword"], with: "Synthetic-Password-1", in: app)
+        app.typeText("\n")
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
         capture(app, "account-delete-confirmation")
-        tap(app.alerts.buttons["Cancel"], in: app)
-        XCTAssertTrue(app.buttons["account.confirmDelete"].exists)
+        tap(app.buttons["account.deleteConfirmation.confirmCancel"], in: app)
+        XCTAssertTrue(app.buttons["account.confirmDelete"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Account deleted"].exists)
         tap(app.buttons["account.confirmDelete"], in: app)
-        tap(app.alerts.buttons["Delete account"], in: app)
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
         let failure = app.staticTexts["Could not reach Exerly. Check your connection and try again."]
         reveal(failure, in: app)
         XCTAssertTrue(failure.waitForExistence(timeout: 10))
@@ -735,9 +731,11 @@ final class ProductionUITests: ExerlyUITestCase {
         }
         tap(app.navigationBars.buttons["Account"], in: app)
         tap(app.buttons["account.delete"], in: app)
-        tap(app.buttons["account.confirmDelete"], in: app)
+        replace(app.secureTextFields["account.deletePassword"], with: "Simulator-Test-123!", in: app)
+        app.typeText("\n")
+        XCTAssertTrue(app.staticTexts["Delete this account?"].waitForExistence(timeout: 10))
         try await control(["dropAccountDeleteAcknowledgement": true])
-        tap(app.alerts.buttons["Delete account"], in: app)
+        tap(app.buttons["account.deleteConfirmation.confirm"], in: app)
         XCTAssertTrue(app.buttons["I already have an account"].waitForExistence(timeout: 20))
         capture(app, "account-live-deleted")
         var check = URLRequest(url: URL(string: fixtureURL + "/api/export")!)
@@ -1275,7 +1273,7 @@ final class ProductionUITests: ExerlyUITestCase {
         slots[0]["target"] = target
         days[0]["slots"] = slots
         after["days"] = days
-        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic program coach", "scopes": ["propose"], "expires_in_days": 7], token: token)
+        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic program coach", "scopes": ["propose"], "expires_in_days": 7, "password": "Simulator-Test-123!"], token: token)
         let secret = try XCTUnwrap(created["token"] as? String)
         let envelope = try await request("POST", "/mcp", body: ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "propose", "arguments": [
             "title": "Leave more reps in reserve", "summary": "Review a change to future workout targets.", "confidence": "low",
@@ -1590,6 +1588,11 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         reveal(app.buttons["agents.permission"], in: app)
         XCTAssertTrue(app.buttons["agents.permission"].label.contains("Read and propose"))
+        // A token outlives the session, so it needs the password.
+        reveal(app.buttons["agents.confirmCreate"], in: app)
+        XCTAssertFalse(app.buttons["agents.confirmCreate"].isEnabled)
+        replace(app.secureTextFields["agents.password"], with: "Simulator-Test-123!", in: app)
+        dismissKeyboard(app)
         capture(app, "agents-propose-form")
         tap(app.buttons["agents.confirmCreate"], in: app)
         XCTAssertTrue(app.navigationBars["Save your token"].waitForExistence(timeout: 15))
@@ -1625,6 +1628,8 @@ final class ProductionUITests: ExerlyUITestCase {
         dismissKeyboard(app)
         tap(app.buttons["agents.permission"], in: app)
         tap(app.buttons["Direct write"], in: app)
+        replace(app.secureTextFields["agents.password"], with: "Simulator-Test-123!", in: app)
+        dismissKeyboard(app)
         tap(app.buttons["agents.confirmCreate"], in: app)
         XCTAssertTrue(app.alerts["Allow direct changes?"].waitForExistence(timeout: 5))
         capture(app, "agents-direct-write-confirmation")
@@ -1653,7 +1658,7 @@ final class ProductionUITests: ExerlyUITestCase {
         sets[0]["efforts"] = [["reps": 3, "load": ["unit": "kg", "value": 150]]]
         exercises[0]["sets"] = sets
         after["exercises"] = exercises
-        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic coach", "scopes": ["propose"], "expires_in_days": 7], token: token)
+        let created = try await request("POST", "/v1/tokens", body: ["name": "Synthetic coach", "scopes": ["propose"], "expires_in_days": 7, "password": "Simulator-Test-123!"], token: token)
         let secret = try XCTUnwrap(created["token"] as? String)
         let envelope = try await request("POST", "/mcp", body: [
             "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "propose", "arguments": [
@@ -2817,40 +2822,55 @@ final class ProductionUITests: ExerlyUITestCase {
         tap(app.buttons["Log In"], in: app)
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Add measurement"], in: app)
-        tap(app.buttons["measurement.type"], in: app)
-        tap(app.buttons["Waist"], in: app)
-        replace(app.textFields["Value (cm)"], with: "82.55", in: app)
+        let log = app.buttons["body.measurements.log"]
+        reveal(log, in: app)
+        tap(log, in: app)
+        replace(app.textFields["measurementEntry.waist"], with: "82.5", in: app)
         dismissKeyboard(app)
-        tap(app.buttons["Save"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "82.55")
+        tap(app.buttons["measurementEntry.save"], in: app)
+        let reading = app.buttons["measurement.reading.\(Self.day(0).date)"]
+        let value = app.textFields["measurementEdit.value"]
+        // Progress → Body → Waist → today's reading opens it to edit.
+        func openWaist() {
+            let waist = app.buttons["body.measurement.waist"]
+            reveal(waist, in: app)
+            tap(waist, in: app)
+            tap(reading, in: app)
+            XCTAssertTrue(value.waitForExistence(timeout: 5))
+        }
+        openWaist()
+        XCTAssertEqual(value.value as? String, "82.5")
         try await control(["offline": true])
-        replace(app.textFields["Value (cm)"], with: "81.25", in: app)
+        replace(value, with: "81.2", in: app)
         dismissKeyboard(app)
-        tap(app.buttons["Save"], in: app)
+        tap(app.buttons["measurementEdit.save"], in: app)
         capture(app, "measurement-offline-edit")
         app.terminate()
         app.launchArguments = []
         app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
+        openWaist()
+        XCTAssertEqual(value.value as? String, "81.2")
         tap(app.buttons["Cancel"], in: app)
         try await control([:])
         app.terminate()
         app.launch()
         XCTAssertTrue(todayScreen(app).waitForExistence(timeout: 15))
         tap(app.buttons["Progress"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
-        let synced = try await request("GET", "/api/measurements", token: token)
-        let records = try XCTUnwrap(synced["entries"] as? [[String: Any]])
+        openWaist()
+        XCTAssertEqual(value.value as? String, "81.2")
+        var records: [[String: Any]] = []
+        for _ in 0..<40 {
+            let synced = try await request("GET", "/api/measurements", token: token)
+            records = synced["entries"] as? [[String: Any]] ?? []
+            if records.first?["value"] as? Double == 81.2 { break }
+            try await Task.sleep(for: .milliseconds(250))
+        }
         XCTAssertEqual(records.count, 1)
-        XCTAssertEqual(records.first?["value"] as? Double, 81.25)
+        XCTAssertEqual(records.first?["value"] as? Double, 81.2)
         let id = try XCTUnwrap(records.first?["id"] as? String)
-        tap(app.buttons["Delete measurement"], in: app)
+        tap(app.buttons["measurementEdit.delete"], in: app)
         var removed = false
         for _ in 0..<15 {
             let result = try await request("GET", "/api/measurements", token: token)
@@ -2858,16 +2878,21 @@ final class ProductionUITests: ExerlyUITestCase {
             try await Task.sleep(for: .milliseconds(200))
         }
         XCTAssertTrue(removed, "The deletion must reach the API before exercising undo")
-        tap(app.buttons["Undo"], in: app)
-        tap(app.buttons["Edit waist measurement"], in: app)
-        XCTAssertEqual(app.textFields["Value (cm)"].value as? String, "81.25")
+        // A toast floats above the tab bar, where `reveal` would scroll instead of tapping.
+        let undo = app.buttons["measurement.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        undo.tap()
+        XCTAssertTrue(reading.waitForExistence(timeout: 10), "Undo brings the reading back")
+        tap(reading, in: app)
+        XCTAssertTrue(value.waitForExistence(timeout: 5))
+        XCTAssertEqual(value.value as? String, "81.2")
         tap(app.buttons["Cancel"], in: app)
         capture(app, "measurement-synchronized-undo")
         let exported = try await request("GET", "/api/export", token: token)
         let exportedMeasurements = try XCTUnwrap(exported["measurements"] as? [[String: Any]])
         XCTAssertEqual(exportedMeasurements.count, 1)
         XCTAssertEqual(exportedMeasurements.first?["id"] as? String, id)
-        XCTAssertEqual(exportedMeasurements.first?["value"] as? Double, 81.25)
+        XCTAssertEqual(exportedMeasurements.first?["value"] as? Double, 81.2)
     }
 
     func testUSWaterDefaultsAndConvertedAmountsSurviveOfflineSync() async throws {

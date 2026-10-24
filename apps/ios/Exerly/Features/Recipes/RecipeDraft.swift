@@ -14,6 +14,9 @@ final class RecipeDraft: ObservableObject {
         var food: ExerlyCore.Food?
         /// False while it sits at a default amount no one has looked at.
         var checked = true
+        /// True while an imported volume waits for a weight: its amount only
+        /// holds the place, so the totals leave it out.
+        var needsWeight = false
         /// The line of an imported recipe it came from.
         var line: String?
 
@@ -73,7 +76,9 @@ final class RecipeDraft: ObservableObject {
     /// unless some are written, and its source.
     func apply(_ imported: RecipeImport) {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = imported.name }
-        rows += imported.ingredients.map { Row(id: UUID(), ingredient: $0.ingredient, food: $0.food, checked: $0.exact, line: $0.line) }
+        rows += imported.ingredients.map {
+            Row(id: UUID(), ingredient: $0.ingredient, food: $0.food, checked: $0.exact, needsWeight: $0.needsWeight, line: $0.line)
+        }
         unmatched = imported.unmatched
         if let count = imported.servingCount { servings = NutritionNumberField(count) }
         if let grams = imported.yieldGrams { cookedWeight = NutritionNumberField(unit == .pounds ? USUnits.ounces(grams: grams) : grams) }
@@ -105,7 +110,7 @@ final class RecipeDraft: ObservableObject {
         guard let count = try servings.value(named: "servings", locale: locale) else {
             throw NutritionDraftError.input("Enter how many servings it makes.")
         }
-        var food = template.withIngredients(rows.map(\.ingredient), yieldGrams: cooked)
+        var food = template.withIngredients(rows.filter { !$0.needsWeight }.map(\.ingredient), yieldGrams: cooked)
         food.source = .recipe
         food.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         food.servingCount = count
@@ -141,6 +146,7 @@ final class RecipeDraft: ObservableObject {
         guard let index = rows.firstIndex(where: { $0.id == id }) else { return }
         rows[index].ingredient = RecipeIngredient(food: food, grams: amount.grams, serving: amount.serving, quantity: amount.quantity)
         rows[index].checked = true
+        rows[index].needsWeight = false
     }
 
     /// The first ingredient still at a default amount, to look at before saving.
@@ -158,7 +164,9 @@ final class RecipeDraft: ObservableObject {
             return nil
         }
         if let unchecked {
-            errors = ["Check the amount of \(unchecked.ingredient.food.name) before saving. It came in at a default."]
+            errors = [unchecked.needsWeight
+                ? "Enter how much \(unchecked.ingredient.food.name) weighs before saving. Its line gives a volume Exerly can't weigh."
+                : "Check the amount of \(unchecked.ingredient.food.name) before saving. It came in at a default."]
             return nil
         }
         guard store.food(template.id) == original else {

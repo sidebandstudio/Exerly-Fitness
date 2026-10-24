@@ -24,6 +24,7 @@ final class FailingPersistence: TrainingPersistence {
         try inner.saveValue(value, forKey: key)
     }
     func performAtomically(_ body: () throws -> Void) throws { try inner.performAtomically(body) }
+    func afterCommit(_ action: @escaping () -> Void) { inner.afterCommit(action) }
 }
 
 @MainActor
@@ -105,5 +106,28 @@ final class FailingPersistence: TrainingPersistence {
         }
         #expect(try persistence.loadSessions() == [session])
         #expect(try persistence.loadValue(forKey: "k") == nil)
+    }
+
+    /// A nested transaction that fails drops only what it added: a sibling
+    /// saved before it still runs its actions once the outer one commits.
+    /// Review round 5 found the rollback dropped every action at its depth.
+    @Test func aFailedSiblingKeepsWhatAnEarlierOneSaved() throws {
+        struct Injected: Error {}
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("exerly-sibling-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistences: [TrainingPersistence] = [InMemoryTrainingPersistence(),
+                                                   try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite"))]
+        for persistence in persistences {
+            var ran: [String] = []
+            try persistence.performAtomically {
+                try persistence.performAtomically { persistence.afterCommit { ran.append("saved") } }
+                try? persistence.performAtomically {
+                    persistence.afterCommit { ran.append("failed") }
+                    throw Injected()
+                }
+            }
+            #expect(ran == ["saved"], "\(type(of: persistence))")
+        }
     }
 }

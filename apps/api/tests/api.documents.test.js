@@ -214,7 +214,10 @@ test('custom exercises sync as documents and appear in the export and deletion',
   const exported = (await api.get('/api/export', { token: user.token })).body;
   assert.equal(exported.documents.length, 1);
   assert.deepEqual(exported.documents[0].payload, exercise);
-  await api.del('/api/account', { token: user.token, body: { confirm: true } });
+  await api.del('/api/account', {
+    token: user.token,
+    body: { confirm: true, password: user.password },
+  });
   assert.equal(await api.store.count('documents', { account_id: user.user._id }), 0);
 });
 
@@ -672,6 +675,212 @@ test('hidden suggestions sync as documents named by their food', async () => {
     { token, headers: key() }
   );
   assert.equal(unnamed.status, 400);
+});
+
+test('import provenance syncs as documents named by import and part', async () => {
+  const { token } = await signUp(api);
+  const id = `${randomUUID().toUpperCase()}.0`;
+  const provenance = {
+    id,
+    importID: id.slice(0, 36),
+    part: 0,
+    parts: 1,
+    source: 'strong',
+    files: ['strong.csv'],
+    importedAt: '2026-10-20T12:00:00.000Z',
+    timeZoneID: 'America/New_York',
+    lines: [{ key: 'workouts', title: 'Workouts', new: 2, existing: 0, updated: 0 }],
+    documents: [`workout_session/${randomUUID().toUpperCase()}`],
+  };
+  const saved = await api.put(
+    `/v1/documents/import_provenance/${id}`,
+    { payload: provenance, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/import_provenance/${id}`, { token });
+  assert.deepEqual(read.body.payload, provenance);
+  const otherID = `${randomUUID().toUpperCase()}.0`;
+  const partless = await api.put(
+    `/v1/documents/import_provenance/${otherID}`,
+    { payload: { ...provenance, id: otherID, part: undefined }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(partless.status, 400);
+});
+
+test('sync conflicts sync as documents, both versions kept', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const conflict = {
+    id,
+    kind: 'food_entry',
+    documentID: randomUUID().toUpperCase(),
+    device: { id: randomUUID().toUpperCase(), name: 'iPhone' },
+    detectedAt: '2026-10-21T14:14:00.000Z',
+    changedAt: '2026-10-21T14:14:00.000Z',
+    local: { grams: 60 },
+    remote: { grams: 90 },
+    fields: ['grams'],
+  };
+  const saved = await api.put(
+    `/v1/documents/sync_conflict/${id}`,
+    { payload: conflict, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/sync_conflict/${id}`, { token });
+  assert.deepEqual(read.body.payload, conflict);
+  const bare = await api.put(
+    `/v1/documents/sync_conflict/${randomUUID()}`,
+    { payload: { id, kind: 'food_entry' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(bare.status, 400);
+});
+
+test('an entry logged again links the entries it stands in for, in canonical form', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const replaced = randomUUID();
+  const saved = await api.put(
+    `/v1/documents/food_entry_link/${id}`,
+    { payload: { id, replaces: [replaced] }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/food_entry_link/${id}`, { token });
+  assert.deepEqual(read.body.payload, { id, replaces: [replaced.toUpperCase()] });
+  const other = randomUUID().toUpperCase();
+  const many = Array.from({ length: 9 }, () => randomUUID().toUpperCase());
+  for (const replaces of [[other], [replaced, replaced], many, ['oats']]) {
+    const refused = await api.put(
+      `/v1/documents/food_entry_link/${other}`,
+      { payload: { id: other, replaces }, base_revision: 0 },
+      { token, headers: key() }
+    );
+    assert.equal(refused.status, 400, JSON.stringify(replaces));
+  }
+});
+
+test('a Health import record syncs with its owner and state, and needs them', async () => {
+  const { token } = await signUp(api);
+  const id = randomUUID().toUpperCase();
+  const record = {
+    id,
+    kind: 'workout',
+    target: randomUUID().toLowerCase(),
+    owner: randomUUID().toUpperCase(),
+    source: 'com.example.runs',
+    sourceName: 'Runs',
+    start: '2026-10-20T07:00:00.000Z',
+    end: '2026-10-20T07:30:00.000Z',
+    day: '2026-10-20',
+    fingerprint: 'f',
+    state: 'imported',
+    updatedAt: '2026-10-20T08:00:00.000Z',
+  };
+  const saved = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: record, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const read = await api.get(`/v1/documents/health_import/${id}`, { token });
+  assert.deepEqual(read.body.payload, record);
+  const otherID = randomUUID().toUpperCase();
+  const ownerless = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...record, id: otherID, owner: undefined }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(ownerless.status, 400);
+  const adopted = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: { ...record, owner: 'phone-b', generation: 1 }, base_revision: 1 },
+    { token, headers: key() }
+  );
+  assert.equal(adopted.status, 200, JSON.stringify(adopted.body));
+  const negative = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...record, id: otherID, generation: -1 }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(negative.status, 400);
+  const tombstone = {
+    id,
+    kind: 'workout',
+    owner: 'phone-b',
+    generation: 1,
+    state: 'removed',
+    updatedAt: '2026-10-21T08:00:00.000Z',
+  };
+  const removed = await api.put(
+    `/v1/documents/health_import/${id}`,
+    { payload: tombstone, base_revision: 2 },
+    { token, headers: key() }
+  );
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  const targetless = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...tombstone, id: otherID, state: 'imported' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(targetless.status, 400, 'only a record taken out goes without its target');
+  const noted = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    {
+      payload: {
+        ...record,
+        id: otherID,
+        alsoIn: [{ source: 'com.example.tracker', name: 'Tracker' }],
+      },
+      base_revision: 0,
+    },
+    { token, headers: key() }
+  );
+  assert.equal(noted.status, 201, JSON.stringify(noted.body));
+  const sources = (count, name = 'App') =>
+    Array.from({ length: count }, (_, i) => ({ source: `com.example.app${i}`, name }));
+  // The names HealthHistoryTests.aSourceNameIsCutTo60ScalarsOnAWholeCharacter
+  // keeps are accepted: the API counts code points, as the app does.
+  const accent = 'e\u0301';
+  const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}';
+  for (const name of ['a'.repeat(60), accent.repeat(30), family.repeat(8)]) {
+    const keptID = randomUUID().toUpperCase();
+    const kept = await api.put(
+      `/v1/documents/health_import/${keptID}`,
+      {
+        payload: { ...record, id: keptID, alsoIn: [{ source: 'com.example.app', name }] },
+        base_revision: 0,
+      },
+      { token, headers: key() }
+    );
+    assert.equal(kept.status, 201, `${[...name].length} code points`);
+  }
+  for (const alsoIn of [
+    sources(1, accent.repeat(31)),
+    sources(1, family.repeat(9)),
+    sources(6),
+    sources(1, 'N'.repeat(61)),
+    [...sources(1), ...sources(1)],
+    ['Tracker'],
+  ]) {
+    const refusedID = randomUUID().toUpperCase();
+    const refused = await api.put(
+      `/v1/documents/health_import/${refusedID}`,
+      { payload: { ...record, id: refusedID, alsoIn }, base_revision: 0 },
+      { token, headers: key() }
+    );
+    assert.equal(refused.status, 400, JSON.stringify(alsoIn));
+  }
+  const asideID = randomUUID().toUpperCase();
+  const setAside = await api.put(
+    `/v1/documents/health_import/${asideID}`,
+    { payload: { ...record, id: asideID, state: 'displaced' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(setAside.status, 400, 'nothing is set aside for a better source any more');
 });
 
 test('legacy food logs and saved foods stay in their own feeds', async () => {

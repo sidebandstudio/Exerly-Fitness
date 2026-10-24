@@ -24,20 +24,14 @@ final class BodyUITests: ExerlyUITestCase {
         tap(open, in: app)
         let value = app.buttons["weighIn.value"]
         XCTAssertTrue(value.waitForExistence(timeout: 5))
-        XCTAssertEqual(value.label, "Weight, 184.6 pounds", "The sheet starts on the last reading")
-        let ruler = app.descendants(matching: .any)["weighIn.ruler"]
-        XCTAssertTrue(ruler.exists)
-        // One drag to the left moves the scale up about four ticks of 0.1 lb.
-        let start = ruler.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -41, dy: 0)), withVelocity: .slow,
-                    thenHoldForDuration: 0.1)
-        tapCount += 1
-        let entered = try XCTUnwrap(Double(value.label.replacingOccurrences(of: "Weight, ", with: "")
-            .replacingOccurrences(of: " pounds", with: "")))
-        XCTAssertGreaterThan(entered, 184.6)
-        XCTAssertLessThan(entered, 186)
+        XCTAssertTrue(value.label.contains("184.6 pounds is a placeholder"), "The last reading, as a placeholder: \(value.label)")
+        XCTAssertTrue(app.buttons["exerly.keypadDone"].exists, "Ready to type the scale's number")
+        // Typed over the last reading. Typing isn't counted, for Exerly or
+        // MacroFactor, in docs/TAP_BUDGETS.md.
+        for key in ["1", "8", "5", Locale.current.decimalSeparator ?? ".", "2"] { app.buttons["exerly.keypad.\(key)"].tap() }
+        let entered = 185.2
         tap(app.buttons["weighIn.save"], in: app)
-        XCTAssertLessThanOrEqual(tapCount, 3, "A weigh-in takes at most three taps from its button")
+        XCTAssertLessThanOrEqual(tapCount, 2, "A weigh-in takes two taps from its button")
         XCTAssertTrue(app.buttons["Progress"].waitForExistence(timeout: 5))
         let today = Self.day(0).date
         XCTAssertTrue(app.descendants(matching: .any)["body.weighIn.\(today)"].waitForExistence(timeout: 10))
@@ -59,18 +53,20 @@ final class BodyUITests: ExerlyUITestCase {
         settle(app)
         tap(app.buttons["Progress"], in: app)
         // Setup's 72.25 kg becomes an ExerlyCore weigh-in.
-        XCTAssertTrue(app.buttons["Weigh-in, Today, 72.25 kilograms"].waitForExistence(timeout: 30), app.debugDescription)
+        XCTAssertTrue(todayWeighIn("72.25 kilograms", in: app).waitForExistence(timeout: 30), app.debugDescription)
         let setup = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 72.25 }
         XCTAssertEqual(setup?["date"] as? String, today)
 
         try await control(["offline": true])
         tap(app.buttons["body.weighIn"], in: app)
-        XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.3 kilograms")
+        XCTAssertTrue(app.buttons["weighIn.value"].label.contains("72.3 kilograms is a placeholder"), app.buttons["weighIn.value"].label)
+        // Done puts the keypad away for the ruler and its steps.
+        tap(app.buttons["exerly.keypadDone"], in: app)
         tap(app.buttons["weighIn.increase"], in: app)
         tap(app.buttons["weighIn.increase"], in: app)
         XCTAssertEqual(app.buttons["weighIn.value"].label, "Weight, 72.5 kilograms")
         tap(app.buttons["weighIn.save"], in: app)
-        let offlineRow = app.buttons["Weigh-in, Today, 72.5 kilograms"]
+        let offlineRow = todayWeighIn("72.5 kilograms", in: app)
         XCTAssertTrue(offlineRow.waitForExistence(timeout: 10))
         app.terminate()
         app.launchArguments = []
@@ -97,7 +93,7 @@ final class BodyUITests: ExerlyUITestCase {
         let edited = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 71.8 }
         XCTAssertEqual(edited?["id"] as? String, id, "An edit keeps the weigh-in's identity")
 
-        tap(app.buttons["Weigh-in, Today, 71.8 kilograms"], in: app)
+        tap(todayWeighIn("71.8 kilograms", in: app), in: app)
         tap(app.buttons["weighIn.delete"], in: app)
         XCTAssertTrue(app.buttons["Undo"].waitForExistence(timeout: 5))
         var gone = false
@@ -108,7 +104,7 @@ final class BodyUITests: ExerlyUITestCase {
         XCTAssertTrue(gone, "The deletion reaches the server")
         capture(app, "body-deleted-undo")
         tap(app.buttons["Undo"], in: app)
-        XCTAssertTrue(app.buttons["Weigh-in, Today, 71.8 kilograms"].waitForExistence(timeout: 10))
+        XCTAssertTrue(todayWeighIn("71.8 kilograms", in: app).waitForExistence(timeout: 10))
         let restored = try await waitForWeighIn(token: person.token) { ($0["weight"] as? [String: Any])?["value"] as? Double == 71.8 }
         XCTAssertNotNil(restored)
     }
@@ -138,8 +134,10 @@ final class BodyUITests: ExerlyUITestCase {
         func expectShown(on screen: String) {
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", shown)).firstMatch.exists,
                           "\(screen) writes \(shown)")
-            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "lb a week")).firstMatch.exists,
-                           "\(screen) calls the seven-day change \"this week\", never \"a week\"")
+            // The goal's planned rate ("Lose 0.9 lb a week to 170 lb") is a rate, worded as Targets words it.
+            let goalRate = "identifier == 'body.goal.headline' OR label BEGINSWITH 'Lose ' OR label BEGINSWITH 'Gain '"
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND NOT (\(goalRate))", "lb a week"))
+                .firstMatch.exists, "\(screen) calls the seven-day change \"this week\", never \"a week\"")
         }
         expectShown(on: "Today")
 
@@ -191,7 +189,6 @@ final class BodyUITests: ExerlyUITestCase {
         XCTAssertTrue(app.buttons["weighIn.value"].waitForExistence(timeout: 5))
         try await Task.sleep(for: .seconds(0.6))
         capture(app, "body-04-weigh-in")
-        app.buttons["weighIn.value"].tap()
         app.buttons["exerly.keypad.1"].tap()
         app.buttons["exerly.keypad.8"].tap()
         try await Task.sleep(for: .seconds(0.6))
@@ -199,6 +196,7 @@ final class BodyUITests: ExerlyUITestCase {
         app.buttons["exerly.keypadDone"].tap()
         app.buttons["weighIn.cancel"].tap()
         tap(app.buttons["body.weighIn"], in: app)
+        tap(app.buttons["exerly.keypadDone"], in: app)
         let ruler = app.descendants(matching: .any)["weighIn.ruler"]
         let start = ruler.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 31, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0.1)
@@ -232,5 +230,10 @@ final class BodyUITests: ExerlyUITestCase {
             if dismissPasswordPrompt(in: app) { break }
             Thread.sleep(forTimeInterval: 0.25)
         }
+    }
+
+    /// Today's weigh-in row for `weight`, read as "Weigh-in, Today at 7:11 AM, 72.5 kilograms".
+    private func todayWeighIn(_ weight: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", "Weigh-in, Today at ", ", \(weight)")).firstMatch
     }
 }

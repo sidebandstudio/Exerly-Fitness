@@ -60,6 +60,7 @@ private struct PreferencesEditor: View {
                 if store.conflict != nil { conflictSection }
                 if store.draft != nil {
                     basicSection.disabled(store.isLocked)
+                    foodLogSection.disabled(store.isLocked)
                     foodSection.disabled(store.isLocked)
                     trainingSection.disabled(store.isLocked)
                     sleepSection.disabled(store.isLocked)
@@ -111,10 +112,15 @@ private struct PreferencesEditor: View {
     /// attention: an error, a conflict to review, or a reply still owed. Edits
     /// that can't be sent now stay in the draft on this device.
     private func saveAndClose() async {
+        // save() does nothing while the sheet is still loading, which closed it
+        // with the change unsaved (Done tapped soon after opening). Wait first.
+        while store.isLoading || store.isSaving {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
         let canSave = store.isReadable && store.conflict == nil && store.draft != nil
         if canSave, store.hasEdits || store.draft?.pending != nil {
             await store.save()
-            guard store.error == nil, store.conflict == nil, store.draft?.pending == nil else { return }
+            guard store.error == nil, store.conflict == nil, store.draft?.pending == nil, !store.hasEdits else { return }
         }
         dismiss()
     }
@@ -197,6 +203,41 @@ private struct PreferencesEditor: View {
                 .font(.subheadline).foregroundStyle(.secondary)
         }
     }
+    /// How Today reads the day's food, and the water goal its water row counts toward.
+    private var foodLogSection: some View {
+        Section {
+            Picker(PreferenceFields.label("nutritionDisplay"), selection: Binding(
+                get: { fields["nutritionDisplay"] == "consumed" ? "consumed" : "remaining" },
+                set: { store.edit("nutritionDisplay", value: $0) })) {
+                Text("What's left").tag("remaining")
+                Text("What you've eaten").tag("consumed")
+            }
+            .accessibilityIdentifier("preferences.nutritionDisplay")
+            .frame(minHeight: 44)
+            Picker(PreferenceFields.label("waterGoalMl"), selection: binding("waterGoalMl")) {
+                Text("No goal").tag("")
+                ForEach(waterGoals, id: \.self) { ml in Text(WaterDisplay.amount(ml, imperial: imperial)).tag(String(ml)) }
+                if let saved = Int(fields["waterGoalMl"] ?? ""), !waterGoals.contains(saved) {
+                    Text(WaterDisplay.amount(saved, imperial: imperial)).tag(String(saved))
+                }
+            }
+            .accessibilityIdentifier("preferences.waterGoalMl")
+            .frame(minHeight: 44)
+        } header: {
+            Text("Food log")
+        } footer: {
+            Text("Today's calorie ring and macros lead with your choice. Going over always shows with a plus, as in +120 over. The water goal counts water you log on Today.")
+        }
+    }
+
+    private var imperial: Bool { fields["unitSystem"] == "imperial" }
+
+    /// Goals in steps of 250 ml, or of 8 fl oz in U.S. units.
+    private var waterGoals: [Int] {
+        imperial ? stride(from: 32, through: 160, by: 8).map { USUnits.wholeMilliliters(fluidOunces: Double($0)) }
+            : Array(stride(from: 1000, through: 5000, by: 250))
+    }
+
     private var foodSection: some View {
         Section {
             DisclosureGroup("Food preferences", isExpanded: $foodExpanded) {

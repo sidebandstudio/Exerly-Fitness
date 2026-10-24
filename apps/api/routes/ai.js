@@ -9,6 +9,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const store = require('../data');
 const { asyncHandler, notFound, badRequest, tooMany } = require('../lib/errors');
 const { authenticate } = require('../lib/auth');
+const { clientIP } = require('../lib/ratelimit');
 const v = require('../lib/validate');
 const { requireUser } = require('../lib/users');
 const AIErrorLogger = require('../utils/errorLogger');
@@ -233,7 +234,7 @@ router.post(
           errorCode: err.status ? String(err.status) : 'GENERATE_FAILED',
           errorMessage: err.message,
           userAgent: req.get('User-Agent'),
-          ipAddress: req.ip,
+          ipAddress: clientIP(req),
           requestData: { type },
           stackTrace: err.stack,
           severity: 'HIGH',

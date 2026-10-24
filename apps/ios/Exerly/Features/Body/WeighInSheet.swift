@@ -2,8 +2,12 @@ import ExerlyCore
 import SwiftUI
 import UIKit
 
-/// A weigh-in in three taps: open it on the last reading, drag the ruler once
-/// (or tap ±, or tap the number to type), then Save. Also edits a saved one.
+/// A weigh-in in two taps: it opens with the keypad up and the last reading
+/// as a placeholder, so the scale's number is typed and saved, or "Same as
+/// last" saves that reading again. Nothing is saved until a weight is chosen:
+/// typed, set on the ruler or ±, or the last one picked again. Done puts the
+/// keypad away for the ruler, ± and body fat. Also edits a saved one: its
+/// weight, body fat, day and time.
 struct WeighInSheet: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
@@ -12,6 +16,8 @@ struct WeighInSheet: View {
     private let onDeleted: (WeightEntry) -> Void
     private let onSaved: (WeightEntry) -> Void
     private let initialValue: Double
+    /// The latest reading, in `unit`, that "Same as last" saves again.
+    private let lastReading: Double?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -19,12 +25,19 @@ struct WeighInSheet: View {
     @State private var value: Double
     @State private var bodyFat: Double?
     @State private var date: LocalDate
+    /// An edited weigh-in's clock time, read in `timeZone`.
+    @State private var time: Date
+    @State private var choosingTime = false
     @State private var typing: Field?
     @State private var typed = ""
     @State private var choosingDate = false
     @State private var error: String?
     @State private var context: String?
     @State private var detent: PresentationDetent = .weighIn
+    /// True once the weight to save is the person's choice: always for an
+    /// edit; for a new weigh-in once typed, moved on the ruler or ±, or the
+    /// last reading picked again. Until then the number is only a placeholder.
+    @State private var chosen: Bool
 
     private enum Field { case weight, bodyFat }
 
@@ -47,12 +60,20 @@ struct WeighInSheet: View {
             ?? WeightTrend.suggestedReading(latest: latest?.weight, trend: nil, unit: unit)
             ?? (unit == .pounds ? 165 : 75)
         initialValue = start
+        lastReading = WeightTrend.suggestedReading(latest: latest?.weight, trend: nil, unit: unit)
+        _chosen = State(initialValue: editing != nil)
         _value = State(initialValue: start)
         _bodyFat = State(initialValue: editing?.bodyFat)
         _date = State(initialValue: editing?.date ?? date ?? LocalDate(Date(), in: timeZone))
+        _time = State(initialValue: editing?.at ?? Date())
+        // A new weigh-in is typed (docs/TAP_BUDGETS.md); an edit has more to
+        // show (day, time, Delete) and starts on its reading.
+        _typing = State(initialValue: editing == nil ? .weight : nil)
+        _detent = State(initialValue: editing == nil ? .weighInTyping : .large)
     }
 
     private var range: ClosedRange<Double> { WeightRuler.range(for: unit) }
+    private var restingDetent: PresentationDetent { editing == nil ? .weighIn : .large }
     private var step: Double { WeightTrend.step(for: unit) }
     private var today: LocalDate { LocalDate(Date(), in: timeZone) }
     private var fromHealth: Bool { editing?.source == .appleHealth }
@@ -79,7 +100,7 @@ struct WeighInSheet: View {
         }
         .exFooter { saveBar }
         .background(Color.exSurface1)
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.weighIn, .large], selection: $detent)
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.weighIn, .weighInTyping, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.exSurface1)
         .presentationCornerRadius(ExRadius.card + 10)
@@ -97,10 +118,14 @@ struct WeighInSheet: View {
         let title = Text(editing == nil ? "Weigh-in" : "Edit weigh-in").font(.exH3).foregroundStyle(Color.exTextPrimary)
             .accessibilityAddTraits(.isHeader)
         return Group {
-            if typeSize.isAccessibilitySize {
+            if typeSize.isAccessibilitySize || editing != nil {
+                // An edit's day and time sit under the title, clear of it on a small phone.
                 VStack(alignment: .leading, spacing: ExSpacing.small) {
                     HStack(spacing: ExSpacing.small) { close; title }
-                    dateChip
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: ExSpacing.small) { dateChip; if editing != nil { timeChip } }
+                        VStack(alignment: .leading, spacing: ExSpacing.small) { dateChip; if editing != nil { timeChip } }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -139,6 +164,32 @@ struct WeighInSheet: View {
         }
     }
 
+    private var timeChip: some View {
+        Button { choosingTime = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "clock").font(.exLabel).accessibilityHidden(true)
+                Text(BodyFormat.time(time, in: timeZone)).font(.exLabel).lineLimit(1)
+            }
+            .foregroundStyle(Color.exPrimaryText).padding(.horizontal, 14).frame(minHeight: 44)
+            .background(Color.exPrimary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain).disabled(fromHealth)
+        .accessibilityLabel("Time, \(BodyFormat.time(time, in: timeZone))").accessibilityHint("Choose another time")
+        .accessibilityIdentifier("weighIn.time")
+        .popover(isPresented: $choosingTime) {
+            DatePicker("Weigh-in time", selection: $time, displayedComponents: .hourAndMinute)
+                .datePickerStyle(.wheel).labelsHidden()
+                .environment(\.timeZone, timeZone)
+                .frame(minWidth: 280).padding(ExSpacing.item)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    /// Nothing typed or chosen yet: the number shown is a placeholder.
+    private var placeholder: Bool { !chosen && typed.isEmpty }
+
+    private var canSave: Bool { chosen || (typing == .weight && !typed.isEmpty) }
+
     private var reading: some View {
         // What's typed so far, once there is something, else the weight.
         let shown = typing == .weight && !typed.isEmpty ? typed : Self.display(value)
@@ -147,7 +198,7 @@ struct WeighInSheet: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(shown)
                         .font(.system(size: numberSize, weight: .bold, design: .rounded)).monospacedDigit()
-                        .foregroundStyle(typing == .weight && typed.isEmpty ? Color.exTextMuted : Color.exTextPrimary)
+                        .foregroundStyle(placeholder || (typing == .weight && typed.isEmpty) ? Color.exTextMuted : Color.exTextPrimary)
                         .contentTransition(.numericText(value: value))
                         .animation(.snappy(duration: 0.18), value: value)
                         .lineLimit(1).minimumScaleFactor(0.5)
@@ -159,12 +210,47 @@ struct WeighInSheet: View {
                 .frame(maxWidth: .infinity).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Weight, \(shown) \(BodyFormat.unitName(unit))")
-            .accessibilityHint(fromHealth ? "" : "Double-tap to type a weight")
+            // While typing, what's typed so far, not a weight: "1" read as "1 pounds" in run 7.
+            // Before anything is typed, the shown weight is only a placeholder.
+            .accessibilityLabel(typing == .weight && !typed.isEmpty
+                ? "Weight, typing \(typed), in \(BodyFormat.unitName(unit))"
+                : placeholder
+                ? "Weight, nothing entered yet. \(shown) \(BodyFormat.unitName(unit)) is a placeholder\(lastReading == nil ? "" : " from your last reading")"
+                : typing == .weight ? "Weight, typing nothing yet, in \(BodyFormat.unitName(unit))"
+                : "Weight, \(shown) \(BodyFormat.unitName(unit))")
+            .accessibilityHint(fromHealth ? "" : placeholder ? "Type today's weight on the keypad" : "Double-tap to type a weight")
             .accessibilityIdentifier("weighIn.value")
-            if let context {
+            // A new weigh-in keeps Same as last's row while the keypad is up,
+            // shown only before a digit is typed, so the keys never move under
+            // a finger as typing starts or Delete empties it (review round 2).
+            let keepsRow = editing == nil && lastReading != nil && typing == .weight
+            let offersLast = editing == nil && placeholder && lastReading != nil
+            // At the largest sizes Same as last names the last reading, and the
+            // line above it would push the keypad's bottom row under Save.
+            if let context, !((keepsRow || offersLast) && typeSize.isAccessibilitySize) {
                 Text(context).font(.exCaption).foregroundStyle(Color.exTextSecondary).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("weighIn.context")
+            }
+            if keepsRow || offersLast, let lastReading {
+                // Weighing the same is a choice of its own, not what an untouched Save does.
+                Button {
+                    value = lastReading
+                    chosen = true
+                    save()
+                } label: {
+                    Label("Same as last · \(Self.display(lastReading)) \(unit.rawValue)", systemImage: "equal")
+                        .font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                        .padding(.horizontal, ExSpacing.item).frame(minHeight: 36)
+                        .background(Color.exPrimary.opacity(0.16), in: Capsule())
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .opacity(offersLast ? 1 : 0)
+                .disabled(!offersLast)
+                .accessibilityHidden(!offersLast)
+                .accessibilityLabel("Same as last, \(Self.display(lastReading)) \(BodyFormat.unitName(unit))")
+                .accessibilityHint("Saves that weight again for today")
+                .accessibilityIdentifier("weighIn.sameAsLast")
             }
         }
         .padding(.top, ExSpacing.small)
@@ -174,12 +260,16 @@ struct WeighInSheet: View {
         HStack(spacing: ExSpacing.small) {
             stepButton("minus", ticks: -1, label: "Decrease")
             WeightRuler(value: $value, unit: unit, range: range)
+                .onChange(of: value) { chosen = true }
             stepButton("plus", ticks: 1, label: "Increase")
         }
     }
 
     private func stepButton(_ symbol: String, ticks: Int, label: String) -> some View {
-        Button { value = WeightRuler.nudged(value, by: ticks, unit: unit, range: range) } label: {
+        Button {
+            value = WeightRuler.nudged(value, by: ticks, unit: unit, range: range)
+            chosen = true
+        } label: {
             Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.exPrimaryText)
                 .frame(width: 48, height: 48).background(Color.exSurface2, in: Circle())
         }
@@ -226,10 +316,15 @@ struct WeighInSheet: View {
                 }
                 .padding(.horizontal, ExSpacing.content).accessibilityElement(children: .combine)
             }
-            ExNumericKeypad(title: typing == .bodyFat ? "Body fat (%)" : "Weight (\(unit.rawValue))", integer: false,
+            ExNumericKeypad(title: keypadTitle, integer: false,
                             insert: insert, delete: { typed = String(typed.dropLast()) }, done: { commit() })
                 .clipShape(RoundedRectangle(cornerRadius: ExRadius.card, style: .continuous))
         }
+    }
+
+    private var keypadTitle: String {
+        if typing == .bodyFat { return "Body fat (%)" }
+        return placeholder ? "Type today's weight (\(unit.rawValue))" : "Weight (\(unit.rawValue))"
     }
 
     @ViewBuilder
@@ -252,7 +347,9 @@ struct WeighInSheet: View {
             }
             if !fromHealth {
                 Button(action: save) { Text(editing == nil ? "Save" : "Save changes") }
-                    .buttonStyle(ExActionStyle()).accessibilityIdentifier("weighIn.save")
+                    .buttonStyle(ExActionStyle()).disabled(!canSave)
+                    .accessibilityHint(canSave ? "" : "Type a weight first")
+                    .accessibilityIdentifier("weighIn.save")
             }
         }
         .padding(.horizontal, ExSpacing.page).padding(.top, ExSpacing.small).padding(.bottom, ExSpacing.small)
@@ -272,7 +369,7 @@ struct WeighInSheet: View {
         error = nil
         typed = ""
         typing = field
-        if !typeSize.isAccessibilitySize { detent = .large }
+        if !typeSize.isAccessibilitySize { detent = .weighInTyping }
     }
 
     private func insert(_ key: String) {
@@ -291,7 +388,7 @@ struct WeighInSheet: View {
     @discardableResult
     private func commit() -> Bool {
         let text = typed.trimmingCharacters(in: .whitespaces)
-        defer { if error == nil { typing = nil; typed = ""; if !typeSize.isAccessibilitySize { detent = .weighIn } } }
+        defer { if error == nil { typing = nil; typed = ""; if !typeSize.isAccessibilitySize { detent = restingDetent } } }
         guard !text.isEmpty else { error = nil; return true }
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
@@ -314,6 +411,7 @@ struct WeighInSheet: View {
                 return false
             }
             value = (number * 100).rounded() / 100
+            chosen = true
         }
         error = nil
         return true
@@ -323,15 +421,18 @@ struct WeighInSheet: View {
 
     private func save() {
         if typing != nil, !commit() { return }
+        // An untouched placeholder is never saved as a reading.
+        guard chosen else { return }
         let store = workspace.nutrition
         var logged: WeightEntry?
         do {
             if var entry = editing {
                 if value != initialValue { entry.weight = Mass((value * 100).rounded() / 100, unit) }
                 entry.bodyFat = bodyFat
-                if entry.date != date {
+                let at = WeightTrend.instant(on: date, timeOf: time, in: timeZone)
+                if entry.date != date || abs(at.timeIntervalSince(entry.at)) >= 60 {
                     entry.date = date
-                    entry.at = WeightTrend.instant(on: date, timeOf: entry.at, in: timeZone)
+                    entry.at = at
                 }
                 try store.updateWeight(entry)
             } else {
@@ -403,6 +504,12 @@ private struct WeighInDetent: CustomPresentationDetent {
     static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 440) }
 }
 
+/// Tall enough for the number, the keypad and Save, without a gap under the keypad.
+private struct WeighInTypingDetent: CustomPresentationDetent {
+    static func height(in context: Context) -> CGFloat? { min(context.maxDetentValue, 620) }
+}
+
 extension PresentationDetent {
     static let weighIn = Self.custom(WeighInDetent.self)
+    static let weighInTyping = Self.custom(WeighInTypingDetent.self)
 }

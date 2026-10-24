@@ -8,6 +8,9 @@ class ExerlyUITestCase: XCTestCase {
     /// Taps delivered through `tap(_:in:)` since the test began. Reset it before
     /// a task to count that task's taps the way a person would make them.
     var tapCount = 0
+    /// Drags `reveal(_:in:)` made to bring a control into view since the test
+    /// began. A tap budget that holds only after scrolling says so.
+    var scrollCount = 0
 
     // Let async test bodies finish or throw before XCTest starts the next test.
     // Aborting at an assertion can leave their fixture requests running.
@@ -85,6 +88,16 @@ class ExerlyUITestCase: XCTestCase {
         replace(app.secureTextFields["Password"], with: "Simulator-Test-123!", in: app)
         dismissKeyboard(app)
         tap(app.buttons["Log In"], in: app)
+        // At the largest text on an iPhone 17 Pro the form scrolls as the
+        // keyboard leaves and the tap can miss. Go on the keyboard submits too.
+        let password = app.secureTextFields["Password"]
+        if !app.navigationBars["Today"].waitForExistence(timeout: 10), password.exists {
+            if !app.keyboards.firstMatch.exists {
+                reveal(password, in: app)
+                password.tap()
+            }
+            app.typeText("\n")
+        }
         XCTAssertTrue(app.navigationBars["Today"].waitForExistence(timeout: 20))
         settleAfterSignIn(app)
     }
@@ -107,8 +120,9 @@ class ExerlyUITestCase: XCTestCase {
             Thread.sleep(forTimeInterval: 0.4)
         }
     }
+    /// `contentSize` names a text size, such as "UICTContentSizeCategoryXXXL", for that launch only.
     func launch(resetSession: Bool, legacyToken: String? = nil, accountControls: String? = nil,
-                environment: [String: String] = [:]) -> XCUIApplication {
+                environment: [String: String] = [:], contentSize: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = resetSession ? ["--ui-testing"] : []
         if let appearance = ProcessInfo.processInfo.environment["EXERLY_TEST_APPEARANCE"],
@@ -118,6 +132,7 @@ class ExerlyUITestCase: XCTestCase {
         if ProcessInfo.processInfo.environment["EXERLY_TEST_LARGEST_TYPE"] == "1" {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         }
+        if let contentSize { app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSize] }
         app.launchEnvironment["EXERLY_API_BASE_URL"] = fixtureURL
         app.launchEnvironment["EXERLY_TEST_STORE_ID"] = UUID().uuidString
         app.launchEnvironment["EXERLY_TEST_LEGACY_TOKEN"] = legacyToken
@@ -152,6 +167,7 @@ class ExerlyUITestCase: XCTestCase {
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (top + height * 0.16) / app.frame.height))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (top + height * 0.84) / app.frame.height))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            scrollCount += 1
         }
         reveal(element, in: app)
     }
@@ -172,6 +188,10 @@ class ExerlyUITestCase: XCTestCase {
             dismissKeyboard(app)
         }
         let missing = !element.exists
+        // Where the element was before the last drag. A drag that starts on
+        // a chart scrubs it instead of scrolling, and at the largest text the
+        // trend chart fills the middle of Progress: drag in the margin then.
+        var frameBeforeDrag: CGRect?
         for attempt in 0..<48 {
             // An element that never appeared after ten drags won't: let the
             // caller's assertion fail now instead of dragging for minutes.
@@ -238,9 +258,13 @@ class ExerlyUITestCase: XCTestCase {
             let distance = element.exists ? 0.16 : 0.34
             let low = top + height * (0.5 - distance)
             let high = top + height * (0.5 + distance)
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (down ? low : high) / app.frame.height))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: (down ? high : low) / app.frame.height))
+            let frame = element.exists ? element.frame : nil
+            let dx = frame != nil && frame == frameBeforeDrag ? 6 / app.frame.width : 0.5
+            frameBeforeDrag = frame
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? low : high) / app.frame.height))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: (down ? high : low) / app.frame.height))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            scrollCount += 1
         }
     }
     /// The bottom of Progress's section picker, a bar the tabs scroll under,
@@ -296,13 +320,28 @@ class ExerlyUITestCase: XCTestCase {
         // XCTest can call a partly obscured SwiftUI field hittable while its
         // tap point falls in the keyboard toolbar. Reveal the whole field
         // before switching focus, as a person scrolling the editor would.
-        if field.exists, field.frame.maxY > keyboardTop(in: app) - 50 {
+        // iOS 26 puts typing predictions between that toolbar and the keys,
+        // so measure from the toolbar itself when there is one.
+        let keys = keyboardTop(in: app)
+        var covered = keys - 50
+        let toolbar = app.toolbars.firstMatch
+        if keys.isFinite, toolbar.exists, let bar = (try? toolbar.snapshot())?.frame, bar.maxY <= keys {
+            covered = min(covered, bar.minY)
+        }
+        if field.exists, field.frame.maxY > covered {
             dismissKeyboard(app)
         }
         tap(field, in: app)
         // A sheet at a small detent grows when the keypad opens. Selecting
         // the text mid-animation can land on whatever slid under the old frame.
         waitUntilStill(field)
+        // At the largest text the sign-in form scrolls as the keyboard opens,
+        // and the tap can land beside the field: reveal it and tap again.
+        if (field.value(forKey: "hasKeyboardFocus") as? Bool) == false {
+            reveal(field, in: app)
+            field.tap()
+            waitUntilStill(field)
+        }
         let existing = field.value as? String ?? ""
         // Tapping a populated field can put the caret at its start, including
         // UIKit numeric fields. Select the paragraph before deleting so a

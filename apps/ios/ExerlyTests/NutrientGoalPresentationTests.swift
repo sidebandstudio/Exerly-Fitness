@@ -87,7 +87,7 @@ final class NutrientGoalPresentationTests: XCTestCase {
             return (result.amount, result.words, result.over)
         }
         XCTAssertTrue(left(75, 132) == ("57", "left", false))
-        XCTAssertTrue(left(144.4, 132) == ("12", "over", true))
+        XCTAssertTrue(left(144.4, 132) == ("+12", "over", true), "An overage is signed")
         XCTAssertTrue(left(132.3, 132) == ("0", "left", false), "Not over until a whole gram over")
     }
 }

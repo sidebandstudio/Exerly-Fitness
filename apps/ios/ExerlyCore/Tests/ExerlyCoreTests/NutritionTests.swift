@@ -45,6 +45,77 @@ enum Foods {
         #expect(close(iron.reduce(0) { $0 + $1.share }, 1))
     }
 
+    /// A sync reads every entry by ID (PARITY B03), and finds each as the
+    /// log changes: logged, edited, deleted, or written by another device.
+    @Test func everyEntrysPayloadFollowsTheLogAsItChanges() throws {
+        let nutrition = try store()
+        let kind = NutritionStore.entryKind
+        func expectPayloads(_ gone: [FoodEntry] = []) throws {
+            for entry in nutrition.entries {
+                #expect(try nutrition.payload(kind: kind, id: entry.id.uuidString) == ExerlyJSON.canonical(entry))
+            }
+            for entry in gone { #expect(try nutrition.payload(kind: kind, id: entry.id.uuidString) == nil) }
+        }
+        let oats = try nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        var milk = try nutrition.log(Foods.milk, grams: 244, on: monday, meal: "Breakfast")
+        try expectPayloads()
+        milk.grams = 300
+        try nutrition.saveEntry(milk)
+        try expectPayloads()
+        try nutrition.deleteEntry(oats.id)
+        try expectPayloads([oats])
+        let remote = try store().log(Foods.chicken, grams: 150, on: monday.adding(days: -1), meal: "Dinner")
+        try nutrition.prepareWrite(kind: kind, id: remote.id.uuidString, payload: ExerlyJSON.canonical(remote))()
+        #expect(nutrition.entries.count == 2)
+        try expectPayloads([oats])
+    }
+
+    /// PARITY N25: an omega-3 total and its parts are separate fields. A day's
+    /// total adds only the totals foods report, never the parts again.
+    /// Several entries are deleted together: a commit that fails deletes
+    /// none of them, on disk or in memory, and the retry deletes them all.
+    @Test func entriesDeletedTogetherAreDeletedTogetherOrNotAtAll() throws {
+        let disk = CommitFailingPersistence()
+        let nutrition = try NutritionStore(persistence: disk, now: { Fixture.instant() })
+        let oats = try nutrition.log(Foods.oats, grams: 60, on: monday, meal: "Breakfast")
+        let milk = try nutrition.log(Foods.milk, grams: 244, on: monday, meal: "Breakfast")
+        disk.failNextCommit = true
+        #expect(throws: CommitFailingPersistence.CommitFailed.self) { try nutrition.deleteEntries([oats.id, milk.id]) }
+        #expect(nutrition.entries.count == 2)
+        #expect(try NutritionStore(persistence: disk).entries.count == 2)
+        try nutrition.deleteEntries([oats.id, milk.id])
+        #expect(nutrition.entries.isEmpty)
+        #expect(try NutritionStore(persistence: disk).entries.isEmpty)
+    }
+
+    @Test func omega3TotalsAndTheirPartsAddUpSeparately() throws {
+        let nutrition = try store()
+        let salmon = Food(name: "Synthetic salmon", per100g: NutrientAmounts([
+            .energy: 200, .fat: 12, .omega3: 2, .omega3ALA: 0.1, .omega3EPA: 0.7, .omega3DHA: 1.2, .saturatedFat: 2.5,
+        ]))
+        let flax = Food(name: "Synthetic flax", per100g: NutrientAmounts([.energy: 530, .fat: 42, .omega3ALA: 22]))
+        try nutrition.log(salmon, grams: 100, on: monday, meal: "Dinner")
+        try nutrition.log(flax, grams: 10, on: monday, meal: "Breakfast")
+        let summary = nutrition.summary(on: monday)
+        #expect(summary.totals[.omega3] == 2, "Flax reports only ALA, so the total isn't 4.3")
+        #expect(close(summary.totals[.omega3ALA], 2.3) && summary.totals[.omega3EPA] == 0.7 && summary.totals[.omega3DHA] == 1.2)
+        #expect(summary.reporting[.omega3] == 1 && summary.reporting[.omega3ALA] == 2)
+        #expect(summary.totals[.omega6] == nil && summary.totals[.monounsaturatedFat] == nil, "Unreported fats stay unknown")
+        #expect(summary.totals[.saturatedFat] == 2.5)
+    }
+
+    /// PARITY N05: a quick add is removed like any entry, and the day's totals follow.
+    @Test func aRemovedQuickAddLeavesTheDaysTotals() throws {
+        let nutrition = try store()
+        try nutrition.log(Foods.oats, grams: 80, on: monday, meal: "Breakfast")
+        let quick = try nutrition.quickAdd(NutrientAmounts([.energy: 450, .protein: 30]), name: "Restaurant lunch", on: monday, meal: "Lunch")
+        #expect(close(nutrition.summary(on: monday).totals.energy, 304 + 450))
+        try nutrition.deleteEntry(quick.id)
+        let summary = nutrition.summary(on: monday)
+        #expect(summary.entries == 1 && close(summary.totals.energy, 304) && summary.byMeal["Lunch"] == nil)
+        #expect(nutrition.foods.isEmpty && nutrition.recentFoods().map(\.foodID) == [Foods.oats.id])
+    }
+
     @Test func recipesComputeTheirNutrientsFromIngredientsAndYield() throws {
         let porridge = Food.recipe(name: "Porridge", ingredients: [RecipeIngredient(food: Foods.oats.snapshot, grams: 80),
                                                                    RecipeIngredient(food: Foods.milk.snapshot, grams: 300)],
@@ -290,5 +361,32 @@ enum Foods {
         try await phoneSync.sync()
         #expect(phone.day(monday) == tablet.day(monday))
         #expect(phone.day(monday).status == .partial && phone.day(monday).notes == "Travel day, hotel breakfast")
+    }
+
+    /// PARITY I03 and N08: when two devices change one entry's amount before
+    /// syncing, the device that syncs second keeps its own and records the
+    /// other in a conflict that reaches both, so neither edit is lost.
+    @Test func twoDevicesEditingOneEntryKeepTheOtherEditForReview() async throws {
+        let server = FakeDocumentServer()
+        let phoneStore = InMemoryTrainingPersistence(), tabletStore = InMemoryTrainingPersistence()
+        let phone = try store(phoneStore), tablet = try store(tabletStore)
+        let phoneSync = SyncEngine(hosts: [phone], state: phoneStore, api: server)
+        let tabletSync = SyncEngine(hosts: [tablet], state: tabletStore, api: server)
+        let logged = try phone.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        var onPhone = try #require(phone.entries(on: monday).first), onTablet = try #require(tablet.entries(on: monday).first)
+        onPhone.grams = 60
+        onTablet.grams = 90
+        try phone.saveEntry(onPhone)
+        try tablet.saveEntry(onTablet)
+        try await phoneSync.sync()
+        try await tabletSync.sync()
+        try await phoneSync.sync()
+        #expect(phone.entries(on: monday).map(\.grams) == [90] && tablet.entries(on: monday).map(\.grams) == [90])
+        let conflict = try #require(phoneSync.conflicts.unresolved.first)
+        #expect(conflict.documentID == logged.id.uuidString && conflict.fields == ["grams"])
+        #expect(tabletSync.conflicts.unresolved.map(\.id) == [conflict.id], "Both devices show it")
+        #expect(try conflict.remote?.decode(FoodEntry.self).grams == 60, "The phone's 60 g is kept for review")
     }
 }

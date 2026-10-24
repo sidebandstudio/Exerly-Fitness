@@ -12,9 +12,30 @@ function equal(a, b) {
     timingSafeEqual(Buffer.from(a), Buffer.from(b))
   );
 }
-function credential(sessionID, generation) {
+function refreshMAC(sessionID, generation) {
   const { resolveSecret } = require('./auth');
-  return `${sessionID}.${createHmac('sha256', resolveSecret()).update(`refresh:${sessionID}:${generation}`).digest('base64url')}`;
+  return createHmac('sha256', resolveSecret())
+    .update(`refresh:${sessionID}:${generation}`)
+    .digest('base64url');
+}
+// `session.generation.mac`. The generation is covered by the MAC, so a
+// presented credential says which rotation it came from and checking it is
+// one HMAC however many rotations the session has had.
+function credential(sessionID, generation) {
+  return `${sessionID}.${generation}.${refreshMAC(sessionID, generation)}`;
+}
+// Credentials issued before the generation was included were
+// `session.mac`. They stay valid until their next rotation.
+const legacyCredential = (sessionID, generation) =>
+  `${sessionID}.${refreshMAC(sessionID, generation)}`;
+const LEGACY_REUSE_WINDOW = 16;
+
+/** The session's current credential, in the form it was issued in. */
+function currentCredential(session) {
+  const legacy = legacyCredential(session.session_id, session.generation);
+  return equal(session.refresh_hash, hash(legacy))
+    ? legacy
+    : credential(session.session_id, session.generation);
 }
 
 function isActive(session, user) {
@@ -33,7 +54,7 @@ function response(user, session, { modern = true } = {}) {
       sid: session.session_id,
       version: session.credentials_version ?? 0,
     }),
-    refreshToken: modern ? credential(session.session_id, session.generation) : undefined,
+    refreshToken: modern ? currentCredential(session) : undefined,
     expiresIn: modern ? 900 : 2592000,
     sessionId: session.session_id,
     user: serializeUser(user),
@@ -154,7 +175,7 @@ async function rotate(refreshToken, operation) {
     throw unauthorized('Invalid refresh credential');
   if (typeof operation !== 'string' || !/^[a-zA-Z0-9._:-]{8,128}$/.test(operation))
     throw badRequest('An operation key is required to refresh the session');
-  return store.transaction(async () => {
+  const result = await store.transaction(async () => {
     const id = refreshToken.split('.')[0];
     const session = await store.findOne('sessions', { session_id: id });
     if (!session || session.revoked_at || session.expires_at <= new Date())
@@ -167,8 +188,17 @@ async function rotate(refreshToken, operation) {
     // Keychain. Retrying a lost acknowledgement returns the same credential.
     if (equal(session.previous_refresh_hash, presented) && session.previous_operation === operation)
       return response(user, session);
-    if (!equal(session.refresh_hash, presented))
+    if (!equal(session.refresh_hash, presented)) {
+      // A genuine credential this session already rotated past means two
+      // holders: the app and whoever copied it. Nobody can tell which is
+      // which, so the session ends for both. The revocation must commit, so
+      // the refusal is thrown after the transaction.
+      if (rotatedEarlier(refreshToken, id, session.generation)) {
+        await store.update('sessions', { id: session.id }, { revoked_at: new Date() });
+        return REUSED;
+      }
       throw unauthorized('Refresh credential has already been rotated');
+    }
     const generation = session.generation + 1;
     const updated = await store.update(
       'sessions',
@@ -184,6 +214,31 @@ async function rotate(refreshToken, operation) {
     if (!updated) throw unauthorized('Session changed. Retry with the saved credential.');
     return response(user, updated);
   });
+  if (result === REUSED)
+    throw unauthorized('This sign-in was used from two places, so it was ended. Sign in again.');
+  return result;
+}
+
+const REUSED = Symbol('reused refresh credential');
+
+/**
+ * Whether `presented` is this session's credential from an earlier
+ * generation. A forged credential costs at most LEGACY_REUSE_WINDOW HMACs to
+ * refuse, never one per rotation.
+ */
+function rotatedEarlier(presented, sessionID, generation) {
+  const parts = presented.split('.');
+  if (parts.length === 3) {
+    if (!/^\d{1,15}$/.test(parts[1])) return false;
+    const earlier = Number(parts[1]);
+    return earlier < generation && equal(refreshMAC(sessionID, earlier), parts[2]);
+  }
+  if (parts.length !== 2) return false;
+  const oldest = Math.max(0, generation - LEGACY_REUSE_WINDOW);
+  for (let earlier = generation - 1; earlier >= oldest; earlier--) {
+    if (equal(legacyCredential(sessionID, earlier), presented)) return true;
+  }
+  return false;
 }
 
 async function revokeAll(accountID) {

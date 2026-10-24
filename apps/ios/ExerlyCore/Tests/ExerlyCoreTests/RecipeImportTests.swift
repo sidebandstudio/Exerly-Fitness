@@ -42,6 +42,27 @@ import Testing
         #expect(read("2 lemons") == (TypedAmount(2), "lemons"), "Only serving words move")
     }
 
+    /// Review round 1: the drained amount was rounded to 0.1 of the can's unit
+    /// before becoming grams, so a 0.4 kg can drained to 200 g and a 400 g one
+    /// to 240 g. Grams are now exact and only the label is rounded.
+    @Test func aDrainedCanWeighsTheSameWhateverUnitItsSizeIsIn() throws {
+        let beans = Food(name: "Black beans, from canned, no added fat", source: .usda, per100g: NutrientAmounts([.energy: 134]))
+        let cases: [(line: String, label: String)] = [
+            ("1 (400 g) can black beans, drained", "240 g"),
+            ("1 (0.4 kg) can black beans, drained", "0.24 kg"),
+            ("1 (14.11 oz) can black beans, drained", "8.5 oz"),
+            ("1 (0.882 lb) can black beans, drained", "0.53 lb")
+        ]
+        for (line, label) in cases {
+            let size = try #require(IngredientLine(line).size?.grams, "\(line)")
+            let portion = try #require(IngredientLine(line).portion(of: beans), "\(line)")
+            #expect(abs(portion.amount.grams - size * IngredientLine.drainedShare) < 1e-9, "\(line): \(portion.amount.grams) g")
+            #expect(abs(portion.amount.grams - 240) < 0.1, "\(line): \(portion.amount.grams) g")
+            #expect(portion.amount.serving?.name == "1 can, drained (\(label))", "\(line): \(portion.amount.serving?.name ?? "")")
+            #expect(!portion.exact)
+        }
+    }
+
     @Test func aSizeInParenthesesIsEachContainersWeightOrTheWholeAmounts() {
         let can = IngredientLine("1 (15 oz) can black beans, drained and rinsed")
         #expect(can.amount == TypedAmount(1, .serving("can")) && can.food == "black beans")
@@ -53,12 +74,18 @@ import Testing
         #expect(IngredientLine("1 cup (about 2 medium) onion").size == nil, "Not a weight")
         #expect(IngredientLine("1 cup milk (optional)").size == nil)
 
-        let beans = Food(name: "Black beans, NFS", source: .usda, per100g: NutrientAmounts([.energy: 181]), servings: [Serving("1 cup", grams: 185)])
+        let beans = Food(name: "Black beans, from canned, no added fat", source: .usda, per100g: NutrientAmounts([.energy: 134]),
+                         servings: [Serving("1 cup", grams: 180)])
+        // Drained and rinsed: 60 % of the can's 425 g, about 340 kcal rather than 570, to check.
         let one = can.portion(of: beans)
-        #expect(one?.amount.serving == Serving("1 can (15 oz)", grams: 15 * USUnits.gramsPerOunce))
-        #expect(one?.amount.quantity == 1 && one?.exact == true)
+        #expect(can.drained)
+        #expect(one?.amount.serving?.name == "1 can, drained (9 oz)")
+        #expect(one.map { abs($0.amount.grams - 9 * USUnits.gramsPerOunce) < 1e-9 } == true)
+        #expect(one?.amount.quantity == 1 && one?.exact == false)
+        #expect(one.map { ($0.amount.grams * 1.34).rounded() } == 342)
         let two = IngredientLine("2 (15 oz) cans black beans").portion(of: beans)
-        #expect(two.map { abs($0.amount.grams - 30 * USUnits.gramsPerOunce) < 0.001 } == true)
+        #expect(two.map { abs($0.amount.grams - 30 * USUnits.gramsPerOunce) < 0.001 && $0.exact } == true, "Undrained, the label's weight")
+        #expect(!IngredientLine("1 (14 oz) can tomatoes, undrained").drained)
         let flour = Food(name: "Flour", per100g: NutrientAmounts([.energy: 364]))
         #expect(cups.portion(of: flour).map { ($0.amount.grams, $0.amount.serving, $0.exact) } ?? (0, nil, false) == (250, nil, true),
                 "The weight beats a cup of flour by density")
@@ -89,12 +116,61 @@ import Testing
         #expect(imported.sourceURL == "https://recipes.example/bowl")
         #expect(imported.unmatched == ["½ tsp salt"])
         try #require(imported.ingredients.count == 3)
-        #expect(imported.ingredients[0].ingredient.food.foodID == beans.id && imported.ingredients[0].exact)
+        #expect(imported.ingredients[0].ingredient.food.foodID == beans.id && !imported.ingredients[0].exact, "Drained, to check")
         #expect(imported.ingredients[0].line == "1 (15 oz) can black beans, drained")
         #expect(imported.ingredients[1].ingredient.food.foodID == mine.id, "Their own rice, by the same words")
         #expect(imported.ingredients[1].ingredient.serving == Serving("1 cup", grams: 160))
         // No amount: the food's first serving, marked to check.
         #expect(imported.ingredients[2].ingredient.serving == Serving("1 cup", grams: 185) && !imported.ingredients[2].exact)
+    }
+
+    @Test func aCanIsMatchedAsCannedFood() {
+        #expect(IngredientLine("1 (15 oz) can black beans, drained and rinsed").match == "black beans canned")
+        #expect(IngredientLine("2 cans chickpeas").match == "chickpeas canned")
+        #expect(IngredientLine("1 can canned tomatoes").match == "canned tomatoes")
+        #expect(IngredientLine("1 cup black beans").match == "black beans")
+    }
+
+    /// Code-blind run 7: "2 tbsp olive oil" matched the person's own olive
+    /// oil, which names no serving, and came in as 4 oz (about 1,000 kcal).
+    @Test func spoonsOfAnOilOrAWaterLikeLiquidWeighByItsDensity() throws {
+        let oil = Food(name: "Olive oil", per100g: NutrientAmounts([.energy: 884, .fat: 100]))
+        let page = WebRecipe(name: "Dressing", ingredients: ["2 tbsp olive oil", "1 cup kale", "1/2 cup chicken broth"],
+                             url: "https://recipes.example/dressing")
+        let kale = Food(name: "Kale", per100g: NutrientAmounts([.energy: 35]))
+        let broth = Food(name: "Chicken broth", per100g: NutrientAmounts([.energy: 6]))
+        let imported = RecipeImport(page: page, own: [oil, kale, broth], database: [nil, nil, nil], unit: .pounds)
+        try #require(imported.ingredients.count == 3)
+        // 2 × 14.79 ml × 0.91 g/ml = 26.9 g, 238 kcal.
+        let olive = imported.ingredients[0]
+        #expect(olive.exact && !olive.needsWeight)
+        #expect(abs(olive.ingredient.grams - 26.9) < 0.1 && olive.ingredient.quantity == 2)
+        #expect((olive.ingredient.grams * 8.84).rounded() == 238)
+        // No density for a cup of kale: no weight is guessed, the person enters one.
+        #expect(!imported.ingredients[1].exact && imported.ingredients[1].needsWeight)
+        // Broth weighs like water: half a cup is 118 g.
+        #expect(abs(imported.ingredients[2].ingredient.grams - 118.3) < 0.1 && imported.ingredients[2].exact)
+    }
+
+    @Test func spelledOutMeasuresAndKitchenMeasuresForLiquids() {
+        // USDA spells its measures out; its own tablespoon is used.
+        let usda = Food(name: "Olive oil", source: .usda, per100g: NutrientAmounts([.energy: 900]),
+                        servings: [Serving("1 cup", grams: 224), Serving("1 tablespoon", grams: 14)])
+        #expect(usda.portion(TypedAmount(2, .tablespoons))?.amount.serving == Serving("1 tablespoon", grams: 14))
+        #expect(usda.kitchenMeasures.map { "\($0.name) \(($0.grams * 10).rounded() / 10)" } == ["1 tsp 4.7"], "It names a tablespoon and a cup already")
+        let honey = Food(name: "Honey", source: .usda, per100g: NutrientAmounts([.energy: 304]), servings: [Serving("1 tablespoon", grams: 21)])
+        #expect(honey.portion(TypedAmount(1, .cups)).map { ($0.amount.grams).rounded() } == 336, "Density from its tablespoon")
+        #expect(honey.kitchenMeasures.isEmpty, "Not a liquid by name or label")
+
+        let mine = Food(name: "Olive oil", per100g: NutrientAmounts([.energy: 884]))
+        #expect(mine.kitchenMeasures.map { "\($0.name) \(($0.grams * 10).rounded() / 10)" } == ["1 tbsp 13.5", "1 tsp 4.5", "1 cup 215.3"])
+        #expect(mine.portion(TypedAmount(2, .tablespoons))?.amount.serving == mine.kitchenMeasures.first, "Typed, it's the same serving")
+        #expect(Food.typicalDensity(name: "Oil, sesame") == 0.91)
+        #expect(Food.typicalDensity(name: "Vinegar, cider") == 1)
+        #expect(Food.typicalDensity(name: "Almond milk, unsweetened") == 1)
+        for other in ["Tuna in oil", "Milk, dry", "Orange juice, frozen concentrate", "Peanut butter", "Chicken breast", "Olive oil spray"] {
+            #expect(Food.typicalDensity(name: other) == nil, "\(other)")
+        }
     }
 
     @Test func anArchivedFoodOrADifferentNameDoesNotMatch() {

@@ -54,6 +54,43 @@ final class SessionBridgeTests: XCTestCase {
         return auth
     }
 
+    // MARK: Password sign-in and recovery
+
+    func testAWrongPasswordSaysSoInsteadOfSessionExpired() async throws {
+        StubURLProtocol.handler = { _ in (401, Self.json(["message": "Invalid credentials"])) }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        await auth.login(email: "a@example.test", password: "wrong-password")
+        XCTAssertEqual(auth.error, "That email and password don’t match. Try again, or reset your password.")
+        XCTAssertNil(keychain.getToken())
+        StubURLProtocol.handler = { _ in (429, Self.json(["message": "Too many sign-in attempts. Wait a few minutes and try again."])) }
+        await auth.login(email: "a@example.test", password: "wrong-password")
+        XCTAssertEqual(auth.error, "Too many sign-in attempts. Wait a few minutes and try again.")
+    }
+
+    func testPasswordResetSendsTheCodeWithoutASessionAndKeepsNone() async throws {
+        var bodies: [String: [String: Any]] = [:]
+        StubURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            bodies[request.url!.path] = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
+            if request.url!.path == "/auth/password/forgot" {
+                return (202, Self.json(["message": "If an Exerly account uses that email, we sent it a code."]))
+            }
+            return (400, Self.json(["message": "That code is wrong or has expired.", "details": ["code": "reset_code_invalid"]]))
+        }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        let notice = try await auth.requestPasswordReset(email: "a@example.test")
+        XCTAssertEqual(notice, "If an Exerly account uses that email, we sent it a code.")
+        do {
+            try await auth.resetPassword(email: "a@example.test", code: "ABCDEFGH", newPassword: "a-new-passphrase")
+            XCTFail("Expected the wrong code")
+        } catch { XCTAssertEqual(error.localizedDescription, "That code is wrong or has expired.") }
+        XCTAssertEqual(bodies["/auth/password/forgot"]?["email"] as? String, "a@example.test")
+        XCTAssertEqual(bodies["/auth/password/reset"]?["code"] as? String, "ABCDEFGH")
+        XCTAssertEqual(bodies["/auth/password/reset"]?["newPassword"] as? String, "a-new-passphrase")
+        XCTAssertNil(keychain.getToken())
+        XCTAssertEqual(auth.authState, .loading)
+    }
+
     // MARK: Apple sign-in
 
     func testAppleSignInBootstrapsLikeLoginAndReportsSignInMethods() async throws {
@@ -166,7 +203,7 @@ final class SessionBridgeTests: XCTestCase {
 
     // MARK: Account actions
 
-    func testLinkingAndUnlinkingAppleUpdatesSignInMethods() async throws {
+    func testLinkingAndUnlinkingAppleSendsThePasswordAndUpdatesSignInMethods() async throws {
         let auth = try await signedIn(password: true, apple: false)
         XCTAssertEqual(auth.signInMethods, SignInMethods(password: true, apple: false))
         var calls: [String] = []
@@ -176,13 +213,16 @@ final class SessionBridgeTests: XCTestCase {
                 let body = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
                 XCTAssertEqual(body?["identityToken"] as? String, "apple-jwt")
                 XCTAssertEqual(body?["nonce"] as? String, "raw-nonce")
+                XCTAssertEqual(body?["password"] as? String, "synthetic-password")
                 return (201, Self.json(["provider": "apple", "connected": true]))
             }
+            let body = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any]
+            XCTAssertEqual(body?["password"] as? String, "synthetic-password")
             return (200, Self.json(["provider": "apple", "connected": false]))
         }
-        try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce")
+        try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce", confirmation: .password("synthetic-password"))
         XCTAssertEqual(auth.signInMethods?.apple, true)
-        try await auth.unlinkApple()
+        try await auth.unlinkApple(password: "synthetic-password")
         XCTAssertEqual(auth.signInMethods?.apple, false)
         XCTAssertEqual(calls, ["POST /api/account/identities/apple", "DELETE /api/account/identities/apple"])
     }
@@ -191,7 +231,7 @@ final class SessionBridgeTests: XCTestCase {
         let auth = try await signedIn()
         StubURLProtocol.handler = { _ in (409, Self.json(["message": "This Apple ID is connected to another Exerly account"])) }
         do {
-            try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce")
+            try await auth.linkApple(identityToken: "apple-jwt", rawNonce: "raw-nonce", confirmation: .password("synthetic-password"))
             XCTFail("Expected linkConflict")
         } catch ExerlyCore.APIError.linkConflict {}
         XCTAssertEqual(auth.signInMethods?.apple, false)
@@ -205,6 +245,22 @@ final class SessionBridgeTests: XCTestCase {
         }
         let export = try JSONSerialization.jsonObject(with: try await auth.exportAccount()) as? [String: Any]
         XCTAssertEqual(export?["version"] as? Int, 3)
+    }
+
+    func testAWrongPasswordKeepsTheAccountAndTheSession() async throws {
+        let auth = try await signedIn()
+        StubURLProtocol.handler = { request in
+            let body = try JSONSerialization.jsonObject(with: Self.body(of: request)) as? [String: Any] ?? [:]
+            XCTAssertEqual(body["password"] as? String, "typed-wrong")
+            return (403, Self.json(["message": "That password is incorrect.", "details": ["code": "wrong_password"]]))
+        }
+        do {
+            _ = try await auth.deleteAccount(confirmation: .password("typed-wrong"))
+            XCTFail("Expected the wrong password")
+        } catch ExerlyCore.APIError.wrongPassword {}
+        XCTAssertEqual(auth.authState, .authenticated)
+        XCTAssertNotNil(keychain.getToken())
+        XCTAssertEqual(auth.accountsAwaitingLocalCleanup, [])
     }
 
     func testDeletionAsksForAppleThenSignsOutAndForgetsTheAccount() async throws {
@@ -222,12 +278,16 @@ final class SessionBridgeTests: XCTestCase {
                                    "details": ["code": "apple_reauthorization_required"]]))
                 : (200, Self.json(["deleted": true, "apple_revoked": true, "removed": [:]]))
         }
-        let first = try await auth.deleteAccount(appleAuthorizationCode: nil)
+        let first = try await auth.deleteAccount(confirmation: .password("synthetic-password"))
         XCTAssertEqual(first, .appleReauthorizationRequired)
         XCTAssertEqual(auth.authState, .authenticated)
-        let second = try await auth.deleteAccount(appleAuthorizationCode: "apple-code")
+        let second = try await auth.deleteAccount(confirmation: .apple(identityToken: "apple-jwt", rawNonce: "raw-nonce",
+                                                                        authorizationCode: "apple-code"))
         XCTAssertEqual(second, .deleted)
         XCTAssertEqual(bodies.map { $0["confirm"] as? Bool }, [true, true])
+        XCTAssertEqual(bodies.first?["password"] as? String, "synthetic-password")
+        XCTAssertEqual(bodies.last?["identityToken"] as? String, "apple-jwt")
+        XCTAssertEqual(bodies.last?["nonce"] as? String, "raw-nonce")
         XCTAssertEqual(bodies.last?["appleAuthorizationCode"] as? String, "apple-code")
         XCTAssertEqual(auth.authState, .unauthenticated)
         XCTAssertNil(auth.currentUser)
@@ -249,7 +309,7 @@ final class SessionBridgeTests: XCTestCase {
             XCTAssertEqual(request.url!.path, "/api/bootstrap")
             return (401, Self.deletedBody)
         }
-        let outcome = try await auth.deleteAccount(appleAuthorizationCode: nil)
+        let outcome = try await auth.deleteAccount(confirmation: .password("synthetic-password"))
         XCTAssertEqual(outcome, .deleted)
         XCTAssertEqual(auth.authState, .unauthenticated)
         XCTAssertEqual(auth.accountsAwaitingLocalCleanup, ["a"])
@@ -262,7 +322,7 @@ final class SessionBridgeTests: XCTestCase {
             return (200, Self.bootstrap("a", password: true, apple: false))
         }
         do {
-            _ = try await auth.deleteAccount(appleAuthorizationCode: nil)
+            _ = try await auth.deleteAccount(confirmation: .password("synthetic-password"))
             XCTFail("Expected the network error")
         } catch let error as URLError {
             XCTAssertEqual(error.code, .networkConnectionLost)

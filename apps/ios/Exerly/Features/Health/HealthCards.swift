@@ -7,51 +7,70 @@ import SwiftUI
 /// and never on a device without Health.
 struct HealthWeighInPrompt: View {
     @ObservedObject private var sync = HealthSync.shared
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if sync.isAvailable, sync.accountID != nil, !sync.preferences.promptDismissed,
+        if sync.isAvailable, let accountID = sync.accountID, !sync.preferences.promptDismissed,
            !sync.preferences.isOn(.readWeights) {
-            ExCard(accent: true) {
-                HStack(alignment: .top, spacing: ExSpacing.item) {
-                    if !typeSize.isAccessibilitySize {
-                        Image(systemName: "scalemass.fill").font(.system(size: 20, weight: .medium))
-                            .foregroundStyle(Color.exPrimaryText).frame(width: 44, height: 44)
-                            .background(Color.exPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: ExRadius.control))
-                            .accessibilityHidden(true)
-                    }
-                    VStack(alignment: .leading, spacing: ExSpacing.tight) {
-                        Text("Use weigh-ins from your scale via Apple Health").font(.exBodyMedium)
-                            .foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
-                        Text("If your smart scale saves to Health, each reading arrives here on its own, with body fat when the scale measures it.")
-                            .font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                    }.fixedSize(horizontal: false, vertical: true)
+            Offer(accountID: accountID).id(accountID)
+        }
+    }
+}
+
+/// The offer for one account, whose weigh-ins its preview reads.
+private struct Offer: View {
+    @ObservedObject private var sync = HealthSync.shared
+    @StateObject private var history: HealthHistoryModel
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    init(accountID: String) {
+        _history = StateObject(wrappedValue: HealthHistoryModel(accountID: accountID))
+    }
+
+    var body: some View {
+        ExCard(accent: true) {
+            HStack(alignment: .top, spacing: ExSpacing.item) {
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: "scalemass.fill").font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.exPrimaryText).frame(width: 44, height: 44)
+                        .background(Color.exPrimary.opacity(0.12), in: RoundedRectangle(cornerRadius: ExRadius.control))
+                        .accessibilityHidden(true)
                 }
-                if let notice = sync.notices[.readWeights] {
-                    Label(notice, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
-                    : AnyLayout(HStackLayout(spacing: ExSpacing.small))
-                layout {
-                    Button {
-                        Task {
-                            await sync.setEnabled(.readWeights, true)
-                            if sync.preferences.isOn(.readWeights) { sync.dismissPrompt() }
-                        }
-                    } label: {
-                        if sync.requesting == .readWeights { ProgressView().tint(.white) } else { Text("Turn on") }
-                    }
-                    .buttonStyle(ExActionStyle())
-                    .disabled(sync.requesting != nil)
-                    .accessibilityIdentifier("health.prompt.turnOn")
-                    Button("Not now") { sync.dismissPrompt() }
-                        .buttonStyle(ExActionStyle(secondary: true))
-                        .accessibilityIdentifier("health.prompt.notNow")
-                }
+                VStack(alignment: .leading, spacing: ExSpacing.tight) {
+                    Text("Use weigh-ins from your scale via Apple Health").font(.exBodyMedium)
+                        .foregroundStyle(Color.exTextPrimary).accessibilityAddTraits(.isHeader)
+                    Text("If your smart scale saves to Health, each reading arrives here on its own, with body fat when the scale measures it.")
+                        .font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                }.fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("health.prompt")
+            if let notice = sync.notices[.readWeights] {
+                Label(notice, systemImage: "exclamationmark.triangle").font(.exCaption).foregroundStyle(Color.exWarning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: ExSpacing.small))
+                : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+            layout {
+                Button {
+                    Task { await history.begin(.weights) }
+                } label: {
+                    if sync.requesting == .readWeights || history.requesting != nil { ProgressView().tint(.white) } else { Text("Turn on") }
+                }
+                .buttonStyle(ExActionStyle())
+                .disabled(sync.requesting != nil || history.requesting != nil)
+                .accessibilityIdentifier("health.prompt.turnOn")
+                Button("Not now") { sync.dismissPrompt() }
+                    .buttonStyle(ExActionStyle(secondary: true))
+                    .accessibilityIdentifier("health.prompt.notNow")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("health.prompt")
+        .sheet(item: $history.pending) { pending in
+            HealthImportPreviewSheet(pending: pending, onImport: { _ in
+                Task {
+                    await history.confirm()
+                    if sync.preferences.isOn(.readWeights) { sync.dismissPrompt() }
+                }
+            }, onCancel: history.cancel)
         }
     }
 }

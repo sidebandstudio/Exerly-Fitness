@@ -13,6 +13,8 @@ public struct MacroFactorImportSummary: Sendable, Hashable {
         /// Already in Exerly, from an earlier import or as the same reading,
         /// and left as they are.
         public var existing = 0
+        /// From an earlier import and changed in the file since: updated.
+        public var updated = 0
     }
 
     public var counts: [Kind: Count] = [:]
@@ -50,9 +52,12 @@ public struct MacroFactorImport {
     private var days: [NutritionDay] = []
     private var weights: [WeightEntry] = []
     private var plans: [NutritionPlan] = []
-    private var sessions: [WorkoutSession] = []
+    private var sessions: [PlannedWrite] = []
+    /// Workouts changed both in the file and in Exerly since the last import: Exerly's are kept.
+    public private(set) var keptEdited = 0
 
-    public init(_ export: MacroFactorExport, nutrition: NutritionStore, training: TrainingStore) {
+    /// `records` are the account's earlier imports, for workouts the file updates.
+    public init(_ export: MacroFactorExport, nutrition: NutritionStore, training: TrainingStore, records: [ImportRecord] = []) {
         self.export = export
         summary = MacroFactorImportSummary(dateRange: export.dateRange, report: export.report)
         func count(_ kind: Kind, new: Bool) {
@@ -121,10 +126,11 @@ public struct MacroFactorImport {
             }
         }
 
-        for session in export.sessions {
-            let new = training.history.session(session.id) == nil && training.activeSession?.id != session.id
-            if new { sessions.append(session) }
-            count(.workouts, new: new)
+        if !export.sessions.isEmpty, let reconciled = try? HistoryImportReader.reconcile(export.sessions, training: training, records: records) {
+            sessions = reconciled.writes
+            summary.counts[.workouts] = MacroFactorImportSummary.Count(new: reconciled.new, existing: reconciled.existing,
+                                                                       updated: reconciled.updated)
+            keptEdited = reconciled.keptEdited
         }
     }
 
@@ -143,46 +149,48 @@ public struct MacroFactorImport {
         }
     }
 
-    /// Saves one kind as one unit: every document is checked, then all are
-    /// saved or none are.
-    public func save(_ kind: Kind, nutrition: NutritionStore, training: TrainingStore) throws {
-        switch kind {
-        case .foods: try write(nutrition, NutritionStore.foodKind, foods.map { ($0.id, try ExerlyJSON.canonical($0)) })
-        case .entries:
-            try write(nutrition, NutritionStore.entryKind, try entries.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) }
-                + removedTotals.map { ($0.uuidString, nil) })
-        case .dayTotals: try write(nutrition, NutritionStore.entryKind, try totals.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .days: try write(nutrition, NutritionStore.dayKind, try days.map { ($0.id, try ExerlyJSON.canonical($0)) })
-        case .weights: try write(nutrition, NutritionStore.weightKind, try weights.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .plans: try write(nutrition, NutritionStore.planKind, try plans.map { ($0.id.uuidString, try ExerlyJSON.canonical($0)) })
-        case .workouts: try training.importSessions(sessions)
+    /// Every document the import writes, with what it expects to replace.
+    public func writes(nutrition: NutritionStore) throws -> [PlannedWrite] {
+        func add<T: Encodable>(_ kind: String, _ id: String, _ value: T) throws -> PlannedWrite {
+            PlannedWrite(kind: kind, id: id, before: nil, after: try ExerlyJSON.canonical(value))
         }
+        // A day's foods and the daily total they replace are saved, and undone, together.
+        func day(_ date: LocalDate) -> String { "food/\(date)" }
+        var writes: [PlannedWrite] = []
+        writes += try foods.map { try add(NutritionStore.foodKind, $0.id, $0) }
+        writes += try entries.map { entry in
+            var write = try add(NutritionStore.entryKind, entry.id.uuidString, entry)
+            write.group = day(entry.date)
+            return write
+        }
+        writes += try removedTotals.map { id in
+            let before = try nutrition.payload(kind: NutritionStore.entryKind, id: id.uuidString)
+            let date = before.flatMap { try? ExerlyJSON.decoder.decode(FoodEntry.self, from: $0) }?.date
+            return PlannedWrite(kind: NutritionStore.entryKind, id: id.uuidString, before: before, after: nil, group: date.map(day))
+        }
+        writes += try totals.map { try add(NutritionStore.entryKind, $0.id.uuidString, $0) }
+        writes += try days.map { day in
+            PlannedWrite(kind: NutritionStore.dayKind, id: day.id, before: try nutrition.payload(kind: NutritionStore.dayKind, id: day.id),
+                         after: try ExerlyJSON.canonical(day))
+        }
+        writes += try weights.map { try add(NutritionStore.weightKind, $0.id.uuidString, $0) }
+        writes += try plans.map { try add(NutritionStore.planKind, $0.id.uuidString, $0) }
+        writes += sessions
+        return writes
     }
 
-    /// Saves every kind. A kind that fails is reported in `failures`, and the
-    /// others still save.
+    /// Saves everything as one unit through `HistoryImporter`: all of it, or
+    /// nothing, with every kind reported as failed.
     @discardableResult
     public func save(nutrition: NutritionStore, training: TrainingStore) -> MacroFactorImportSummary {
         var result = summary
-        for kind in steps {
-            do { try save(kind, nutrition: nutrition, training: training) } catch { result.failures[kind] = Self.describe(error) }
+        do {
+            var plan = HistoryImportPlan(source: .macroFactor, files: [], timeZone: .gmt)
+            plan.writes = try writes(nutrition: nutrition)
+            try HistoryImporter(hosts: [nutrition, training], persistence: nutrition.persistence).commit(plan)
+        } catch {
+            for kind in steps { result.failures[kind] = HistoryImporter.describe(error) }
         }
         return result
-    }
-
-    public static func describe(_ error: Error) -> String {
-        switch error {
-        case let error as DocumentError: error.message
-        case NutritionStore.StoreError.invalid(let problems): problems.joined(separator: "; ")
-        case TrainingStore.StoreError.edit(let problem): "A workout isn't valid: \(problem)"
-        default: "\(error)"
-        }
-    }
-
-    private func write(_ nutrition: NutritionStore, _ kind: String, _ documents: [(id: String, payload: Data?)]) throws {
-        for document in documents {
-            if let payload = document.payload { try nutrition.validate(kind: kind, id: document.id, payload: payload) }
-        }
-        try nutrition.writeAll(kind: kind, documents)
     }
 }

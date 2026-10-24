@@ -1,5 +1,7 @@
 // Personal access tokens, managed only from a signed-in session (lib/auth.js
 // refuses tokens here). The secret is returned once; only its hash is kept.
+// A token outlives the session that made it, so making one also needs the
+// password or a fresh Sign in with Apple (lib/reauth.js).
 
 const express = require('express');
 const { createHash, randomBytes } = require('node:crypto');
@@ -7,6 +9,8 @@ const { createHash, randomBytes } = require('node:crypto');
 const store = require('../data');
 const { asyncHandler, badRequest, conflict, forbidden, notFound } = require('../lib/errors');
 const { authenticate } = require('../lib/auth');
+const { rateLimit } = require('../lib/ratelimit');
+const { confirmIdentity } = require('../lib/reauth');
 const v = require('../lib/validate');
 const { appendAudit } = require('../lib/documents');
 
@@ -49,6 +53,14 @@ router.get(
 
 router.post(
   '/',
+  // Room for a full set of tokens, but not for guessing the password.
+  rateLimit({
+    name: 'create-token',
+    max: 30,
+    windowMs: 60 * 60 * 1000,
+    key: (req) => req.account.id,
+    message: 'Too many attempts to create a token. Try again in an hour.',
+  }),
   asyncHandler(async (req, res) => {
     const name = v.str(req.body?.name, 'name', { max: 60 });
     const requested = req.body?.scopes;
@@ -65,6 +77,7 @@ router.post(
       req.body?.expires_in_days == null
         ? null
         : v.int(req.body.expires_in_days, 'expires_in_days', { min: 1, max: 3650 });
+    await confirmIdentity(req.body, req.account, 'connect an agent');
     const existing = await store.find('personal_access_tokens', {
       account_id: req.account.id,
       revoked_at: null,

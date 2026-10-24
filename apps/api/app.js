@@ -15,9 +15,10 @@ const { notFoundHandler, errorHandler } = require('./lib/errors');
 function createApp({ logger = console } = {}) {
   const app = express();
 
-  // DigitalOcean terminates TLS at a load balancer, so req.ip is the proxy's
-  // address unless Express is told to read X-Forwarded-For. Rate limiting keyed
-  // on the proxy IP would throttle every user as one.
+  // Behind one reverse proxy (docker-compose, self-hosting), req.ip is the
+  // proxy's address unless Express reads X-Forwarded-For. On App Platform that
+  // header names DigitalOcean's ingress instead, so limits use clientIP()
+  // (lib/ratelimit.js), which reads do-connecting-ip there.
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 

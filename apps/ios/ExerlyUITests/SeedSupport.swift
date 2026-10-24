@@ -36,13 +36,18 @@ extension ExerlyUITestCase {
         try await seedEntry(chicken, grams: 150, daysAgo: 3, meal: "Dinner", minutes: 480, token: token)
     }
 
-    /// Logs an entry `daysAgo` days back, `minutes` before now's time of day.
+    /// Logs an entry `daysAgo` days back, `minutes` before now's time of day,
+    /// on that New York day even just after midnight, when the time would fall
+    /// on the day before: then a minute past its midnight.
     func seedEntry(_ food: SeedFood, grams: Double, daysAgo: Int, meal: String, minutes: Int = 15, token: String) async throws {
         let id = UUID().uuidString
-        let at = Date().addingTimeInterval(Double(-daysAgo * 86_400 - minutes * 60))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let start = calendar.date(byAdding: .day, value: -daysAgo, to: calendar.startOfDay(for: Date()))!
+        let at = max(Date().addingTimeInterval(Double(-daysAgo * 86_400 - minutes * 60)), start.addingTimeInterval(60))
         let day = DateFormatter()
-        day.calendar = Calendar(identifier: .gregorian)
-        day.timeZone = TimeZone(identifier: "America/New_York")!
+        day.calendar = calendar
+        day.timeZone = calendar.timeZone
         day.dateFormat = "yyyy-MM-dd"
         let instant = ISO8601DateFormatter()
         instant.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -101,6 +106,33 @@ extension ExerlyUITestCase {
             let status: [String: Any] = ["id": day.date, "date": day.date, "status": "complete", "notes": "", "tags": [String]()]
             _ = try await request("PUT", "/v1/documents/nutrition_day/\(day.date)", body: ["base_revision": 0, "payload": status], token: token)
         }
+    }
+
+    /// The account's live documents of a kind, from the change feed.
+    func documents(_ kind: String, token: String) async throws -> [[String: Any]] {
+        var latest: [String: [String: Any]?] = [:]
+        var cursor = 0
+        while true {
+            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
+            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == kind {
+                guard let id = change["id"] as? String else { continue }
+                latest[id] = change["payload"] as? [String: Any]
+            }
+            cursor = page["cursor"] as? Int ?? cursor
+            guard page["has_more"] as? Bool == true else { break }
+        }
+        return Array(latest.compactMapValues { $0 }.values)
+    }
+
+    func waitForDocuments(_ kind: String, token: String, timeout: Int = 40,
+                          _ matches: @escaping ([[String: Any]]) -> Bool) async throws -> [[String: Any]] {
+        for _ in 0..<timeout {
+            let found = try await documents(kind, token: token)
+            if matches(found) { return found }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+        XCTFail("The server's \(kind) documents never matched")
+        return []
     }
 
     /// The account's live weigh-in documents by ID, from the change feed.
@@ -185,6 +217,35 @@ extension ExerlyUITestCase {
         let app = launch(resetSession: true)
         signIn(app, email: person.email)
         return app
+    }
+
+    /// Years of it, for launch with a long history: meals most days, about
+    /// three workouts a week and weigh-ins most mornings, `days` back. Written
+    /// through the import a restored export uses, in a few large requests,
+    /// since one request per document would take the API's rate limit half
+    /// an hour. Returns the food entries written.
+    @discardableResult
+    func seedYearsOfHistory(token: String, days: Int) async throws -> Int {
+        var documents: [(kind: String, id: String, payload: [String: Any])] = []
+        let foods = RealisticFood.all
+        for food in foods.values {
+            documents.append(("saved_food", food.id, ["id": food.id, "name": food.name, "source": "custom", "per100g": food.per100g,
+                                                       "servings": [], "favorite": food.favorite, "createdAt": Self.iso(Self.local(-days - 2, 9, 0))]))
+        }
+        documents += realisticMeals(foods: foods, days: days)
+        documents += realisticWeighIns(days: days)
+        documents.append(realisticPlan(days: days))
+        let program = realisticProgram(days: days)
+        documents.append(("program", program.id, program.payload))
+        documents += realisticWorkouts(program: program, days: days, schedule: Array(stride(from: days - 1, to: 1, by: -2)).filter { $0 % 7 != 3 })
+        for chunk in stride(from: 0, to: documents.count, by: 4000) {
+            let rows = documents[chunk..<min(chunk + 4000, documents.count)].map { document -> [String: Any] in
+                ["kind": document.kind, "document_id": document.id, "revision": 1, "payload": document.payload]
+            }
+            let result = try await request("POST", "/v1/import", body: ["version": 1, "documents": rows], token: token)
+            XCTAssertEqual((result["skipped"] as? [Any])?.count ?? 0, 0, "\(result["skipped"] ?? "")")
+        }
+        return documents.filter { $0.kind == "food_entry" }.count
     }
 
     /// Writes the history and returns how many documents it wrote.
@@ -439,8 +500,9 @@ extension ExerlyUITestCase {
     /// in kilograms at full precision (135 lb is 61.235 kg), so imperial shows
     /// round numbers and an equal load is never a record. Reps climb through
     /// each range and the load steps up between cycles.
-    private func realisticWorkouts(program: RealisticProgram, days: Int) -> [(kind: String, id: String, payload: [String: Any])] {
-        let schedule = [26, 24, 22, 20, 19, 17, 15, 13, 12, 10, 8, 5, 2].filter { $0 < days }
+    private func realisticWorkouts(program: RealisticProgram, days: Int,
+                                   schedule: [Int] = [26, 24, 22, 20, 19, 17, 15, 13, 12, 10, 8, 5, 2]) -> [(kind: String, id: String, payload: [String: Any])] {
+        let schedule = schedule.filter { $0 < days }
         return schedule.enumerated().map { index, back in
             let day = program.days[index % program.days.count]
             let cycle = index / program.days.count

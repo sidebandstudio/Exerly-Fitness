@@ -14,6 +14,10 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     /// When set, the next write is applied but its response is lost.
     var loseNextResponse = false
     var offline = false
+    /// Refuses larger payloads with 413, as the API's 256 KB body limit does.
+    var maxPayloadBytes: Int?
+    /// Kinds refused with 400, as a server deployed before them does.
+    var refusedKinds: Set<String> = []
     private(set) var writes = 0
     /// Every write the server received, including ones refused as conflicts.
     private(set) var attempts: [(id: String, baseRevision: Int)] = []
@@ -21,6 +25,11 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     private func key(_ kind: String, _ id: String) -> String { "\(kind)/\(DocumentWrite.canonicalID(id))" }
 
     func revision(_ kind: String, _ id: String) -> Int? { lock.withLock { documents[key(kind, id)]?.revision } }
+    func stored(_ kind: String, _ id: String) -> Stored? { lock.withLock { documents[key(kind, id)] } }
+    /// Every version written, oldest first.
+    func history(_ kind: String, _ id: String) -> [Stored] {
+        lock.withLock { feed.filter { key($0.kind, $0.id) == key(kind, id) }.map { Stored(revision: $0.revision, payload: $0.payload) } }
+    }
 
     func putDocument(kind: String, id: String, payload: Data, baseRevision: Int, idempotencyKey: String) async throws -> DocumentWriteResult {
         try write(kind, id, payload, baseRevision, idempotencyKey)
@@ -33,6 +42,10 @@ final class FakeDocumentServer: DocumentAPI, @unchecked Sendable {
     private func write(_ kind: String, _ id: String, _ payload: Data?, _ base: Int, _ idempotency: String) throws -> DocumentWriteResult {
         try lock.withLock {
             if offline { throw Offline() }
+            if refusedKinds.contains(kind) { throw APIError.server(status: 400, message: "Unknown document kind \(kind)") }
+            if let maxPayloadBytes, (payload?.count ?? 0) > maxPayloadBytes {
+                throw APIError.server(status: 413, message: "request entity too large")
+            }
             if let receipt = receipts[idempotency] { return receipt }
             attempts.append((id, base))
             let current = documents[key(kind, id)]
@@ -499,5 +512,276 @@ final class Device {
         #expect(tablet.agent.proposals.map(\.status) == [.rejected])
         #expect(phone.agent.proposals.map(\.status) == [.rejected])
         #expect(phone.training.history.sessions[0].exercises[0].sets[2].primary.load == .kg(1000))
+    }
+}
+
+/// A nutrition store that counts how often sync encodes one of its documents.
+@MainActor
+final class CountingHost: DocumentHost {
+    let store: NutritionStore
+    private(set) var encoded = 0
+
+    init(_ store: NutritionStore) { self.store = store }
+
+    var documentKinds: [String] { store.documentKinds }
+    func documentIDs(kind: String) -> [String] { store.documentIDs(kind: kind) }
+    func payload(kind: String, id: String) throws -> Data? {
+        encoded += 1
+        return try store.payload(kind: kind, id: id)
+    }
+    /// As a build that can't read the store's documents would be.
+    var unreadable = false
+    func canonicalize(kind: String, payload: Data) throws -> Data {
+        if unreadable { throw DocumentError(message: "Not readable by this build") }
+        return try store.canonicalize(kind: kind, payload: payload)
+    }
+    func validate(kind: String, id: String, payload: Data) throws { try store.validate(kind: kind, id: id, payload: payload) }
+    func merge(kind: String, base: Data?, local: Data, remote: Data) throws -> Data {
+        try store.merge(kind: kind, base: base, local: local, remote: remote)
+    }
+    func prepareWrite(kind: String, id: String, payload: Data?) throws -> () -> Void {
+        try store.prepareWrite(kind: kind, id: id, payload: payload)
+    }
+}
+
+/// Review round 2, item 6: a launch's sync encodes only documents written
+/// since they last matched the server, so three years of food cost nothing.
+@MainActor
+@Suite struct ChangedDocumentPushTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test(arguments: [false, true])
+    func aPushWithNothingChangedEncodesNoDocument(sqlite: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk: TrainingPersistence & DocumentPersistence & SyncStateStore = sqlite
+            ? try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite")) : InMemoryTrainingPersistence()
+        let server = FakeDocumentServer()
+        let store = try NutritionStore(persistence: disk)
+        let entries = try (0..<50).map { try store.log(Foods.oats, grams: Double(10 + $0), on: monday, meal: "Breakfast") }
+        try await SyncEngine(hosts: [CountingHost(store)], state: disk, api: server, appVersion: "1").sync()
+
+        // A relaunch: a new engine over the same store.
+        let host = CountingHost(store)
+        try await SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1").sync()
+        #expect(host.encoded == 0, "Sync encoded \(host.encoded) unchanged documents")
+
+        var edited = entries[7]
+        edited.grams = 99
+        try store.saveEntry(edited)
+        let after = CountingHost(store)
+        try await SyncEngine(hosts: [after], state: disk, api: server, appVersion: "1").sync()
+        #expect(after.encoded <= 2, "Only the edited entry is encoded")
+        #expect(server.revision(NutritionStore.entryKind, edited.id.uuidString) == 2)
+
+        // A new app version compares everything once, as it may encode differently.
+        let upgraded = CountingHost(store)
+        try await SyncEngine(hosts: [upgraded], state: disk, api: server, appVersion: "2").sync()
+        #expect(upgraded.encoded >= entries.count)
+        #expect(server.writes == entries.count + 1, "Nothing else was pushed")
+    }
+}
+
+/// Review round 3, finding 3: a workout a newer app saved with a value this
+/// build doesn't know can't be read here. A full comparison leaves it, here
+/// and on the server, rather than pushing its deletion, and sets it aside.
+@MainActor
+@Suite struct UnreadableRowTests {
+    /// `loaded`: opened as the app does, history read off the main actor
+    /// (`StoredAccount`) and the stores started from it (review round 4).
+    @Test(arguments: [false, true])
+    func aRowThisBuildCantReadIsNeverPushedAsADeletion(loaded: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let server = FakeDocumentServer()
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            let store = try TrainingStore(persistence: disk)
+            _ = try store.importSessions([session])
+            try await SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1").sync()
+            disk.close()
+        }
+        // A newer app's set kind, written as that app would.
+        let database = try SQLiteDatabase(url: url)
+        let newer = String(decoding: try #require(server.stored(TrainingStore.sessionKind, session.id.uuidString)?.payload), as: UTF8.self)
+            .replacingOccurrences(of: "\"standard\"", with: "\"cluster\"")
+        try database.execute("UPDATE sessions SET payload = ? WHERE id = ?", Data(newer.utf8), session.id.uuidString)
+        database.close()
+
+        let stored = loaded ? try #require(try StoredAccount.read(url: url)) : nil
+        let disk = try SQLiteTrainingPersistence(url: url)
+        let store = try stored.map { try TrainingStore(persistence: disk, loaded: $0.training) } ?? TrainingStore(persistence: disk)
+        #expect(store.history.session(session.id) == nil && disk.unreadableRows.count == 1)
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "2")
+        try await sync.sync()
+        #expect(server.history(TrainingStore.sessionKind, session.id.uuidString).allSatisfy { $0.payload != nil }, "No deletion was pushed")
+        #expect(sync.rejected.map(\.id) == [session.id.uuidString])
+        let row = try database.reopen(url).query("SELECT payload FROM sessions WHERE id = ?", session.id.uuidString)
+        #expect(row.count == 1, "The row stays for a newer build")
+    }
+}
+
+/// Review round 4, finding 3: an older build can't read a workout (rev 1)
+/// and sets aside the tablet's rev 2 as it pulls it; its push mustn't
+/// replace that record of where rev 2 is, so after upgrading it fetches rev 2.
+@MainActor
+@Suite struct SetAsideRecoveryTests {
+    @Test func aNewerVersionSetAsideWhileTheRowIsUnreadableIsFetchedAfterTheUpgrade() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("exerly.sqlite")
+        let server = FakeDocumentServer()
+        let session = Fixture.session([("barbell-bench-press", [Fixture.set(5, 100)])])
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            _ = try TrainingStore(persistence: disk).importSessions([session])
+            try await SyncEngine(hosts: [try TrainingStore(persistence: disk)], state: disk, api: server, appVersion: "2").sync()
+            disk.close()
+        }
+        // The row as this table stores it, which a newer build would read.
+        let original = try SQLiteDatabase(url: url)
+        guard case .blob(let readable)? = try original.query("SELECT payload FROM sessions WHERE id = ?", session.id.uuidString).first?.first
+        else { Issue.record("No row"); return }
+        original.close()
+        func store(_ payload: Data) throws {
+            let database = try SQLiteDatabase(url: url)
+            try database.execute("UPDATE sessions SET payload = ? WHERE id = ?", payload, session.id.uuidString)
+            database.close()
+        }
+        // Rolled back to an older build, which can't read rev 1.
+        try store(Data(String(decoding: readable, as: UTF8.self).replacingOccurrences(of: "\"standard\"", with: "\"cluster\"").utf8))
+        var renamed = session
+        renamed.name = "Synthetic heavy day"
+        server.inject(kind: TrainingStore.sessionKind, id: session.id.uuidString, payload: try ExerlyJSON.canonical(renamed))
+        do {
+            let disk = try SQLiteTrainingPersistence(url: url)
+            let sync = SyncEngine(hosts: [try TrainingStore(persistence: disk)], state: disk, api: server, appVersion: "1")
+            try await sync.sync()
+            #expect(sync.rejected.first?.revision == 2 && sync.rejected.first?.sequence != nil, "Where rev 2 is stays recorded")
+            disk.close()
+        }
+        // Upgraded again: this build reads the row, and fetches rev 2.
+        try store(readable)
+        let disk = try SQLiteTrainingPersistence(url: url)
+        let training = try TrainingStore(persistence: disk)
+        let sync = SyncEngine(hosts: [training], state: disk, api: server, appVersion: "3")
+        try await sync.sync()
+        #expect(training.history.session(session.id)?.name == "Synthetic heavy day", "Rev 2 was fetched after the upgrade")
+        #expect(server.revision(TrainingStore.sessionKind, session.id.uuidString) == 2)
+    }
+}
+
+extension SQLiteDatabase {
+    func reopen(_ url: URL) throws -> SQLiteDatabase { try SQLiteDatabase(url: url) }
+}
+
+/// Review round 3, finding 7: a pulled change the store declines to apply,
+/// such as another device deleting a custom exercise sessions still use,
+/// leaves this device's copy recorded to push, as comparing every document
+/// would, so the devices end up agreeing.
+@MainActor
+@Suite struct DeclinedWriteTests {
+    @Test func aDeletionTheStoreKeepsFromIsPushedBack() async throws {
+        let server = FakeDocumentServer()
+        let disk = InMemoryTrainingPersistence()
+        let store = try TrainingStore(persistence: disk)
+        let exercise = Exercise(id: "custom-synthetic-sled-push", name: "Synthetic Sled Push", aliases: [], metric: .weightReps,
+                                mechanics: .compound, region: .lower, muscles: [.quads: 1], equipment: [.sled], support: [])
+        try store.addCustomExercise(exercise)
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1")
+        try await sync.sync()
+        server.inject(kind: TrainingStore.exerciseKind, id: exercise.id.rawValue, payload: nil)
+        try await sync.sync()
+        #expect(store.library.exercise(exercise.id) != nil, "Kept here, as sessions may use it")
+        #expect(server.stored(TrainingStore.exerciseKind, exercise.id.rawValue)?.payload != nil, "Pushed back, so both devices agree")
+    }
+}
+
+
+/// Review round 3, compatibility: a document one build sets aside is fetched
+/// again by the next build, which may read it; and a conflict a newer app
+/// settled with a choice this build doesn't know is kept, settled, as it came.
+@MainActor
+@Suite struct NewerDocumentTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test func aDocumentSetAsideIsFetchedAgainAfterAnUpgrade() async throws {
+        let server = FakeDocumentServer()
+        let tabletDisk = InMemoryTrainingPersistence()
+        let tablet = try NutritionStore(persistence: tabletDisk)
+        let logged = try tablet.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        try await SyncEngine(hosts: [tablet], state: tabletDisk, api: server).sync()
+
+        let disk = InMemoryTrainingPersistence()
+        let host = CountingHost(try NutritionStore(persistence: disk))
+        host.unreadable = true
+        let older = SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1")
+        try await older.sync()
+        #expect(older.rejected.map(\.id) == [logged.id.uuidString] && host.store.entries.isEmpty)
+        host.unreadable = false
+        try await SyncEngine(hosts: [host], state: disk, api: server, appVersion: "1").sync()
+        #expect(host.store.entries.isEmpty, "The same build doesn't fetch it again")
+        let upgraded = SyncEngine(hosts: [host], state: disk, api: server, appVersion: "2")
+        try await upgraded.sync()
+        #expect(host.store.entries.map(\.id) == [logged.id] && upgraded.rejected.isEmpty, "The new build reads it")
+    }
+
+    @Test func aChoiceANewerAppMadeKeepsTheConflictSettledAsItCame() async throws {
+        let server = FakeDocumentServer(), clock = TickingClock()
+        let phone = try AccountDevice("iPhone", server: server, clock: clock)
+        let id = UUID()
+        let newer = """
+            {"id":"\(id.uuidString)","kind":"food_entry","documentID":"\(UUID().uuidString)",\
+            "device":{"id":"\(UUID().uuidString)","name":"iPad"},"detectedAt":"2026-10-21T14:14:00.000Z",\
+            "changedAt":"2026-10-21T14:15:00.000Z","local":{"grams":60},"remote":{"grams":90},"fields":["grams"],\
+            "resolution":{"choice":"average","at":"2026-10-21T14:15:00.000Z","device":{"id":"\(UUID().uuidString)","name":"iPad"}}}
+            """
+        server.inject(kind: SyncConflictStore.kind, id: id.uuidString, payload: Data(newer.utf8))
+        try await phone.sync.sync()
+        let conflict = try #require(phone.conflicts.conflict(id), "Not set aside")
+        #expect(phone.sync.rejected.isEmpty && conflict.isResolved && phone.conflicts.unresolved.isEmpty)
+        #expect(conflict.resolution?.choice.rawValue == "average")
+        let payload = try #require(try phone.conflicts.payload(kind: SyncConflictStore.kind, id: id.uuidString))
+        #expect(String(decoding: payload, as: UTF8.self).contains(#""choice":"average""#), "Kept as it came")
+    }
+}
+
+/// Review round 5, finding 1: a server from before a kind refuses it while a
+/// first sync compares every document; once the server takes the kind, the
+/// next sync sends it, with nothing edited and no new build.
+@MainActor
+@Suite struct NewerKindRetryTests {
+    let monday = LocalDate("2026-10-05")!
+
+    @Test(arguments: [false, true])
+    func aKindTheServerRefusedDuringAFullComparisonIsSentOnceItTakesIt(sqlite: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk: TrainingPersistence & DocumentPersistence & SyncStateStore = sqlite
+            ? try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite")) : InMemoryTrainingPersistence()
+        let server = FakeDocumentServer()
+        server.refusedKinds = [NutritionStore.linkKind]
+        let store = try NutritionStore(persistence: disk)
+        let library = BarcodeLibrary(persistence: disk)
+        let code = try #require(GTIN("0012345678905"))
+        _ = await library.resolve(code, meal: "Lunch", date: monday) { _ in .unavailable }
+        await library.resolveWaiting { _ in .found(Foods.oats, attribution: "OFF") }
+        let scan = try #require(library.ready.first)
+        let plate = [NutritionStore.PlateItem(Foods.oats, grams: 40)]
+        let first = try library.log(plate, consuming: [[scan.id]], to: store, on: monday, meal: "Lunch")
+        try library.undo(Set(first.map(\.id)), from: store)
+        let again = try library.log(plate, consuming: [[scan.id]], to: store, on: monday, meal: "Lunch")
+        let sync = SyncEngine(hosts: [store], state: disk, api: server, appVersion: "1")
+        try await sync.sync()
+        #expect(server.stored(NutritionStore.linkKind, again[0].id.uuidString) == nil, "Refused by the older server")
+        server.refusedKinds = []
+        try await sync.sync()
+        #expect(server.stored(NutritionStore.linkKind, again[0].id.uuidString)?.payload != nil, "Sent once the server takes it")
     }
 }

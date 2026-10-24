@@ -11,7 +11,7 @@ import Foundation
 ///   or `Duration` ("1h 5m"), `Exercise Name`, `Set Order`, `Weight (kg)`,
 ///   `Weight (lbs)` or `Weight`, `Reps`, `RPE`, `Distance (meters)`, `(km)`,
 ///   `(miles)` or `Distance`, `Seconds`, `Notes`, `Workout Notes`, and in
-///   newer files `Workout #`. Commas or semicolons.
+///   newer files `Workout #`. Commas, semicolons or tabs.
 public enum WorkoutImport {
     public enum Source: String, Sendable, Hashable {
         case hevy, strong
@@ -30,6 +30,16 @@ public enum WorkoutImport {
         public var skipped: [String]
         /// What the file didn't say, and what was assumed.
         public var assumptions: [String]
+        /// Sets of each exercise name in the file, matched or not.
+        public var setCounts: [String: Int] = [:]
+        /// Names the person chose to leave out, with their number of sets.
+        public var leftOut: [String: Int] = [:]
+        /// Rows that aren't sets, such as Strong's rest timers.
+        public var restTimers = 0
+        /// How weights, distances and times were read, one sentence each.
+        public var units: [String] = []
+        /// True when weights have no unit in the file and were read in the given one.
+        public var weightUnitAssumed = false
     }
 
     public enum ImportError: Error, Equatable {
@@ -39,11 +49,24 @@ public enum WorkoutImport {
 
     static let namespace = UUID(uuidString: "5B0E7C1D-2F4A-4C8B-9E36-7A1D0F2B8C45")!
 
+    /// A workout's ID from its source and its start to the minute, as the file
+    /// writes it: the files have no time zone, so the same file gives the same
+    /// IDs in whatever zone it's read. `ordinal` tells apart workouts starting
+    /// in the same minute, in the file's order.
+    static func sessionID(source: String, start: Date, in timeZone: TimeZone, ordinal: Int) -> UUID {
+        UUID(named: "\(source)/local/\(localMinute(start, in: timeZone))/\(ordinal)", in: namespace)
+    }
+
+    /// The minute `date` shows on a clock in `timeZone`, counted from 1970.
+    static func localMinute(_ date: Date, in timeZone: TimeZone) -> Int {
+        Int(((date.timeIntervalSince1970 + Double(timeZone.secondsFromGMT(for: date))) / 60).rounded(.down))
+    }
+
     /// Reads an export. Its times have no zone, so they are read in `timeZone`;
     /// weights without a unit are taken in `unit`. `mapping` names the
     /// exercise for any name, ahead of the built-in matching.
     public static func parse(_ text: String, timeZone: TimeZone, unit: MassUnit, library: ExerciseLibrary,
-                             mapping: [String: ExerciseID] = [:]) throws -> Result {
+                             mapping: [String: ExerciseID] = [:], leftOut: Set<String> = []) throws -> Result {
         let rows = csv(text)
         guard let header = rows.first else { throw ImportError.unrecognized([]) }
         let columns = Dictionary(header.enumerated().map { ($1.trimmingCharacters(in: .whitespaces), $0) }, uniquingKeysWith: { a, _ in a })
@@ -60,10 +83,22 @@ public enum WorkoutImport {
         }
         var result = Result(source: format.source, sessions: [], matched: [:], unmatched: [:], skipped: [], assumptions: [])
         let units = format.units(columns, unit: unit, assumptions: &result.assumptions)
+        result.weightUnitAssumed = units.weight != nil && result.assumptions.contains { $0.hasPrefix("Weights have no unit") }
+        if let weight = units.weight {
+            result.units.append(result.weightUnitAssumed ? "Weights read in \(units.weightUnit.rawValue): the file doesn't name a unit"
+                                : "Weights in \(units.weightUnit.rawValue), from the \u{201C}\(weight)\u{201D} column")
+        }
+        if let distance = units.distance {
+            let name = units.metres == 1 ? "metres" : units.metres == 1000 ? "km" : "miles"
+            result.units.append(distance == "Distance" ? "Distances read in \(name): the file doesn't name a unit"
+                                : "Distances in \(name), from the \u{201C}\(distance)\u{201D} column")
+        }
+        result.units.append("Times read in \(timeZone.identifier): the file has no time zone")
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
 
         // Rows grouped into workouts, in the file's order.
+        var starts: [Int: Int] = [:]
         var order: [String] = []
         var workouts: [String: [Record]] = [:]
         for record in records {
@@ -78,13 +113,24 @@ public enum WorkoutImport {
                 result.skipped.append("A workout with an unreadable date, \(format.dateText(first)), with \(rows.count) rows")
                 continue
             }
-            let sessionID = UUID(named: "\(format.source.rawValue)/\(key)", in: namespace)
+            // Neither app's export has a workout ID, so a workout is known by its
+            // start, to the minute: correcting its title or end in the app and
+            // exporting again updates it rather than adding it twice.
+            let minute = Self.localMinute(start, in: timeZone)
+            let ordinal = starts[minute, default: 0]
+            starts[minute] = ordinal + 1
+            let sessionID = Self.sessionID(source: format.source.rawValue, start: start, in: timeZone, ordinal: ordinal)
             var exercises: [PerformedExercise] = []
             var supersets: [String: UUID] = [:]
             var previousName: String?
             for record in rows {
                 let name = format.exerciseName(record)
-                guard let kind = format.kind(record) else { continue }
+                guard let kind = format.kind(record) else { result.restTimers += 1; continue }
+                result.setCounts[name, default: 0] += 1
+                if leftOut.contains(name) {
+                    result.leftOut[name, default: 0] += 1
+                    continue
+                }
                 guard let id = match(name, library: library, mapping: mapping), let exercise = library.exercise(id) else {
                     result.unmatched[name, default: 0] += 1
                     continue
@@ -326,12 +372,13 @@ public enum WorkoutImport {
     // MARK: CSV
 
     /// Rows of fields, with quotes, doubled quotes and line breaks in quotes.
-    /// The delimiter is a comma or semicolon, whichever the header uses more.
+    /// The delimiter is a comma, semicolon or tab, whichever the header uses most.
     static func csv(_ text: String) -> [[String]] {
         var text = text
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         let headerLine = text.prefix { $0 != "\n" && $0 != "\r" }
-        let delimiter: Character = headerLine.filter { $0 == ";" }.count > headerLine.filter { $0 == "," }.count ? ";" : ","
+        let counts = [";", ",", "\t"].map { mark in (mark, headerLine.filter { String($0) == mark }.count) }
+        let delimiter = Character(counts.max { $0.1 < $1.1 || ($0.1 == $1.1 && $1.0 == ",") }?.0 ?? ",")
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""

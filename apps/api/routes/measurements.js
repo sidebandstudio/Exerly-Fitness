@@ -8,7 +8,25 @@ const sync = require('../lib/sync');
 
 const router = express.Router();
 router.use(authenticate);
-const types = ['waist', 'chest', 'hips', 'arms', 'thighs', 'neck', 'calves', 'body_fat'];
+// Sites measured once, then each limb on both sides. `arms`, `thighs` and
+// `calves` are older sides-unknown sites, still accepted so their history stays editable.
+const sides = ['ankle', 'bicep', 'calf', 'forearm', 'thigh', 'wrist'].flatMap((site) => [
+  `left_${site}`,
+  `right_${site}`,
+]);
+const types = [
+  'bust',
+  'chest',
+  'hips',
+  'neck',
+  'shoulders',
+  'waist',
+  ...sides,
+  'arms',
+  'thighs',
+  'calves',
+  'body_fat',
+];
 
 function readMeasurement(req) {
   const type = v.oneOf(req.body.type, 'type', types);
@@ -25,7 +43,12 @@ function readMeasurement(req) {
     entry_date: entryDateFor(req, req.account),
     timezone: timezoneFor(req.account, req),
     note: v.str(req.body.note, 'note', { required: false, max: 1000 }),
-    source: v.oneOf(req.body.source ?? 'manual', 'source', ['manual', 'legacy_device_import']),
+    // `imported`: from another app's export, named in the note.
+    source: v.oneOf(req.body.source ?? 'manual', 'source', [
+      'manual',
+      'legacy_device_import',
+      'imported',
+    ]),
   };
 }
 async function owned(req, includeDeleted = false) {
@@ -160,3 +183,4 @@ router.post(
 );
 
 module.exports = router;
+module.exports.readMeasurement = readMeasurement;

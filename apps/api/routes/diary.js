@@ -6,6 +6,8 @@ const { requireUser, entryDateFor } = require('../lib/users');
 const v = require('../lib/validate');
 const sync = require('../lib/sync');
 
+const STATUSES = ['in_progress', 'complete', 'estimated', 'excluded'];
+
 const router = express.Router();
 router.use(authenticate);
 router.put(
@@ -27,12 +29,7 @@ router.put(
     sync.checkRevision(req, current);
     const row = await store.upsert('diary_days', filter, {
       account_id: user.id,
-      status: v.oneOf(req.body.status, 'status', [
-        'in_progress',
-        'complete',
-        'estimated',
-        'excluded',
-      ]),
+      status: v.oneOf(req.body.status, 'status', STATUSES),
       note: v.str(req.body.note, 'note', { required: false, max: 500 }),
       revision: (old?.revision ?? 0) + 1,
       updated_at: new Date(),
@@ -56,3 +53,4 @@ router.get(
   })
 );
 module.exports = router;
+module.exports.STATUSES = STATUSES;

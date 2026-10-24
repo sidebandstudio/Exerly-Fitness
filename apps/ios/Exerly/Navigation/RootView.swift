@@ -25,6 +25,20 @@ struct RootView: View {
         .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
         // Kept until the signed-in tabs can follow it, so a link that launched the app isn't lost.
         .onOpenURL { ExerlyLinkRouter.shared.pending = $0 }
+        .onAppear(perform: openFromCache)
+    }
+
+    /// A saved session starts opening what's on this device as the root view
+    /// appears (PARITY B03): the cached account and its saved entries here,
+    /// its history read off the main actor, instead of in the tasks below, a
+    /// frame or more later. The tasks then find them open or opening, and the
+    /// server is asked after.
+    private func openFromCache() {
+        authVM.restoreCachedSession()
+        guard authVM.authState == .authenticated, let user = authVM.currentUser, let api = authVM.accountAPI else { return }
+        sync.configure(container: modelContext.container, accountID: user.id, timeZone: user.timezone)
+        // Opening the account itself reads its history off the main actor.
+        Task { await account.configure(api) }
     }
 
     private var accountContent: some View {
@@ -78,6 +92,9 @@ struct RootView: View {
             // Phrases that name a usual food are built from the account's foods.
             ExerlyShortcuts.updateAppShortcutParameters()
             await SetupWeighIn.recordIfPending(workspace)
+            #if DEBUG
+            try? HealthDebugSeed.seedChanges(workspace, timeZone: .current)
+            #endif
             // Meal reminders name the meal the account usually logs at their time.
             await NotificationService.shared.reschedule()
         }

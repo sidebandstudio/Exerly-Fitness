@@ -222,6 +222,48 @@ final class HealthSyncTests: XCTestCase {
         XCTAssertFalse(workspace.nutrition.weights.contains { $0.id == morning.id })
     }
 
+    /// Review 1: turning Read weigh-ins on from its preview read Health again
+    /// and imported a reading saved while the preview was open, unseen.
+    func testReadWeighInsFromItsPreviewImportsOnlyTheReadingsShown() async throws {
+        let workspace = try open("account-a")
+        let shown = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-86400), kilograms: 80.4, source: "com.example.scale")
+        let unseen = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-600), kilograms: 80.1, source: "com.example.scale")
+        let watch = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-300), kilograms: 80.2, source: "com.exerly.fitness.watchkitapp")
+        client.deltas = [HealthWeightDelta(addedMass: [shown, unseen], massAnchor: Data([1]))]
+        let matched = await sync.enableReadingWeights(reviewed: [shown.id])
+        try await settle()
+        XCTAssertFalse(matched, "Health had one the preview didn't show")
+        XCTAssertFalse(sync.preferences.isOn(.readWeights), "So it stays off for a new preview")
+        XCTAssertTrue(workspace.nutrition.weights.isEmpty, "And nothing was imported")
+        XCTAssertEqual(sync.notices[.readWeights], HealthSync.reviewChangedNotice)
+
+        client.deltas = [HealthWeightDelta(addedMass: [shown, unseen, watch], massAnchor: Data([1]))]
+        let again = await sync.enableReadingWeights(reviewed: [shown.id, unseen.id])
+        try await settle()
+        XCTAssertTrue(again)
+        XCTAssertTrue(sync.preferences.isOn(.readWeights))
+        XCTAssertEqual(Set(workspace.nutrition.weights.map(\.id)), [shown.id, unseen.id, watch.id])
+        XCTAssertNil(sync.notices[.readWeights])
+    }
+
+    /// Review 2, item 6: readings the pairing read finds around a reviewed
+    /// weigh-in are not imported unless the preview showed them.
+    func testReadWeighInsImportsNothingThePreviewDidntShowEvenFromThePairingRead() async throws {
+        let workspace = try open("account-a")
+        let first = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-3 * 86400), kilograms: 80.6, source: "com.example.scale")
+        client.deltas = [HealthWeightDelta(addedMass: [first], massAnchor: Data([1]), bodyFatAnchor: Data([2]))]
+        await sync.setEnabled(.readWeights, true)
+        try await settle()
+        await sync.setEnabled(.readWeights, false)
+        let shown = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-7200), kilograms: 80.4, source: "com.example.scale")
+        let unseen = HealthMassReading(id: UUID(), at: Date().addingTimeInterval(-7100), kilograms: 80.3, source: "com.example.scale")
+        client.deltas = [HealthWeightDelta(addedMass: [shown], massAnchor: Data([3]), bodyFatAnchor: Data([4]))]
+        client.around = ([shown, unseen], [])
+        _ = await sync.enableReadingWeights(reviewed: [first.id, shown.id])
+        try await settle()
+        XCTAssertFalse(workspace.nutrition.weights.contains { $0.id == unseen.id }, "Never imported unseen")
+    }
+
     func testBodyFatArrivingLaterJoinsItsWeighIn() async throws {
         let workspace = try open("account-a")
         let at = Date().addingTimeInterval(-900)

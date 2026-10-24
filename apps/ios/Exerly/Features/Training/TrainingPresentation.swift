@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import ExerlyCore
 import Combine
 
@@ -11,8 +12,15 @@ final class TrainingWorkspace: ObservableObject {
     let store: TrainingStore
     let programs: ProgramStore
     let gyms: GymStore
+    let provenance: ProvenanceStore
+    /// What was imported from Apple Health, by whom, and what's become of it.
+    let healthImports: HealthImportStore
     let nutrition: NutritionStore
+    /// Barcodes this account resolved, scanned, or scanned offline.
+    let barcodes: BarcodeLibrary
     let agent: AgentStore
+    /// What two devices changed at once, kept for review.
+    let conflicts: SyncConflictStore
     let entryChecks: TrainingEntryChecks
     private let persistence: SQLiteTrainingPersistence
     @Published private(set) var sync: ExerlyCore.SyncEngine?
@@ -24,33 +32,60 @@ final class TrainingWorkspace: ObservableObject {
 
     enum AccessError: Error { case missingAccount }
 
-    init(accountID: String, root: URL? = nil, api: AccountAPI? = nil) throws {
+    /// `stored`, read off the main actor (`open`), saves reading and decoding
+    /// the history here; without it the stores read it themselves.
+    init(accountID: String, root: URL? = nil, api: AccountAPI? = nil, stored: StoredAccount? = nil) throws {
         self.accountID = accountID
-        guard !accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AccessError.missingAccount
-        }
-        let canonical = try SQLiteTrainingPersistence.defaultURL(accountID: accountID)
-        if let testRoot = try root ?? Self.testStorageRoot() {
-            url = testRoot.appendingPathComponent(accountID, isDirectory: true)
-                .appendingPathComponent(canonical.lastPathComponent)
-        } else {
-            url = canonical
-        }
+        url = try Self.storageURL(accountID: accountID, root: root)
         persistence = try SQLiteTrainingPersistence(url: url)
-        store = try TrainingStore(persistence: persistence)
+        if let stored {
+            store = try TrainingStore(persistence: persistence, loaded: stored.training)
+            nutrition = NutritionStore(persistence: persistence, loaded: stored.nutrition)
+            healthImports = try HealthImportStore(persistence: persistence, loaded: stored.healthImports, work: stored.healthImportWork,
+                                                  queue: stored.healthImportQueue)
+        } else {
+            store = try TrainingStore(persistence: persistence)
+            nutrition = try NutritionStore(persistence: persistence)
+            healthImports = try HealthImportStore(persistence: persistence)
+        }
         programs = try ProgramStore(persistence: persistence, training: store)
         gyms = try GymStore(persistence: persistence)
-        nutrition = try NutritionStore(persistence: persistence)
+        provenance = try ProvenanceStore(persistence: persistence)
+        barcodes = BarcodeLibrary(persistence: persistence)
         agent = try AgentStore(persistence: persistence, hosts: [store, programs, nutrition, gyms])
+        conflicts = SyncConflictStore(state: persistence, hosts: [store, programs, nutrition, gyms, agent],
+                                      deviceName: UIDevice.current.model)
+        conflicts.effects = ScanConflictEffects(library: barcodes, store: nutrition)
         entryChecks = TrainingEntryChecks(training: store, agent: agent, accountID: accountID)
+        // The background read's unreadable rows are noted with persistence by the training store.
         unreadableCount = persistence.unreadableRows.count
         if let api { resumeSync(api: api) }
+    }
+
+    /// Opens an account with its sessions and food history read and decoded
+    /// off the main actor; only the stores' small documents and publishing
+    /// them happen on it (PARITY B03). `read` is replaced only by tests.
+    static func open(accountID: String, root: URL? = nil, api: AccountAPI?,
+                     read: @escaping @Sendable (URL) throws -> StoredAccount? = StoredAccount.read) async throws -> TrainingWorkspace {
+        let url = try storageURL(accountID: accountID, root: root)
+        let stored = try await Task.detached(priority: .userInitiated) { try read(url) }.value
+        return try TrainingWorkspace(accountID: accountID, root: root, api: api, stored: stored)
+    }
+
+    private static func storageURL(accountID: String, root: URL?) throws -> URL {
+        guard !accountID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AccessError.missingAccount }
+        let canonical = try SQLiteTrainingPersistence.defaultURL(accountID: accountID)
+        guard let testRoot = try root ?? testStorageRoot() else { return canonical }
+        return testRoot.appendingPathComponent(accountID, isDirectory: true).appendingPathComponent(canonical.lastPathComponent)
     }
 
     func resumeSync(api: AccountAPI) {
         guard api.accountID == accountID, !persistence.isClosed else { return }
         accountAPI = api
-        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent], state: persistence, api: api)
+        // A new build compares every document once; after that, only those written since.
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        sync = ExerlyCore.SyncEngine(hosts: [store, programs, nutrition, gyms, agent, provenance, healthImports], state: persistence, api: api,
+                                     conflicts: conflicts, appVersion: build)
     }
 
     func synchronize() async {
@@ -61,6 +96,8 @@ final class TrainingWorkspace: ObservableObject {
         do {
             try await sync?.sync()
             guard !persistence.isClosed, !Task.isCancelled else { return }
+            // Changes from Health applied on another phone, or changed since, leave the list.
+            if SyncEngine.shared.isConfigured(for: accountID) { try? HealthChangeList.prune(self, activities: SyncEngine.shared) }
             if !checkedLegacyTargets, !adoptingLegacyTargets, let accountAPI {
                 adoptingLegacyTargets = true
                 defer { adoptingLegacyTargets = false }
@@ -79,6 +116,10 @@ final class TrainingWorkspace: ObservableObject {
         }
         guard !persistence.isClosed, !Task.isCancelled else { return }
         if await entryChecks.refresh() { try? await sync?.sync() }
+        // Scans made offline resolve once the server answers again.
+        if let accountAPI, !barcodes.waiting.isEmpty, !persistence.isClosed {
+            await barcodes.resolveWaiting(fetch: BarcodeLibrary.fetch(accountAPI))
+        }
     }
 
     /// The active program's next workout. With `unit`, every recommended load
@@ -119,9 +160,21 @@ final class TrainingWorkspace: ObservableObject {
         persistence.close()
     }
 
-    func export(server: Data?, pending: [AccountExport.PendingRow] = []) throws -> Data {
-        try AccountExport.merging(server: server, hosts: [store, programs, nutrition, gyms, agent], state: persistence, pending: pending)
+    func export(server: Data?, pending: [AccountExport.PendingRow] = [], context: AccountExport.Context? = nil) throws -> Data {
+        try AccountExport.merging(server: server, hosts: documentHosts, state: persistence, pending: pending, context: context)
     }
+
+    /// Saves imports as one unit across this account's stores, and undoes them.
+    var importer: HistoryImporter { importer(measurements: nil) }
+
+    /// The importer, saving body measurements to `measurements` alongside.
+    func importer(measurements: ImportedMeasurementStore?) -> HistoryImporter {
+        HistoryImporter(hosts: documentHosts, persistence: persistence, measurements: measurements)
+    }
+
+    /// Every store whose records are documents: what imports write and exports hold,
+    /// Health's import records among them, with their owners and generations.
+    var documentHosts: [DocumentHost] { [store, programs, nutrition, gyms, agent, provenance, healthImports] }
 
     func supportsChanges(in proposal: Proposal) -> Bool {
         let kinds = store.documentKinds + programs.documentKinds + nutrition.documentKinds + gyms.documentKinds

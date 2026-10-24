@@ -247,11 +247,17 @@ try await api.signOut()
   is in flight.
 - `AccountAPI(accountID:transport:)` is one account's endpoints:
   - the document endpoints `SyncEngine` uses (it is a `DocumentAPI`);
-  - `connectApple(identityToken:rawNonce:)` and `disconnectApple()`;
+  - `connectApple(identityToken:rawNonce:confirmation:)` and
+    `disconnectApple(password:)`;
   - `exportAccount()`, which returns the JSON `Data`;
-  - `deleteAccount(appleAuthorizationCode:)`, which deletes on the server. The
-    session owner then forgets the session.
-  - `accessTokens()`, `createAccessToken(name:scopes:expiresInDays:)` and
+  - `deleteAccount(confirmation:)`, which deletes on the server once an
+    `AccountConfirmation` shows it's the owner: `.password` for a password
+    account, even with Apple connected, otherwise a fresh `.apple`
+    authorization. Connecting Apple and creating a token need one too. A
+    refusal throws `wrongPassword`, `passwordRequired` or
+    `appleReauthorizationRequired` and keeps the session. After a deletion the
+    session owner forgets the session.
+  - `accessTokens()`, `createAccessToken(name:scopes:expiresInDays:confirmation:)` and
     `revokeAccessToken(id:)` for the person's own agents. Every token can read;
     `.propose` files proposals, and `.write` changes data. The secret in
     `CreatedAccessToken.secret` is shown once and never again.
@@ -287,7 +293,7 @@ An actor, and a `SessionTransport`.
   `account` (`id`, `email`, `name`).
 - `account()` returns the signed-in account's `AccountAPI`.
 - `signOut()` forgets the session at once, then revokes it on the server when
-  reachable. `deleteAccount(appleAuthorizationCode:)` deletes, then forgets.
+  reachable. `deleteAccount(confirmation:)` deletes, then forgets.
 - `isSignedIn` and `accountID`.
 
 It refreshes the 15-minute access token before it expires and once after a 401. A

@@ -91,7 +91,7 @@ async function putAs(token, kind, payload) {
 async function tokenFor(user, scopes) {
   const res = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes },
+    { name: 'Synthetic agent', scopes, password: user.password },
     { token: user.token, headers: key() }
   );
   return res.body.token;

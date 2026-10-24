@@ -34,6 +34,15 @@ struct ExScreen<Content: View>: View {
         // Regression: testScrollingFoodControlsPreservesThePortion, iOS 18/26.
         .simultaneousGesture(TapGesture())
         .exScrollEdges()
+        // iOS 26's keyboard Done bar is clear but takes every tap, so a field
+        // scrolled under it looked whole and ignored taps: Edit food's Calories
+        // on an iPhone 17 Pro, once a name was typed. The keyboard's area,
+        // that bar included, backs onto the page's colour, as title bars do.
+        // The colour grows down from an empty slot at the keyboard's top.
+        .overlay(alignment: .bottom) {
+            Color.exBackground.ignoresSafeArea(.keyboard, edges: .bottom).frame(height: 0)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
         .background(Color.exBackground)
     }
 }
@@ -61,11 +70,12 @@ extension View {
     }
 
     /// A floating confirmation's surface: opaque, so the list under it never
-    /// reads through, lifted off it by a border and a shadow.
-    func exToastSurface<S: InsettableShape>(_ shape: S) -> some View {
+    /// reads through, lifted off it by a border and a shadow. One set in a
+    /// card has no `shadow`.
+    func exToastSurface<S: InsettableShape>(_ shape: S, shadow: Bool = true) -> some View {
         background(Color.exSurface2, in: shape)
             .overlay { shape.strokeBorder(Color.exBorder.opacity(0.6), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(0.3), radius: 14, y: 6)
+            .shadow(color: .black.opacity(shadow ? 0.3 : 0), radius: 14, y: 6)
     }
 }
 
@@ -191,6 +201,7 @@ struct ExConfirmation: View {
     let confirm: String
     var cancelLabel = "Cancel"
     var destructive = false
+    var screenTitle = "Review change"
     let identifier: String
     let perform: () -> Void
     let cancel: () -> Void
@@ -206,7 +217,7 @@ struct ExConfirmation: View {
                 Button(role: destructive ? .destructive : nil, action: perform) { Text(confirm) }
                     .buttonStyle(ExActionStyle(destructive: destructive)).accessibilityIdentifier("\(identifier).confirm")
             }
-            .navigationTitle("Review change").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(screenTitle).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(cancelLabel, action: cancel).accessibilityIdentifier("\(identifier).confirmCancel")
@@ -381,6 +392,37 @@ struct ExFlowLayout: Layout {
     }
 }
 
+/// A figure with its unit and a ± after it: side by side while they fit,
+/// then the unit under the figure, then everything stacked with the figure
+/// shrunk to one line. A number never breaks across lines ("2,6" over "40").
+struct ExFigure: View {
+    let value: String
+    let unit: String
+    var detail: String?
+    var valueFont: Font = .exStat
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) { figure.fixedSize(); unitText.fixedSize(); detailText.fixedSize() }
+            VStack(alignment: .leading, spacing: 0) {
+                figure.fixedSize()
+                HStack(alignment: .firstTextBaseline, spacing: 5) { unitText.fixedSize(); detailText.fixedSize() }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                figure.lineLimit(1).minimumScaleFactor(0.5)
+                unitText
+                detailText
+            }
+        }
+    }
+
+    private var figure: some View { Text(value).font(valueFont).monospacedDigit().foregroundStyle(Color.exTextPrimary) }
+    private var unitText: some View { Text(unit).font(.exBodyMedium).foregroundStyle(Color.exTextSecondary) }
+    @ViewBuilder private var detailText: some View {
+        if let detail { Text(detail).font(.exLabel).foregroundStyle(Color.exTextMuted) }
+    }
+}
+
 struct ExQuantityControl: View {
     let title: String
     @Binding var text: String
@@ -390,6 +432,10 @@ struct ExQuantityControl: View {
     var identifier = ""
     var integer = false
     var focusOnAppear = false
+    /// Shown while the field is empty; − and + then start from it.
+    var placeholder = "0"
+    /// Room for a note under the control, kept in view above the keypad with it.
+    var noteBelow: CGFloat = 0
     @State private var focusRequest = 0
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -441,8 +487,8 @@ struct ExQuantityControl: View {
     private var quantityField: some View {
         // The − and + (under the number at the largest sizes) and the presets
         // stay in view above the keypad with the number.
-        ExNumericTextField(title: title, text: $text, placeholder: "0", integer: integer, centered: true, identifier: identifier,
-                           focusOnAppear: focusOnAppear, revealBelow: typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72,
+        ExNumericTextField(title: title, text: $text, placeholder: placeholder, integer: integer, centered: true, identifier: identifier,
+                           focusOnAppear: focusOnAppear, revealBelow: (typeSize.isAccessibilitySize ? 64 : presets.isEmpty ? 16 : 72) + noteBelow,
                            focusRequest: focusRequest)
             .frame(minHeight: 52)
     }
@@ -460,7 +506,7 @@ struct ExQuantityControl: View {
             formatter.locale = .current
             formatter.numberStyle = .decimal
             let entered = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let number = entered.isEmpty ? 0 : formatter.number(from: entered)?.doubleValue, number.isFinite else { return }
+            guard let number = formatter.number(from: entered.isEmpty ? placeholder : entered)?.doubleValue, number.isFinite else { return }
             text = max(0, number + amount).formatted(.number.grouping(.never).precision(.fractionLength(0...8)))
         } label: {
             Image(systemName: symbol).font(.body.weight(.semibold)).frame(width: 44, height: 44)

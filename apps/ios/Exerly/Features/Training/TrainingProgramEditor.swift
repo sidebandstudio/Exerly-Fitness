@@ -416,13 +416,15 @@ private struct ProgramTargetEditor: View {
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary)
             }
             ExCard {
-                ExQuantityControl(title: "Rest in seconds, optional", text: $fields.rest, step: 15, presets: [60, 90, 120], unit: "s")
+                ExQuantityControl(title: "Rest in seconds, optional", text: $fields.rest, step: 15, presets: [60, 90, 120], unit: "s",
+                                  identifier: "program.rest")
                 Button("Use my usual timer") { fields.rest = "" }.font(.exLabel).frame(minHeight: 44)
                 ProgramChoiceField("Set type", value: TrainingFormat.kind(fields.kind), selection: $fields.kind,
                                    choices: SetKind.allCases.filter { $0 != .warmUp }.map { (TrainingFormat.kind($0), $0) })
             }
             if let error { Text(error).foregroundStyle(Color.exError) }
         }
+        .exFieldOrder(["program.targetSets", "program.minReps", "program.maxReps", "program.targetRIR", "program.rest"])
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {

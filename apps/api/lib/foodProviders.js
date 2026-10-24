@@ -227,8 +227,7 @@ async function openFoodFactsBarcode(identity, options) {
     url.searchParams.set('fields', OFF_FIELDS);
     const headers = {
       'User-Agent':
-        process.env.OFF_USER_AGENT ||
-        'Exerly/1.0 (https://github.com/sidebandstudio/Exerly-Fitness)',
+        process.env.OFF_USER_AGENT || 'Exerly/1.0 (https://sideband.studio; hello@sideband.studio)',
     };
     if (base === 'https://world.openfoodfacts.net')
       headers.Authorization = `Basic ${Buffer.from('off:off').toString('base64')}`;
@@ -293,7 +292,7 @@ async function searchOpenFoodFactsProducts(query, limit = 20) {
   });
   const headers = {
     'User-Agent':
-      process.env.OFF_USER_AGENT || 'Exerly/1.0 (https://github.com/sidebandstudio/Exerly-Fitness)',
+      process.env.OFF_USER_AGENT || 'Exerly/1.0 (https://sideband.studio; hello@sideband.studio)',
   };
   if (url.hostname === 'world.openfoodfacts.net')
     headers.Authorization = `Basic ${Buffer.from('off:off').toString('base64')}`;

@@ -1,3 +1,4 @@
+import ExerlyCore
 import SwiftUI
 
 struct LogActivityView: View {
@@ -23,6 +24,16 @@ struct LogActivityView: View {
         _intensity = State(initialValue: editing?.intensity ?? "")
         _selectedDate = State(initialValue: editing?.date.flatMap { CalendarDay(rawValue: $0) } ?? initialDate)
     }
+    /// A workout imported from Health: where it came from, and what else
+    /// Health has for its time.
+    private var healthSourceLines: [String] {
+        guard let clientID = editing?.clientID,
+              let record = HealthSync.shared.workspace?.healthImports.records.values.first(where: {
+                  $0.kind == .workout && $0.state == .imported && $0.target == clientID
+              }) else { return [] }
+        return record.sourceLines
+    }
+
     var body: some View {
         NavigationStack {
             ExScreen {
@@ -40,6 +51,8 @@ struct LogActivityView: View {
                 ExCard {
                     CalendarDayPicker("Activity date", selection: $selectedDate, today: sync.today, timeZoneIdentifier: sync.calendar.timeZoneIdentifier)
                 }
+                let fromHealth = healthSourceLines
+                if !fromHealth.isEmpty { ExCard { HealthSourceLines(lines: fromHealth).font(.exCaption) } }
                 if editing?.syncState == "pending" { Text("Saved on this device. Waiting to sync.").font(.exCaption) }
                 if editing?.syncState == "attention" { NavigationLink("Review activity changes") { SavedChangesReviewView() } }
                 if editing != nil {
@@ -47,6 +60,7 @@ struct LogActivityView: View {
                 }
                 if let error { Text(error).foregroundStyle(Color.exError) }
             }
+            .exFieldOrder(["activity.minutes", "activity.calories"])
             .navigationTitle(editing == nil ? "Log activity" : "Edit activity")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

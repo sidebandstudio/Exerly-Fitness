@@ -77,6 +77,11 @@ final class DriverUITests: ExerlyUITestCase {
             return "Tapped at \(Int(x)), \(Int(y))."
         case "type":
             guard let text = command["text"] as? String else { return "type needs text" }
+            // Typing with nothing focused fails XCTest and ends the session; say so instead.
+            let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+            guard focused.exists else {
+                return "Nothing is ready for typing. Tap a text field first, or use the number buttons on screen."
+            }
             app.typeText(text)
             Thread.sleep(forTimeInterval: 0.6)
             return "Typed “\(text)”."

@@ -94,3 +94,67 @@ test('measurement validation rejects incompatible units, invalid values and unch
   );
   assert.equal((await api.del(`/api/measurements/${created.body.id}`, { token })).status, 400);
 });
+
+test('measurements accept every body site, both sides of each limb, and filter by site', async () => {
+  const { token } = await signUp(api);
+  const sites = ['bust', 'chest', 'hips', 'neck', 'shoulders', 'waist'];
+  for (const limb of ['ankle', 'bicep', 'calf', 'forearm', 'thigh', 'wrist'])
+    sites.push(`left_${limb}`, `right_${limb}`);
+  for (const [index, type] of sites.entries()) {
+    const created = await api.post(
+      '/api/measurements',
+      { client_id: randomUUID(), type, value: 10 + index, unit: 'in', entry_date: '2026-10-01' },
+      { token }
+    );
+    assert.equal(created.status, 201, type);
+    assert.equal(created.body.type, type);
+    assert.equal(created.body.value, Number(((10 + index) * 2.54).toFixed(4)));
+  }
+  // Older sides-unknown sites stay writable, so their history can be edited.
+  const older = await api.post(
+    '/api/measurements',
+    { client_id: randomUUID(), type: 'arms', value: 33, unit: 'cm' },
+    { token }
+  );
+  assert.equal(older.status, 201);
+  for (const type of ['left_arm', 'bicep', 'left_waist'])
+    assert.equal(
+      (await api.post('/api/measurements', { type, value: 30, unit: 'cm' }, { token })).status,
+      400,
+      type
+    );
+  const all = await api.get('/api/measurements?from=2026-01-01', { token });
+  assert.equal(all.body.total, sites.length + 1);
+  const left = await api.get('/api/measurements?type=left_bicep&from=2026-01-01', { token });
+  assert.equal(left.body.total, 1);
+  assert.equal(left.body.entries[0].type, 'left_bicep');
+  assert.equal(
+    (await api.get('/api/measurements?type=left_arm&from=2026-01-01', { token })).status,
+    400
+  );
+});
+
+test('a measurement imported from another app keeps that as its source', async () => {
+  const { token } = await signUp(api);
+  const body = {
+    client_id: randomUUID(),
+    type: 'left_bicep',
+    value: 35.56,
+    unit: 'cm',
+    entry_date: '2026-10-01',
+    source: 'imported',
+    note: 'From MacroFactor',
+  };
+  const created = await api.post('/api/measurements', body, {
+    token,
+    headers: { 'Idempotency-Key': randomUUID() },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.source, 'imported');
+  const other = await api.post(
+    '/api/measurements',
+    { ...body, client_id: randomUUID(), source: 'somewhere' },
+    { token, headers: { 'Idempotency-Key': randomUUID() } }
+  );
+  assert.equal(other.status, 400);
+});

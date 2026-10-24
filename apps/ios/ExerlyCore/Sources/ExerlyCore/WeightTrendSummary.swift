@@ -125,6 +125,58 @@ public enum WeightTrend {
         return (0..<limit).map { points[Int((Double($0) * stride).rounded())] }
     }
 
+    /// A stretch of the trend line: measured, or across a gap in the weigh-ins.
+    public struct Run: Sendable, Hashable {
+        public var points: [Point]
+        /// False across a gap, which includes the days after the last weigh-in.
+        public var measured: Bool
+    }
+
+    /// Days in a row without a weigh-in that make a gap.
+    public static let gap = 2
+
+    /// `points`, consecutive days, split where `gap` or more days in a row
+    /// have no reading, so a chart can draw the trend across a gap as an
+    /// estimate instead of as data. Neighbouring runs share their edge day,
+    /// so drawn in order they make one unbroken line.
+    public static func runs(_ points: [Point], gap: Int = gap) -> [Run] {
+        var inGap = Array(repeating: false, count: points.count)
+        var index = 0
+        while index < points.count {
+            guard points[index].reading == nil else { index += 1; continue }
+            var end = index
+            while end < points.count, points[end].reading == nil { end += 1 }
+            if points[index].date.days(until: points[end - 1].date) + 1 >= gap {
+                for day in index..<end { inGap[day] = true }
+            }
+            index = end
+        }
+        var runs: [Run] = []
+        var current: [Point] = []
+        for (index, point) in points.enumerated() {
+            if index > 0, inGap[index] != inGap[index - 1] {
+                if inGap[index] {
+                    runs.append(Run(points: current, measured: true))
+                    current = [current[current.count - 1]]
+                } else {
+                    current.append(point)
+                    runs.append(Run(points: current, measured: false))
+                    current = []
+                }
+            }
+            current.append(point)
+        }
+        if let last = inGap.last { runs.append(Run(points: current, measured: !last)) }
+        // A lone reading between gaps leaves a one-point run; the gaps either side join.
+        return runs.filter { $0.points.count >= 2 }.reduce(into: []) { joined, run in
+            if let last = joined.last, last.measured == run.measured {
+                joined[joined.count - 1].points += run.points.dropFirst()
+            } else {
+                joined.append(run)
+            }
+        }
+    }
+
     /// The chart's lowest and highest values, in kilograms: readings and the
     /// trend's band, with a little room, and at least `minimumSpan` tall.
     public static func domain(_ points: [Point], minimumSpan: Double) -> ClosedRange<Double>? {

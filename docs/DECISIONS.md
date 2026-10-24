@@ -1233,3 +1233,1768 @@ stand. Instead the missing serving is added once, where it's missed.
 - A typed serving word picks the plain serving ("1 slice") first, then the
   regular size ("1 medium or regular slice"). "1 slice" of toasted rye had
   picked "1 slice, crust not eaten", 13.5 g.
+
+## 2026-10-11: Body depth: goal paths, gaps, what the trend rests on, every site, photos on the device
+
+Outcome 3's body rows (PARITY S06, S07, S09, S10), each on Progress → Body or Photos.
+
+- The goal stays in plan versions, edited in the plan editor that Targets
+  uses, so a change starts a new version and earlier weeks keep theirs.
+  `WeightGoal` adds the path each goal planned: it starts at the smoothed
+  trend on the day the goal (direction, rate, goal weight) was set, and
+  check-ins or nutrient-goal versions with the same goal continue it rather
+  than restarting it. The chart draws the goal weight and that path for
+  whichever goal was in force on each day. The rate stays a share of
+  bodyweight a week, as MacroFactor's does, so its amount eases as weight
+  falls; the editor already steps it in 0.1 lb or 0.05 kg, and
+  `NutritionRate.share(ofWeekly:)` converts an amount back.
+- On track means within 0.5 kg (about 1 lb) of the planned path, or within
+  the trend's ±1 SD when that's wider, so a noisy trend can't be called
+  ahead or behind. Maintaining has no ahead: any drift past the band is
+  shown as up or down.
+- Two or more days in a row without a reading draw the trend dashed and
+  fainter, including the days since the last weigh-in. Dots are only real
+  readings, as before.
+- "What it rests on" gives each of the last 28 days' readings its exact
+  effect on today's trend: the filter and smoother are linear in the
+  readings, so nudging one by 1 kg and re-running gives its weight. It costs
+  about 7 µs per day of history per reading in a release build and runs off
+  the main thread. Older readings act through expenditure and are summed
+  as the rest.
+- Measurements sync through the daily-log API, `/api/measurements`, not
+  ExerlyCore documents as the brief assumed. Its allowlist gains bust,
+  shoulders and both sides of ankle, bicep, calf, forearm, thigh and wrist;
+  `arms`, `thighs` and `calves` stay accepted so older history stays
+  editable. Moving measurements to documents would mean a second migration
+  for no gain the person sees. The one entry sheet saves its changed fields
+  in one SwiftData transaction.
+- Progress photos move from SwiftData to files, one folder per account in
+  Application Support with complete file protection, and leave the device
+  only through the share sheet. The `ProgressPhoto` model class is listed by
+  all three frozen schema versions, so adding a pose to it would stop
+  existing stores opening. Photos saved by earlier builds under the
+  account's email are adopted once as front photos (the viewer moves one to
+  another pose), each removed from SwiftData only after its copy is written.
+  Deleting the account removes the folder. A UI test launch supplies
+  synthetic images in place of the system photo picker, which XCTest can't
+  fill.
+
+## 2026-10-11: Today's diary depth: left or eaten, water, day status, By time, habits
+
+PARITY N06, N18, N19, N20 and N33.
+
+- Whether Today's ring and macros lead with what's left or what's eaten is
+  a preference, `nutritionDisplay` (remaining or consumed), in Your details
+  under Food log, saved through /api/preferences like the others and sent on
+  the user, so Today follows it as it follows units. An overage is always
+  signed: "+120 over" on the ring, the macros and Log food's confirmation.
+- Water stays in its existing model: a day's total in millilitres on the
+  API, queued offline by SyncEngine. The dashboard, agent tools and Daily
+  health already read it, and a second store would drift from it. Removing
+  is a negative change that stops at zero, as the API does, and Undo queues
+  the opposite change. A glass is 250 ml or 8 fl oz; a bottle 500 ml or
+  16.9 fl oz.
+- The water goal is a preference, `waterGoalMl`, copied to goals.water_ml
+  as the sleep goal is. Saving it through POST /api/goals would accept a
+  new targets version. The goal counts water logged as water. Water in
+  food, from the foods that report it, is shown apart and only added to the
+  total: few foods report water (MacroFactor's help rates complete water
+  tracking "very low"), so counting it would move the goal by which foods
+  were logged, and it is never counted twice.
+- "Log water" joins the Shortcuts. It opens SyncEngine's store for the
+  signed-in account when the app was launched in the background for it.
+  That makes ten App Shortcuts, iOS's limit.
+- A day marked complete with nothing logged is unknown, not a zero, in the
+  energy balance and its JavaScript port, as it already was in averages.
+  Only a fast is a known zero. A day marked partial with nothing logged
+  counts as partial, not as not logged. Check-ins say how many of their
+  fully logged days were fasts and how many partial days were left out.
+- By time groups a day's food by the clock hour it was eaten in the
+  account's time zone. The hour clocks repeat in autumn shows twice, with
+  its zone; food logged on another day or moved here is listed last.
+  Moving an entry's day keeps its time of day, now in ExerlyCore with DST
+  tests: a skipped time moves on by the gap, a repeated one is the first.
+- Today's date button opens a month calendar of habits instead of the
+  system date picker: complete, food logged, partial, fasted, not logged,
+  and weigh-ins, each with its own shape. A tap opens the day. No streaks.
+- Today's cards (quick actions, calories and macros, training, weight,
+  water, meals) can be hidden and reordered in Customize Today. The layout
+  is kept on the device for each account, not synced: it's a layout, it
+  applies at once offline, and it needs no API. The day's status, note and
+  Customize are in a menu beside the date button, and a status shows under
+  the date.
+
+## 2026-10-12: Today's diary tests run outside CI's tap-budget check
+
+CI's iOS job runs the unit tests and `TodayUITests`, the tap budgets, within 60
+minutes. The diary work added six slow tests to that class (water, leading with
+what's eaten, a fasted day in the calendar, By time, a customized Today, and its
+screenshots), which pushed the job past its limit. They now live in
+`TodayDiaryUITests`, which the full local suite runs before every landing, and
+`TodayUITests` holds the tap budgets again.
+
+## 2026-10-20: password recovery by a mailed code
+
+- Recovery mails an 8-character code (`ABCD-EFGH`, no 0/O or 1/I, 40 bits)
+  rather than a link. A link needs universal links, an associated domain and
+  a file hosted on sideband.studio; a code works in any mail app and needs
+  nothing outside the API. It lasts 15 minutes, works once, is used up by
+  five wrong guesses and is ended by a newer code. Only an HMAC keyed with
+  the server secret and the account is stored, so a database copy can't be
+  brute-forced offline.
+- The request always answers 202 with one message, and the reset answers
+  one 400 for an unknown address, a wrong code, a used code and an expired
+  one, so neither says whether an account exists. The new password is
+  hashed before the lookup so timing doesn't either. Limits: 5 requests per
+  15 minutes per address, 3 per hour per email, 10 resets per 15 minutes
+  per address.
+- A reset revokes every session and every personal access token, unlike a
+  password change: recovery is what someone does after losing control of a
+  password, and whoever had it could have made a token. It doesn't mark the
+  email verified; that stays a Sign in with Apple fact.
+- Sign in with Apple accounts whose address is a real one can set a
+  password this way. Accounts with a hidden-address placeholder can't
+  receive mail and get the same answer as anyone else.
+- Mail goes through `lib/mail.js`: a memory outbox in tests and the
+  simulator fixture, the console in development, and nothing in production
+  until Ali chooses a provider (QUESTIONS_FOR_ALI.md). Until then a
+  production request answers as usual and logs that no mail was sent.
+
+## 2026-10-20: deleting an account needs the password or a fresh Apple sign-in
+
+- `DELETE /api/account` used to accept any valid session with
+  `{"confirm": true}`, so a phone left unlocked or a copied access token could
+  erase an account. It now also needs the password, or, for an account
+  connected to Apple, a Sign in with Apple identity token for the same Apple ID
+  issued in the last ten minutes, with its nonce (used up, like a sign-in's).
+  The server verifies Apple's signature itself; the app's word isn't enough.
+- A refusal is 403 (`wrong_password`, `apple_not_confirmed`), not 401: the
+  session is fine, and a 401 makes the app refresh or sign out. Five attempts
+  per account per hour, keyed by account so a copied session can't keep
+  guessing, and so one person's guesses don't lock out others on a shared
+  network.
+- Accounts with both a password and Apple confirm with Apple in the app, since
+  revoking Apple's authorization needs the authorization code from that same
+  sheet. The API accepts either.
+- Installed builds that send only `{"confirm": true}` get "Enter your password
+  to delete your account" until they update. That's deliberate.
+
+## 2026-10-20: a refresh credential presented twice ends its session
+
+Refresh credentials already rotated on use. Now a genuine credential from an
+earlier generation (checked by its HMAC, so a guess proves nothing) presented
+again revokes the session: either the app or a copy of it is replaying, and the
+server can't tell which. A retry of a lost acknowledgement with its own
+operation key is still answered with the same credential, so a dropped
+response never signs anyone out.
+
+## 2026-10-20: the delete screen exports first, and sign-in errors say what happened
+
+- Delete account now reads top to bottom: an Export my data button that shares
+  the account file right there, what deleting removes and what it leaves
+  (Apple Health records, saved exports), then "Confirm it's you": the password,
+  or Sign in with Apple for an account connected to Apple. The alert that
+  follows says so if nothing was exported. It reuses the export the Export
+  screen makes rather than linking to that screen, which the imports slice is
+  rebuilding.
+- Forgot password lives on the sign-in screen and carries the typed email
+  along. The code field formats as ABCD-EFGH while typing and offers the
+  one-time-code keyboard suggestion. After a reset the app returns to sign-in
+  with the email filled in and a note, instead of signing in by itself: the
+  server ends every session on reset, and a fresh sign-in proves the new
+  password works.
+- A wrong password at sign-in said "Your session expired. Please sign in
+  again." because every 401 read that way. Sign-in now says "That email and
+  password don't match. Try again, or reset your password.", and a refused
+  Apple sign-in says Apple couldn't confirm it.
+
+## 2026-10-20: privacy declarations follow the 2026-10-20 data-flow audit
+
+The manifest adds Search History (not linked: food searches and barcodes go to
+Open Food Facts with no identity, and the server keeps them only in a
+five-minute cache), Other Data Types (linked: age, sex and time zone), and the
+file timestamp reason C617.1 for the label-photo import. The watch app gets its
+own manifest for its UserDefaults, and release_checks.py requires it. Health
+reads and writes that stay in Health or on the device aren't collected data.
+The audit and the label table are in docs/release/privacy-review.md.
+
+## 2026-10-20: a session alone never adds a way in, and password accounts always confirm with the password
+
+The security review found a stolen session could connect its own Apple ID and
+then use a fresh Sign in with Apple to delete a password account. Now:
+
+- A password account confirms with its password, whatever else is connected.
+  An account without one confirms with a fresh Sign in with Apple as an Apple
+  ID it already has (lib/reauth.js).
+- That proof is needed to delete the account, connect Apple, disconnect Apple
+  and create a personal access token, since a token outlives the session that
+  made it. Changing the password already needed the current one; there is no
+  email change. Exporting stays session-only: a session can read everything
+  the export holds anyway.
+- Password fields are left out of the fingerprint kept with an idempotency
+  receipt, so the receipts table holds nothing to test password guesses
+  against.
+- Refresh credentials carry their generation inside the MAC, so refusing a
+  forged one is one HMAC, not one per rotation. Older two-part credentials
+  rotate once more; reuse of one is recognised for 16 generations.
+- Forgot password answers before looking the address up and issues the code
+  afterwards, so its timing says nothing about which addresses have accounts.
+
+## 2026-10-20: the app asks for the password to connect Apple or an agent, and confirms deletion on a sheet
+
+- Connect Apple asks for the password first, Disconnect Apple asks for it in
+  its alert, and Connect an agent has a "Confirm it's you" section: the
+  password, or Sign in with Apple for an account without one. Delete account
+  asks a password account for its password even when Apple is connected.
+- The last "Delete this account?" step is a sheet (ExConfirmation) instead of
+  an alert. At the largest text size the alert cut its warning off at
+  "perma-" while Delete stayed tappable; the sheet scrolls and keeps Cancel and
+  Delete reachable.
+- The export on the delete screen counts only once the share sheet finishes
+  sharing or saving it. Cancelling it used to count, which hid the "you
+  haven't exported" warning.
+
+## 2026-10-20: one guess budget per account, a new password ends agent access, and signup may say an email is taken
+
+Security review round 2.
+
+- Wrong passwords and refused Apple confirmations now share one budget of ten
+  per account per hour across deleting, connecting and disconnecting Apple,
+  creating a token and changing the password (lib/reauth.js). The separate
+  per-route limits added up to 45 guesses an hour and are gone. Change
+  password is also limited per account instead of per address. A missing
+  proof, such as a password account asked for Sign in with Apple as well,
+  doesn't count, so finishing a deletion never runs out of tries.
+- Sign-in also allows ten wrong passwords per email per 15 minutes, whatever
+  address they come from. Someone who knows an email can use that to hold
+  its owner out of password sign-in for 15 minutes at a time; the message
+  points to password reset, which still works. That is the usual trade, and
+  better than unlimited guessing spread over many addresses.
+- Changing the password now revokes every agent token, as a reset already
+  did, and both pause webhooks made from a session. Such a webhook carries no
+  data, but it tells whoever owns its URL when the account changes, so one
+  set up by an intruder would keep leaking activity times. It is paused
+  rather than deleted, stays listed with the reason, and the person can turn
+  theirs back on. Webhooks made by a token stop with the token.
+- Signup still answers 409 when an email already has an account. Accepted:
+  a signup that never says so needs email verification, which needs the
+  email provider Ali hasn't chosen yet (QUESTIONS_FOR_ALI.md). It's limited
+  to 5 an hour per address and 5 an hour per email. Revisit once email
+  verification exists.
+
+## 2026-10-20: a password account connected to Apple deletes with its password and Sign in with Apple
+
+This corrects two earlier entries from today. "The delete screen exports
+first" said the delete screen confirms with "the password, or Sign in with
+Apple for an account connected to Apple", and "the app asks for the password
+to connect Apple" said a password account deletes with its password alone.
+Neither holds once the server revokes Apple's authorization on deletion,
+which the launch plan turns on (docs/RELEASE.md): an account with a password
+and Apple then needs both, the password to prove who it is and a fresh Sign
+in with Apple's authorization code so the server can revoke it.
+
+- `AccountConfirmation.password` carries an optional authorization code.
+- The delete screen asks for the password first. If the server answers that
+  it needs Apple too, the password stays and a Sign in with Apple button
+  finishes the deletion with both. Before, the screen swapped the password
+  for the Apple button, every attempt was refused for lacking the password,
+  and five refusals locked deletion for an hour.
+- An account without a password still confirms with Sign in with Apple alone.
+- For UI tests, a debug-only launch variable stands in for Apple's sheet, and
+  the fixture can turn revocation on and records the codes it would revoke.
+
+## 2026-10-20: sign-in limits are per network, so nobody can lock out a known address
+
+Security review round 3. The per-email sign-in limit from round 2 could be
+renewed by anyone: ten wrong passwords every 15 minutes kept a public address
+(Ali's, for one) out of password sign-in indefinitely.
+
+- The hard limit is now ten wrong passwords per email per network, the /24 of
+  an IPv4 address or the /56 of an IPv6 one. Someone guessing from their own
+  network shuts out only that network.
+- Across all networks, wrong passwords for an email make every sign-in to it
+  wait: nothing for the first three, then 100 ms doubling to a cap of 2 s.
+  Guesses spread over many networks get slow, and the owner always gets in,
+  at worst two seconds late.
+- The trade: an attacker with many networks gets ten guesses per network per
+  15 minutes, each slowed by up to 2 s, instead of ten in total. bcrypt and
+  the 8-per-10-minutes per-address limit still apply. Against a reasonable
+  password that is still hopeless, and a lockout anyone can trigger was the
+  bigger risk for a small app with a public founder.
+- A password reset proves the mailbox, so it clears the sign-in limits, the
+  account's confirmation budget and its change-password limit.
+- Both the confirmation budget and the sign-in limit now hold a place for an
+  attempt before bcrypt or Apple's check runs, so requests sent at once can't
+  all slip past the limit while they are being checked.
+- The count of failed reset emails is no longer in the public /api/health: a
+  failure only happens for an address with an account, so it told anyone who
+  asked for a reset whether one existed. It's logged instead.
+
+## 2026-10-20: rate limits read the client from do-connecting-ip, only on App Platform
+
+Security review round 4. On App Platform, X-Forwarded-For names DigitalOcean's
+ingress, so every client shared one address and anyone could throttle the
+owner through it. Limits now take the client from `do-connecting-ip`, but
+only when `EXERLY_APP_PLATFORM=1`, which `.do/app.yaml` sets. The header alone
+proves nothing: anyone can send it to a self-hosted server, so without the
+flag it is ignored and Express's one-proxy `req.ip` is used, as before.
+
+A failure limit's in-flight attempts now count only against the window they
+started in. A password reset clears the window, and guesses still being
+checked when it happened no longer charge the fresh one.
+
+A webhook paused while a successful delivery is in flight doesn't record that
+delivery, so turning it back on can send that notice again. Notices carry no
+data and receivers already handle repeats, so this stays.
+
+## 2026-10-20: ship with do-connecting-ip trust off until it's verified on the live app
+
+Security review round 5. DigitalOcean documents that App Platform adds
+`do-connecting-ip` with the client's address, but not that it replaces or
+strips one the client sent. If it doesn't, `EXERLY_APP_PLATFORM=1` would let
+anyone send a different fake address with each request and slip past the
+per-address and per-network limits. That is worse than leaving the flag off,
+where every client shares the ingress's address: limits then over-count and
+can throttle legitimate people together, but nobody can get around them.
+
+So the flag is off in `.do/app.yaml`, and a test fails if it's switched on
+there. `clientIP()` and its tests stay, ready for when Ali has checked the
+deployed ingress: send a request with a forged `do-connecting-ip` through the
+live app and confirm the server records the real address. The per-account
+confirmation budget, the per-email sign-in backoff and the per-email signup
+and reset limits don't depend on the address, so they work the same either
+way.
+
+## 2026-10-20: Barcode scanning reads camera frames with Vision, not DataScanner
+
+Scan barcode now runs its own `AVCaptureSession` with a video data output and
+reads each frame with Vision's `VNDetectBarcodesRequest` (`BarcodeDecoder` in
+ExerlyCore). The alternatives:
+
+- **VisionKit's `DataScannerViewController`** uses Vision underneath and is the least
+  code, but it owns the camera: no torch, no exposure reading for a low-light prompt,
+  no zoom from the lens's closest focus, and no way to feed it an image, so neither the
+  simulator nor a benchmark could exercise it.
+- **`AVCaptureMetadataOutput`**, the old scanner, decodes in hardware but can't be run on
+  an image either, and it accepted the first read of a code, so a misread digit that
+  passed its check digit could log the wrong food.
+- **Vision on frames** gives one decoder for the camera, the simulator's stand-in feed and
+  the benchmark; every retail symbology Vision reads, DataBar Limited and Expanded, Micro
+  QR and DataMatrix included; and full control of torch, zoom, focus and exposure. Its
+  cost is running Vision on each frame, with one frame in flight and late frames dropped.
+
+The rest of the slice:
+
+- A code is accepted after a valid check digit and two agreeing reads within 1.2 s. It is
+  held while in view; shown again after a second away, it counts again, as a second pack.
+- EAN-8 and UPC-E reads need 2.5 pixels a module. The benchmark caught Vision reading a
+  small GS1 DataBar as an EAN-8 whose check digit passed, in two frames running, so two
+  agreeing reads weren't enough. Closer than that they read at 100%; the scanner asks
+  to hold the phone closer.
+- Every form of a code is keyed by its GTIN-14. The phone normalizes and sends the
+  GTIN-14; the server's `normalizeBarcode` already gives the same key, now checked by
+  shared vectors. Prefixes 020–029 and 200–299 (in-store weighed or priced labels),
+  040–049 (a store's own numbers), coupons and 977–979 publications are explained, not
+  looked up. EAN-8s starting 0 or 2 are restricted numbers too but are looked up,
+  because retailers' own-brand EAN-8s are stable and appear in Open Food Facts.
+- Resolved codes are cached per account in the account's SQLite settings table: local,
+  not synced, deleted with the account's database. It keeps 500 products and 60 scans,
+  never dropping one waiting to resolve, and refreshes a product older than 30 days in
+  the background. A scan offline with no cached product waits and resolves after the next
+  sync or when the scanner opens; it logs to the meal, day and time it was scanned for.
+- Several scans build one plate (`NutritionPlateDraft`) that logs in one tap. A found food
+  no longer opens its portion sheet: it lands on the plate at its usual amount with −
+  and + for one serving, so one item still logs in three taps from Today.
+- A food entered for a missed code is remembered for that code on this device. Sending it
+  to Open Food Facts is the next wave's.
+- The iOS simulator can't run Vision's barcode revisions 2 to 4 ("Could not create
+  inference context"), so the decoder falls back to revision 1 there and UI tests still
+  go through Vision. The benchmark runs under `swift test` on the Mac at the revision a
+  phone uses, and skips itself where only revision 1 is available, as it may on CI's VMs.
+- Synthetic codes for the benchmark come from encoders in ExerlyCore, whose DataBar widths
+  match bwip-js. DataBar Limited, DataBar Expanded, GS1 DataMatrix and Micro QR, which
+  have large published tables, were rendered once by bwip-js (MIT) for synthetic GTINs
+  under GS1's demonstration prefix 950, and are committed as test fixtures.
+
+## 2026-10-20: Restricted EAN-8s aren't looked up; offline scans keep every intent
+
+Review round 1 of the barcode slice changed four earlier calls:
+
+- EAN-8s starting 0 or 2 are a company's own restricted circulation numbers (GS1 General
+  Specifications), so two retailers can reuse one. They are no longer looked up, and no
+  cached product answers them; a food the person entered for one does, on their account.
+  This reverses the earlier entry, which looked them up for own-brand EAN-8s.
+- Each scan made offline is kept as its own record with its meal, day and time, apart from
+  the one-per-code history, so a later scan of the same code never overwrites it.
+- A past scan with foods on the plate joins the plate rather than logging alone, and the
+  plate can't be logged while an accepted scan is still being looked up.
+- A pack accepted before the camera pauses stays held when it resumes and must leave the
+  frame to count again.
+
+## 2026-10-20: An offline scan is consumed in the transaction that logs it
+
+Review round 2: an offline scan put on a plate was deleted before the plate logged, so a
+discarded plate lost it. Now a plate only stages it, in memory and by scope (the scanner's
+plate, or a meal being built, whose scope reaches the scanner through the environment).
+The record is removed inside the same SQLite transaction as the entries that log it. A
+crash, discard or cancel leaves it ready. While a scan is still being looked up, a past
+scan always joins the plate, so nothing logs ahead of it.
+
+## 2026-10-20: Offline scans travel with plate rows; logs publish after commit
+
+Review round 3 found the staging registry could consume the wrong scan (it matched by
+food) and that a failed outer commit could leave a draft marked logged. The registry is
+gone. A plate row carries the offline scans it came from; a row removed or a portion
+cancelled carries none away. `BarcodeLibrary.log` writes the entries and removes exactly
+those scans in one transaction, and the store's entries, the library's pending list and
+the draft's logged state change only after it commits. Discarding a plate needs no
+cleanup elsewhere, so a running lookup can't hold scans hidden.
+
+## 2026-10-20: Undo restores offline scans; a meal's scanner hides what's on the meal
+
+Review round 4. A meal builder's scanner offered a scan already on the meal, and Undo after
+logging offline scans deleted the entries but lost the scans. The meal's scanner now treats
+the meal's scans as its own plate's: not offered, not counted as ready, not dismissed by Not
+needed; a draft refuses a second row for one scan. `BarcodeLibrary.log` returns the scans it
+consumed, refuses a scan no longer pending, and publishes through `afterCommit`, so nesting
+it in a larger transaction is safe rather than forbidden. Undo goes through
+`BarcodeLibrary.undo`, which deletes the entries and restores the scans of the foods undone
+in one transaction. Undo is offered only while the app keeps the log in memory, as the toast
+is. A liquid's amount now reads in ml, or fl oz for US units, from its density.
+
+## 2026-10-21: An entry keeps the offline scans it consumed; Undo restores only those
+
+Review round 5. Undo found a log's scans in memory, among the last 20 logs, and chose them
+by food: a row's Undo spanning two logs, or one after 20 more logs or a relaunch, deleted
+entries without their scans, and undoing one of two same-food entries put back both scans,
+so the other could be logged twice. When `BarcodeLibrary.log` consumes a scan it now stores
+the scan's whole pending record (ID, code, meal, day, time) against the entry it became,
+under `barcode_library.consumed.v1` in the account's store, in the same transaction.
+`BarcodeLibrary.undo(entryIDs)` deletes the entries still logged and puts back exactly the
+scans stored against those, in one transaction; nothing in memory decides what returns, so
+Undo of any log at any age, from any screen or after a relaunch, works the same.
+
+A plain delete (Today, the entry editor) does not restore the scan. Deleting says "I didn't
+eat it", which dismisses the scan too; its record stays, so undoing that delete makes the
+entry the scan's one log again and a later Undo can still put it back.
+
+`log` and `undo` read pending scans from the transaction they run in, not from memory, so
+two calls in one caller's transaction see each other. A transaction's rollback now drops
+only the after-commit actions it added; it used to drop every action at its depth, a saved
+sibling's included. A pending scan's time is kept to the millisecond, as stored.
+
+## 2026-10-21: A scan undone here and edited elsewhere can log twice; left to conflict review
+
+Final review. The phone logs an offline scan as an entry and syncs; the tablet edits that
+entry while the phone is offline; the phone undoes the entry, which puts the scan back, and
+logs it again as a new entry. On the phone's next sync, `SyncEngine.receive` treats "deleted
+here, changed there" as a reason to restore the entry, so both entries exist and the scan is
+logged twice. That rule is the conflict policy for every synced entry kind, not something
+barcode logging owns, and reviewing such conflicts is already the missing piece PARITY I03
+and N08 track. Changing it here would fork the policy for one kind and pre-empt that slice.
+`BarcodeLoggingModelTests.aScanUndoneHereAndEditedElsewhereIsLoggedOnceAfterSync` drives the
+sequence through two real `SyncEngine`s and the fake document server and expects one entry,
+under `withKnownIssue`, so it starts failing when the conflict-review slice fixes this.
+
+## 2026-10-20: Imports are one undoable unit; export is made on the phone
+
+PARITY I02, I12, I13, I14.
+
+- One screen, Profile → Import & export, holds every import (MacroFactor,
+  MacroFactor Workouts, Hevy, Strong and an Exerly export), the list of past
+  imports with Undo, and Export. Setup's last page can open it once setup is
+  done, and CSV, TSV, xlsx and JSON files shared to Exerly open the same
+  preview. Exerly registers those types as Alternate, never Owner, so it
+  doesn't take over other apps' files.
+- The source is recognised from the file's contents, not its name or the row
+  tapped: Hevy by `exercise_title` and `start_time`, Strong by `Exercise Name`
+  and `Set Order`, MacroFactor Workouts by `Exercise` and `Date` alone,
+  MacroFactor by a workbook or its food and day columns, an Exerly export by
+  `documents` and `exported_at`. Formats follow each app's public help pages;
+  the fixtures cite them.
+- An import saves as one SQLite transaction across the account's stores,
+  through `HistoryImporter`. A failure saves nothing, replacing the earlier
+  kind-by-kind save that could leave half a MacroFactor import. A document
+  that appeared or changed after the preview (a sync) is left as it is.
+- Each import keeps a record in the account's own database: every document
+  it wrote, what was there before, and a fingerprint of what it saved. Undo
+  writes back the before, again as one unit, and keeps anything edited since
+  the import. Records don't sync: their before copies can be large, and the
+  documents themselves sync, removals included. Undo is on the device that
+  imported. Importing a file again changes nothing and leaves no record.
+- Exercise names are matched by name; the person can choose any exercise or
+  leave a name's sets out, and the file is read again with that choice.
+  Strong's unitless Weight column asks which unit was used.
+- MacroFactor Workouts' mini-sets join the myo set before them as one myo set
+  of several efforts. Strong's rest timers, Hevy's and Strong's routines and
+  measurements, and MacroFactor's trend weight, expenditure, steps and body
+  metrics are listed as not coming across. Body measurements stay out: they
+  live in the server's older measurements table, outside the one-unit save
+  and Undo.
+- Export is built on the phone from the account's JSON export (server and
+  device merged, or the device alone offline or when the server doesn't
+  answer within 6 s, which the screen says): a zip with the JSON, a CSV per
+  kind of data with the server's `/v1/export` columns plus nutrition targets,
+  an .xlsx with the same sheets (inline strings, stored zip, no dependency),
+  and a README. This reverses design note 022's "xlsx isn't produced": a
+  writer turned out to be 80 lines and no dependency. The JSON gains
+  `context` (time zone and mass unit) and `imports` (provenance: each
+  import's source, files, time and documents).
+- Restoring an Exerly export imports its `documents` into the account,
+  keeping IDs; documents the account has are kept. The server's older tables
+  and account details are listed as not restored. Exported, restored into a
+  fresh account and exported again, documents and CSV files are identical;
+  only `exported_at`, revisions (a fresh account hasn't synced) and `imports`
+  differ.
+
+## 2026-10-20: Imports after review: stale previews, workout identity, provenance, older tables
+
+Supersedes parts of the entry above, after an independent review.
+
+- A preview that a sync made stale is no longer saved in part: if any
+  document it expects changed, nothing is saved, and the file is read again
+  and shown with a note. A day's imported foods and the MacroFactor daily
+  total they replace form one group: Undo keeps the whole day as imported
+  when any food on it changed since, rather than putting the total back
+  beside the foods, and says so.
+- Hevy, Strong and MacroFactor exports have no workout ID (Hevy's CSV gives
+  title, start and end; Strong's `Workout #` is a running count). A workout
+  is known by its source and its start to the minute, with an ordinal for
+  two starting in the same minute. A workout corrected in the app and
+  exported again updates the imported one if Exerly still holds what the
+  last import saved, judged from that import's record; one changed in
+  Exerly is kept and the preview says so.
+- Where imported records came from is an `import_provenance` document: the
+  source, files, time and the documents (and measurements) it saved, in
+  parts of 3,000 so each stays under the server's 256 kB. It syncs, is in
+  every export and comes along when an export is restored. The `imports`
+  key in the JSON export is gone; Undo records stay on the importing device.
+- `POST /v1/import` restores the server's older tables too (food, measurements,
+  weights, water, diary days, target versions, activities, sleep, goals, the
+  older program, check-ins, library foods, recipes, workout templates, coach
+  plans) with the importing account as owner and new row IDs, matched on
+  natural keys so a second restore adds nothing. Sign-in identities, webhooks
+  and setup drafts are never restored. `POST /v1/import/undo` removes what a
+  restore added, keeping rows changed since. On the phone, a restore with
+  older tables needs a connection: documents are saved, then the tables are
+  restored through the account; if that fails, the documents are taken out
+  again.
+- Body measurements from MacroFactor's Body Metrics, Hevy's
+  measurement_data.csv and Strong's measurement files go to the app's
+  measurement log, saved before the document transaction and removed again
+  if it fails; Undo removes them first and keeps any changed since. The
+  server accepts `imported` as a measurement source, with the app in the
+  note. Columns for sites Exerly doesn't keep (Hevy's abdomen) are listed as
+  not coming across.
+- The CSV files and workbook cover everything: every document kind without
+  its own columns as id, revision, updated_at and payload JSON; the account
+  and each of the server's older tables as they are; workout rows gain
+  session and exercise notes.
+- When the account can't make the export, the phone's copy is offered with
+  the reason before anything is shared, instead of a note behind the share
+  sheet.
+
+## 2026-10-21: Restores of older tables after review round 2
+
+- A restore records what it added in `restores` (migration 0009): each row's
+  table, ID and a SHA-256 of the row as stored. `POST /v1/import` returns
+  its `restore_id`; `POST /v1/import/undo` takes that ID, works only for the
+  account that made it and only once (404 for another account's, 409 the
+  second time), refuses any row the restore didn't add, and removes a row
+  only while its fingerprint matches. That covers the tables with no
+  revision (goals, program, check-ins, library foods, recipes, workout
+  templates, target versions, coach plans) the same way as the rest. Tables
+  the phone syncs get a deletion in its feed; soft-deleted tables keep their
+  tombstones. Goals and the older program aren't in the feed, so they have
+  none to leave.
+- Importing again after Undo brings back what that Undo removed, in place
+  and a revision past its deletion. A row the person deleted stays deleted.
+- Matching: weigh-ins, water, day notes and check-ins on the day alone, so
+  a day the account has keeps its own row and counts as kept. Deleted rows
+  count, since their unique keys still hold. Food, measurements, activities
+  and sleep without a client ID match on what they are (day, name or type,
+  amount, time) and get a new client ID. Target versions match on effective
+  date, creation time, reason and targets, since several can share a day.
+- Activities and sleep get `identity_key` rebuilt for the importing account.
+- Every restored row goes through its table's route checks (the routes now
+  export them), a client ID must be a UUID, a missing revision becomes 1,
+  and a row that fails is listed under `skipped` with its table and reason
+  instead of being stored. The done screen lists them.
+- Import and Undo are limited to 10 a minute per account, each separately,
+  after sign-in. Per address, every account behind App Platform's ingress
+  shared one limit.
+- Restores insert a few hundred rows per statement and append their feed
+  changes in one statement. At three years of synthetic data (11,315
+  documents, 14,158 older rows, 7.5 MB) a restore took 185 s one row at a
+  time and 5.2 s batched, and Undo took 35 s and 3.2 s, on devbox1 at a load
+  average of about 250.
+- Workouts from Hevy, Strong and MacroFactor are known by the start minute
+  as the file writes it, not the instant it means in the account's zone, so
+  re-reading a file after a move updates rather than duplicates. A workout
+  the account already has keeps the zone it was saved in; only new ones
+  take the current zone.
+- A body measurement corrected in the source app updates the one an earlier
+  import saved, while it still has that import's value. If it was changed in
+  Exerly since, it's kept and the preview says so. Undo puts the earlier
+  value back.
+
+## 2026-10-21: Restores after review round 3
+
+- Undo now writes into its receipt only the deletions it made, each with the
+  revision it left, plus its counts (migration 0010 adds `outcome`). A later
+  restore brings a row back only if it's still exactly that tombstone. A row
+  Undo kept, or one the person deleted, stays deleted.
+- Undo answers a replay with its first counts and `already_undone: true`
+  instead of 409. The phone already treats that as success and goes on to
+  its own part, so an Undo whose answer was lost, or whose local part
+  failed, finishes when tried again.
+- Receipts: restores read only undone receipts. A tombstone that's brought
+  back is spent, and an undone receipt with none left is removed after 30
+  days, which is also how long a replayed Undo can be answered. Receipts not
+  yet undone stay, since Undo is offered later from Profile.
+- A restored recipe's ingredients are stored as totals for their servings,
+  so they're divided back to one serving before the route's check, and
+  their servings are checked too.
+- Check-ins restore before target versions. A version's `checkin_id` points
+  at the check-in restored or kept for it, or is null.
+- Undo compares what a row says, leaving out `updated_at`, `revision` and
+  `revision_locked`, so a write that changes nothing doesn't keep it.
+- On the phone, a measurement correction is applied and recorded only while
+  the log still has the value the preview saw. Measurement Undo first puts
+  corrected values back, then removes what the import added, each only
+  while it's as the import left it. A failure at any step puts back what the
+  earlier steps did.
+
+## 2026-10-21: Restores and measurement Undo after review round 4
+
+- Migration 0010 is folded into 0009, which now creates `restores` with
+  `outcome` and the undone index. Neither had reached main or been deployed,
+  so no database holds a 0009 receipt to upgrade. This replaces the round-3
+  note that 0010 adds `outcome`. A test checks that receipts are created whole
+  by one migration and that no later one changes them.
+- An import compares a measurement's whole state (site, value, unit, day,
+  source and note) before correcting or removing it. Any difference, a new
+  day included, is an edit and keeps the measurement. Measurements have a day
+  but no time of day.
+- Taking back a measurement removal (when an Undo's record can't be saved)
+  cancels a DELETE not yet sent, or queues the server's `/restore`, keeping
+  the server ID and revision. It no longer re-adds, which queued a second
+  create with the same client ID. Importing again after Undo goes the same
+  way, followed by a change if the file's version differs.
+- Importing again brings back a deleted measurement only when the latest
+  import that touched it was undone and its Undo deleted it. Otherwise the
+  person's deletion stands, and the preview says so.
+- During cleanup, a restore receipt drops references whose tombstone is gone,
+  no longer deleted, or at a different revision from the one Undo left.
+
+## 2026-10-21: Imports on top of barcode's after-commit publishing
+
+- `NutritionStore.writeAll` combines both branches: it prepares the writes,
+  hidden suggestions included, inside the transaction and hands their
+  publishing to `persistence.afterCommit`, so an import's records show once
+  the outermost transaction commits and never after a rollback.
+  `HistoryImporter.apply` still publishes after its own transaction, which
+  is never nested.
+- Saving an import checks each measurement against the preview first. A new
+  one must still be absent, and one to bring back must still be the deletion
+  the preview saw. Otherwise the preview is read again (`stale`). A deletion
+  that arrived after the preview is never revived.
+- If an Undo fails and can't put back the measurements it took back, it
+  saves the import as still to undo, with the deletions it made, and says
+  "Undo took back your imported measurements but couldn't finish. Tap Undo
+  again." A retry adds to that list, so importing again brings back exactly
+  those deletions.
+
+## 2026-10-12: A goal weight already reached can't be saved as a loss or a gain
+
+Code-blind run 7 set a 165 lb goal at "lose 1 lb a week" with the trend at
+160 lb. The editor said the trend was already past it, then saved a 415 kcal
+deficit, and Progress showed "On track" beside "at or past your goal".
+
+- ExerlyCore: `NutritionGoal.isReached(trend:)` is true when the trend is at
+  or past the goal weight in the goal's direction. `NutritionTargets.compute`
+  then takes no rate, so a reached goal never cuts or adds calories, including
+  in a check-in's proposal once a loss reaches its goal.
+- The editor doesn't switch direction by itself. A goal weight on the wrong
+  side is as likely a typo (155 meant) as a change of mind, and a silent switch
+  would hide either. It says what's wrong under the goal weight and offers one
+  tap: "Gain to 165 lb" or "Maintain instead". Save stays disabled, with the
+  same reason above it, until the goal can be reached. Over a confirm-on-save
+  alert, this shows the problem where it was made and keeps every choice on
+  screen.
+- Progress shows "Goal reached" instead of a path standing once the trend is
+  at or past the goal weight, so it never says "On track" about a goal it has
+  passed.
+- Add a goal weight opens an empty field with the keypad up and the trend
+  weight as its placeholder, instead of an unexplained 10 % under the trend.
+  − and + start from the placeholder.
+- With a trend weight, rate presets are round amounts in the person's unit:
+  0.5, 1, 1.5 and 2 lb (0.25 to 1 kg) to lose, 0.2 to 0.8 lb (0.1 to 0.4 kg) to
+  gain, on the 0.1 lb the editor shows, keeping those within the 1 % and
+  0.5 % caps. A new direction starts on
+  the preset nearest 0.5 % (0.25 % to gain).
+- Faster and Slower step from the amount as shown (0.1 lb or 0.01 kg). The
+  trend in a plan's basis is rounded to 0.01 kg, so 0.5 % of 72.57 kg is
+  0.7999 lb; stepping from it kept "0.8 lb" for a tap.
+
+## 2026-10-12: Spoons weigh by density, cans match canned food, and a drained can is an estimate
+
+Run 7's "2 tbsp olive oil" matched the person's own olive oil, which names no
+serving, couldn't convert a tablespoon, and came in at the 4 oz default
+(about 1,000 kcal). "1 (15 oz) can black beans, drained and rinsed" matched
+"Black beans, NFS", whose values are USDA's cooked-from-dried with fat added
+(181 kcal/100 g): 770 kcal.
+
+- A food's grams per millilitre come from its label, a measure it names (USDA
+  spells them out: "1 tablespoon" now counts), or else its name: an oil is
+  0.91 g/ml and water, broth, stock, vinegar, milk or juice 1.0, not when
+  dried, powdered, concentrated or "in"/"with" one. Other foods have no
+  density, and a volume of one comes in marked "Enter its weight": its
+  placeholder amount counts for nothing and Save asks for a weight. No weight
+  is guessed.
+- Liquids offer 1 tbsp, 1 tsp and 1 cup beside grams and ounces in the
+  ingredient and portion sheets, by the same density. Solids don't: a cup of
+  a solid depends on how it's cut, and USDA names its own cups.
+- Matching a recipe line: a can or tin asks for canned food, falling back to
+  the plain name when nothing canned matches. "from dried", "from canned" and
+  "no added fat" don't count as extra words, and no-added-fat forms win ties,
+  since a recipe lists its own fat. Black beans are now "from dried, no added
+  fat" (131 kcal/100 g); a can, "from canned, no added fat" (134).
+- A drained can is 60 % of its label weight, typical for beans, chickpeas,
+  corn and tomatoes, named "1 can, drained (9 oz)" and marked to check:
+  342 kcal for the black beans. USDA's canned beans are the drained solids,
+  so 425 g of them overstated the can by two thirds. The brief's 380 kcal
+  assumed 90 kcal/100 g for the whole can; the bundled table has no
+  solids-and-liquid entry.
+
+## 2026-10-12: Next on the number keypad, and a found line goes back to its recipe
+
+- The keypad has Next when a field follows on the same sheet or page (below,
+  or to the right in a grid). Run 7 hid the keypad and tapped each of a new
+  food's numbers in turn.
+- A food made with "Enter a food manually" from a search with an amount
+  ("3 oz tempeh") comes in at that amount, as a found food does, not at the
+  4 oz default.
+- Searching for an imported recipe's unmatched line closes once a food is
+  added: one line, one food, back to the recipe.
+
+## 2026-10-12: Preferences set where they're used, saved as they change
+
+Run 7 looked for "lead with what's eaten" on the calorie ring and in Customize
+Today before finding it in Profile → Your details, and reached the water goal
+only through the expanded water sheet, which then opened Your details.
+
+- Customize Today starts with "Calories and macros show: What's left / What
+  you've eaten", and the water sheet has a Daily goal field (any amount the
+  account accepts, 250 ml to 10 l, with − and + by a glass and three
+  presets). Both save the account's preference at once, as a reminder switch
+  does (`PreferencesStore.saveNow`), so it stays the single source and Your
+  details shows the same value. The latest choice wins; one still sending is
+  re-sent first.
+- The water sheet opens whole, so the goal is in view. Its confirm reads
+  "Log" (beside the Add / Remove choice it read "Add" twice), and once the
+  goal has changed, Cancel reads Done.
+
+## 2026-10-12: Today gives way to today after a long time away
+
+Run 7 picked yesterday to see By time, spent 16 minutes importing a recipe in
+Profile, and came back to "Yesterday". Coming back from another tab or the
+background keeps the day shown for up to 3 minutes, so a quick look at Log
+food doesn't lose it; after that, or on a new day, Today shows today. Re-tapping
+Today still goes to today at once.
+
+## 2026-10-20: Goal weight takes the same path from Targets and Progress
+
+Driving the fix showed the goal editor's "Gain to 165 lb" and "Maintain
+instead" under the keypad, which stays up after typing the goal weight. The
+choice now replaces Save in the bar above the keypad ("Gain to 165 lb" and
+"Maintain"), with the reason above it, until one is taken; the goal weight
+keeps only the explanation. Save comes back once the goal can be reached.
+
+Goal weight works the same from Targets and from Progress → Body:
+
+- Run 7 tapped Add twice: "Add a goal weight" on Targets opened the editor
+  with a second "Add a goal weight" in it. Add on Targets, and a new Add beside
+  Body's "Add a goal weight" line, now open the editor at the empty field with
+  the keypad up. Edit goal and Edit still open the editor as it was, since
+  they may be for the rate or the macros.
+- Targets said "already at or past this goal" in green under a loss rate, while
+  Progress said "Goal reached". Targets now shows the same "Goal reached" pill
+  and says to edit the plan to maintain or aim for a new goal.
+
+## 2026-10-20: Next on the number keypad follows an order each form declares
+
+Review round 1 found Next skipping Fat in the food editor at a larger text
+size: it took the field below or beside on screen, within 8 pt, and
+"Carbohydrate (g)" wrapping onto two lines moved Fat out of its row. In quick
+add it also went from Fat on to the entry's name. Each form now names its
+fields in order with `exFieldOrder` (the food and entry nutrient editors,
+quick add, measurements, nutrient goals, manual targets, recipe yield,
+activity and program targets). Next goes to the next one on screen, skipping
+any not shown, such as a closed group of nutrients; a field outside an order
+has no Next. Place on screen isn't used at all, so text size can't change it.
+
+## 2026-10-20: One-tap preferences have their own queue, apart from Your details
+
+Review round 1 found that Customize Today's eaten or left and the water
+sheet's goal borrowed Your details' draft. Offline, with no draft, the change
+did nothing and a relaunch showed the old one; a pending save blocked newer
+ones; and the whole draft was sent, so an unfinished name or allergy went with
+the water goal and could replace another device's change without review.
+
+- `QuickPreferences` keeps these fields per account on the device the moment
+  they change, shows them over the account's values (Today, the water row and
+  the controls read it first), and says "Saved on this iPhone. It syncs when
+  you're back online." while it waits.
+- It sends only the fields it holds, against the revision it has just read,
+  one send at a time; a change made while one is sending waits behind it, and
+  only its newest value goes. A lost response is replayed as sent, so the
+  server answers it again; a 409 reads the revision again and sends the same
+  fields as a new write.
+- Offline it retries after 3, 6, 12 and then every 20 seconds, and when the
+  app comes back to the front or the connection returns.
+- For these fields the last change wins, as a switch does, rather than asking:
+  they hold one choice each and the person just made it. Your details' draft,
+  its base revision and its conflict review are never touched, so an
+  unfinished edit there still asks before replacing another device's save.
+
+## 2026-10-20: Every repeat on Today's first screen, and a typed weigh-in in two taps
+
+Counted against MacroFactor's public material (docs/TAP_BUDGETS.md), two flows
+were in budget but not on the first screen, or not ahead of it:
+
+- Repeating a meal or a day sat under the meals, past the training, weight
+  and water cards: one tap, after scrolling, and a first-time user had to know
+  to look there. Log again, under the calorie ring, now leads with the meal
+  being eaten now as it was last logged ("Yesterday's breakfast · 2 foods"),
+  one tap, a check after it, and a second tap takes it back like a food chip.
+  Its title row carries "Repeat yesterday" for the whole day. Once today has
+  food, that button repeats only the meals today hasn't logged ("Rest of
+  yesterday"), never doubling one, and when the current meal is logged and
+  the chips are gone it stands as a row of its own. A food from the meal
+  logged on its own first is left out when the meal is repeated
+  (`NutritionStore.repeatableDay` and `remaining`). Each meal's own Repeat
+  row stays for the other meals; the meals header's Repeat button now shows
+  only on other days, where it plans ahead.
+- A typed weigh-in was three taps (Weigh in, the number, Save) against
+  MacroFactor's two from a customised toolbar. A new weigh-in now opens on
+  the last reading with the keypad up: the scale's number is typed over it,
+  then Save, two taps; Save alone keeps the last reading. Done puts the
+  keypad away for the ruler, ± and body fat. Editing a saved weigh-in opens
+  on its reading as before. The ruler stays because a nudge of 0.1 is a
+  single drag; it's no longer the first thing shown because people read a
+  number off a scale and type it, as Apple Health asks.
+- CI's tap-budget step now runs `TapBudgetUITests`, one counted test per
+  budget, each from Today's top for a person with history, counting taps and
+  scroll drags and passing only once the entry is on the server (a set:
+  once it survives a relaunch, as PARITY B02 asks, because sets sync with
+  the workout). `TodayUITests` joins the full local suite like
+  `TodayDiaryUITests`, keeping the job inside its hour.
+- Launch to logging is a signpost interval (`LaunchTiming`, app start to
+  Today on screen) measured with XCTOSSignpostMetric and
+  XCTApplicationLaunchMetric in `LaunchToLoggingUITests`, run locally, not on
+  CI's shared runners.
+
+## 2026-10-20: Fixes from a code-blind run of the five logging budgets
+
+A fresh agent that hadn't seen the code logged a past food, yesterday's lunch,
+the rest of yesterday, a weigh-in, and today's first set on a 17 Pro Max with
+four weeks of history, without instructions. Every task took the budgeted taps;
+these are what it hesitated over or got wrong, and what changed:
+
+- One lunch food logged from a chip made "Rest of yesterday" skip the rest of
+  lunch. A meal holding only foods from yesterday's same meal is now finished
+  from it; a meal with anything else was eaten differently and is left alone.
+- "Yesterday's lunch · 3 foods · 522 kcal" logged two foods (the third was in)
+  and the ring moved less than promised. The chip shows what a tap will log,
+  and every repeat's confirmation names it: "Repeated yesterday's lunch: 2
+  foods, 290 kcal"; "the rest of yesterday" or "all of yesterday" for days.
+- The day's button read as a "See all" link; it's a filled capsule now. "Usual
+  for lunch" no longer shows once lunch has food.
+- A waiting weekly check-in, above the ring, pushed Today's Start below the
+  fold. It now follows the workout card (or Log again when training is hidden).
+- The grey last reading, with a caret, read as a value already typed. The
+  keypad's title says "Type over it, or Save to keep it", and the sheet opens
+  at a height that fits the keypad and Save instead of full height with a gap.
+
+Left for their owners: the workout screen doesn't mark which values are the
+suggestion, nor explain RIR; Previous is low-contrast; the confirmation covers
+the bottom of Today for six seconds.
+
+## 2026-10-20: Each repeat owns what it logged; weigh-ins never save a placeholder
+
+From an independent review of the tap-budget work:
+
+- Log again's chips now agree with each other. A food chip shows its own
+  check only for the entry it logged, and a softer "already in breakfast"
+  check when a repeated meal or day put that food there; a tap on that logs
+  nothing and leaves the other action's confirmation and Undo alone. The meal
+  chip does the same ("already logged") once a day repeat covers it. The day's
+  button stays after a tap, checked, so its Undo outlasts the six-second
+  confirmation. Every Undo, a chip's second tap or the confirmation's, takes
+  back exactly the entries its own tap created, and only those still as
+  logged.
+- Repeats match portions one by one, not foods. Yesterday's two bars at snack
+  time leave one still to come after the first is logged today; a 30 g portion
+  today stands for yesterday's 30 g, not its 60 g; a portion of neither size
+  stands for the nearest. A meal holding more of a food than yesterday's did
+  was eaten differently, and the day's repeat leaves it alone.
+- A new weigh-in's last reading is a placeholder, not a value. Save stays off
+  until a weight is typed, set on the ruler or ±, or picked again with "Same
+  as last · 181.4 lb", which saves at once (Weigh in, Same as last: two taps).
+  Clearing the typed digits with Delete, or putting the keypad away, leaves
+  nothing to save. VoiceOver reads the number as a placeholder from the last
+  reading. The shared keypad is unchanged.
+- Launch is gated end to end: from the process starting (the kernel's start
+  time, so loading the app's code counts) to the first frame drawn with Today
+  and Log again, which the app's Debug build reports to the UI-test fixture.
+  `onAppear` ran before anything was drawn, so the old interval flattered it.
+  To shorten it: a saved session, its saved entries and its workspace open as
+  the root view appears, not in tasks a render each later; the first frame
+  draws Today's first three cards and the rest a frame later; today's workout
+  is worked out for that frame, so Start shows instead of "No workout planned".
+- At the largest text sizes the standard layout puts today's workout right
+  under the shortcuts and Log again, above the ring and macros, which fill a
+  screen there, and the four shortcuts sit two by two instead of four
+  full-width rows. A layout someone chose in Customize keeps its order.
+- CI runs four of Today's undo and navigation tests next to the tap budgets.
+
+## 2026-10-21: Today's confirmation moves to the navigation bar; accounts open off the main actor
+
+From the second independent review of the tap-budget work:
+
+- A logging confirmation took the bottom of Today for six seconds, over
+  Start and Log again's chips. It now takes the date's place under Today's
+  title, with Undo at the bar's leading edge, and stays fifteen seconds (25
+  with VoiceOver) since it covers nothing. Only a failure, which has nothing
+  to undo, still shows at the bottom.
+- Every Undo on Today (the confirmation's, a chip's second tap, the day's
+  button) removes only entries still exactly as its tap logged them
+  (`TodayUndo.removable`): one changed since, here or by another device's
+  sync, stays. The confirmation keeps the entries as logged, not their IDs,
+  and hides once another control has taken any of them back.
+- Log again's checks and Undo survive refreshes on the day they were made:
+  the launch's first sync, pull to refresh and coming back to the app. The
+  shelf is rebuilt when the meal it was built for changes; the day's repeat
+  keeps its Undo all day; a new day starts afresh.
+- The weigh-in keypad keeps Same as last's row while typing, hidden once a
+  digit is typed, so the keys never move under a finger.
+- An account's sessions and food history are read and decoded on a
+  background thread with a read-only connection of their own
+  (`StoredAccount`); the stores start from that on the main actor. A file not
+  yet migrated opens as before. A failed open is kept with its message until
+  Try again, not repeated by every task that asks for the account.
+- Launch ends once the frame that draws Log again (or the shortcuts) has
+  been presented: two display refreshes after those controls appear, not the
+  first callback, which only prepares the next frame. The logging cards are
+  drawn in the first frame in any customized order.
+
+## 2026-10-21: Launch ends on the commit of the frame that lays out the logging controls
+
+Third pass at B03's end point, from review round 2. Display-link ticks don't
+show when a frame is presented. With three years of history, Today was drawn
+within 3 s, yet the two ticks the gate waited for arrived after 31 to 50 s,
+with the main thread idle: an idle run loop isn't woken for them. Launch now
+ends when the frame from the layout that places Log again (or the shortcuts)
+has been committed. A run-loop observer ordered after Core Animation's commit
+marks it, and the loop is woken so the observer runs even when nothing else
+happens. The render server shows that frame at the next refresh. Today's
+cards below the fold used the same display-link wait and now follow this as
+well, so with a long history they no longer arrive half a minute late. The
+launch reports where Log again was laid out, and LaunchToLoggingUITests checks
+that place against the accessibility tree as each launch returns. With the
+logging cards moved last, Log again is laid out below the fold, and the figure
+for that order is the time to the frame that draws it there.
+
+## 2026-10-23: A sync finds each food entry by ID, and Today's first frame draws every card above the logging tools
+
+From finishing PARITY B03 after review round 2. With three years of history
+(11,456 food entries), half the cold launches took 30 to 40 s to launch's end,
+under XCTest and also launched directly with simctl. The 2026-10-21 entry put
+this down to an idle run loop; a sample of a slow launch showed a busy one.
+Today's first frame starts the launch's sync, and its push asks the nutrition
+store for every document's payload to compare with the server's copy. Each
+entry was found by scanning all of them, about 60 million comparisons on the
+main actor before that frame could finish. Entries are now found through an
+index by ID, dropped whenever the log changes. On the same simulator and data,
+outside XCTest, launch went from 30.6 s p50 (2.8 to 33.4 s) to 3.7 s p50 (2.8
+to 4.1 s). The launches near 4 s are still that sync: its push encodes every
+document to compare, about a second with that history. Pushing only changed
+documents would remove it; that belongs to the sync engine.
+
+A customized order could also leave a card above the ring or the shortcuts for
+the next frame, such as water fourth, above the ring, which then moved Log
+again down after launch had reported its place. The first frame now draws the
+first three cards and every card down to the last logging tool.
+LaunchToLoggingUITests launches that order too: under the earlier rule, none of
+its five launches reported Log again where it ended up.
+
+## 2026-10-21: Two devices' changes to one record merge by field, and real conflicts wait for the person
+
+PARITY I03 and N08. Foods, entries, weigh-ins, plans, programs, gyms and metrics merged as
+whole values, so when two devices changed one record before syncing, the side that synced
+second kept its whole version and the other edit vanished without a word. "Deleted here,
+changed there" restored the record, which logged an undone scan twice.
+
+Now every Core-synced kind merges three ways by top-level field against the version both
+last agreed on (`Merge.fields`; sessions keep their set-by-set merge and days their own). An
+entry's grams, serving, quantity and amountChanged merge as one amount, and a weigh-in's
+time and day as one, so a merge never pairs one device's grams with the other's serving
+count. Edits to different fields combine silently. When both changed one field differently,
+or one deleted what the other changed, `SyncEngine.receive` keeps this device's value, or
+keeps the record deleted, and writes a `SyncConflict` with the base and both versions in the
+same transaction. A deleted record never comes back on its own, in either direction: a
+deletion stands until the person brings a version back. The one exception is the workout in
+progress, which isn't taken away mid-session; its conflict is still recorded. Inside a
+session a set edited on one side and deleted on the other stays, as before, and is reported.
+
+Conflicts are documents of kind `sync_conflict`, stored with the account's data and synced
+like the rest, so every device sees them, they survive a relaunch, and an account never sees
+another's. Both devices may change one at once; the later `changedAt` wins, which is safe
+because a resolution's effect lives in the record it wrote, not in the conflict. The server
+accepts the kind with a light check; an older server's 400 leaves the conflict on the device
+for the next sync instead of failing sync. A device is named only by its kind ("iPhone") and
+a random per-account ID, never its user-given name; the other side is "Another device",
+since documents don't say who wrote them, with the server's `updated_at` as its time.
+
+Resolving sets the conflicting fields to the chosen version by merging it into the current
+record with that side preferred, so later edits to other fields stay. Keep both is offered for
+entries and weigh-ins, where it means two records. Undo, for the last resolution this session,
+writes the records back and reopens the conflict. When a conflict would bring back an entry
+that barcode Undo removed, `ScanConflictEffects` keeps the scan logged once: if the scan was
+logged again, that entry takes the other device's changes instead; if it is pending, bringing
+the entry back logs it. `BarcodeLibrary.undo` now also keeps the scans it put back, by entry,
+under `barcode_library.undone.v1`.
+
+Today shows "Needs a look" with a count while any conflict is open; the review lists each with
+both versions side by side and one-tap choices. Resolved conflicts are kept, not pruned, for
+now: they are rare and small.
+
+## 2026-10-22: Conflict review, round 1: versions stay as found, choices touch only what clashed
+
+An independent review of the 2026-10-21 slice found five ways an edit could still vanish.
+
+- A later clash about a record with an open conflict replaced that conflict's versions, so an
+  unresolved 60 g against 90 g became 120 g against 150 g and the 60 g was gone without a
+  decision. A conflict's base, versions and fields now never change once found; a later clash
+  is a conflict of its own. Merging two copies of one conflict takes only the later resolution
+  (`changedAt`), so a resolution or an Undo on one device can't take another's versions away.
+- Resolving merged the whole chosen version against the original base, so a change made
+  since, such as moving the entry to Dinner after the other device's Lunch merged in, could
+  be put back. A choice now sets only the conflict's recorded fields (`Merge.apply`, with an
+  amount's grams, serving and quantity as one group from `DocumentHost.fieldGroups`, and a
+  workout's paths down to one set's field, one item, or a list's order), and everything else
+  stays. Undo takes back only what the choice set and nobody changed since, merging three
+  ways against what the choice wrote; a record changed since it was brought back, or a copy
+  edited since Keep both, stays. Bringing back a record that is already back leaves it as it
+  is. The randomized two-device check now keeps every edit a sync carries as an obligation
+  until the person sees it and changes it, deletes it, or decides on a conflict holding it,
+  and checks after every later step that some device shows it or some conflict holds it; it
+  found the two Undo cases.
+- The workout in progress was protected only when it had changed since the last sync, so a
+  phone that had synced and logged nothing since lost its session and rest timer when the
+  tablet discarded it. The check now comes before the unchanged-record fast path.
+  The randomized check also counts a choice as the person's decision about what that device
+  showed for the clashing fields, since the review shows it beside both versions, and follows
+  a Keep both copy back to its conflict; run eight times over, its 120 seeds pass.
+- Lists merged in the local order, so a phone that changed a workout's notes pushed its old
+  exercise order back over the tablet's reorder without a word. `Merge.list` now compares the
+  order of the items all three versions have against the base: one side's reorder is taken,
+  two different reorders keep the preferred side's and are reported as `exercises[]` (or a
+  set list's), and items only one side has follow, in that side's order.
+- When the phone undid a scanned entry and logged the scan again, a tablet resolving the
+  deletion conflict knew nothing of the phone's scans and brought the original back, and the
+  phone took it in through an ordinary sync: the scan was logged twice. The entry logged
+  again now carries `replaces`, the IDs of the entries Undo removed whose scans it logged,
+  and it syncs (an additive, optional field; the server's food-entry check is unchanged).
+  `DocumentHost.reconcile` lets the owning store keep its records true whenever a document
+  comes back, through a resolution or through sync: `NutritionStore` turns an original coming
+  back where its replacement is logged into the replacement's change, merged against the
+  version both devices last agreed on, and keeps the original deleted. Only the device
+  holding the replacement folds; folding on a device that merely hasn't received the
+  deletion yet would decide the conflict for the person. A phone receiving an entry back
+  whose scan is still pending consumes the scan (`ConflictSideEffects.broughtBack`), so it
+  can't be logged again. The PARITY I03 pin from 2026-10-21 already passes on this branch;
+  the tablet-resolves case is now a passing test with three variants.
+- Undo of a delete wrote the deleted snapshot back as it was, so an edit another device made
+  in the Undo window, pulled and kept in a "deleted here" conflict, was overwritten when the
+  snapshot was pushed, and that conflict stayed open for a record that existed again.
+  `SyncConflictStore.restore` brings the record back merged with each open deletion
+  conflict's other version against its base, settles those conflicts, and records a new
+  field conflict where both changed one field. `TrainingStore.restoreSession`, which the
+  training review named, isn't on this base (the training branch hasn't landed), and nothing
+  here offers Undo of a workout delete; `restore(_:)` for a session is ready for it and
+  tested through sync. The diary's Undo of a food delete now goes through it.
+- The review read a workout's nested paths as top-level fields, so a set conflict showed
+  "None" on both sides and a goal "Its own goal". A workout path now reads as the exercise and
+  set it names ("Barbell Bench Press: 102.5 kg × 5", with RIR, kind and "not done" when they
+  apply, a whole exercise as its set count, an order as the names in turn), a plan's goal as
+  "Lose 0.75% a week" or "Maintain", and other structured values as a mass or their first few
+  named values. "Showing now" marked the finding device's version on every device and after
+  every later edit; it now marks the version whose clashing fields match the record on this
+  device (`SyncConflictStore.summary(of:)`), and when neither does, the card says what it
+  shows now. The Undo bar is a bottom inset rather than an overlay, so at the largest text the
+  last card scrolls clear of it. `EXERLY_SYNC_CONFLICT_SEED=all` adds a workout set and a goal
+  conflict for the screenshots.
+
+## 2026-10-23: Conflict review, round 2
+
+- Undo of a resolution that brought a scanned entry back ran the barcode library's Undo first
+  and unconditionally, so an edit made since (55 g brought back, then 65 g) was deleted and
+  its scan put back as pending. The resolution now records what the bring-back wrote, and
+  Undo runs the library's step only while the entry is still exactly that; changed or
+  deleted since, the entry and its scan's log stay, as Undo keeps any record changed since a
+  resolution, and the conflict reopens.
+- An entry logged again from an undone scan named the entries it stands in for in its own
+  `replaces` field. An app from before that field decodes entries with synthesized coding,
+  drops it, and pushes the whole entry when the person edits it, so the link vanished and a
+  device bringing the original back logged the scan twice. Of the three options the review
+  named, the link is now a document of its own, kind `food_entry_link`, with the entry's ID:
+  an older app has no host for the kind and skips it, so it can never rewrite it; it needs no
+  server-side field preservation, which would have to guess which missing fields are
+  "unknown"; and the barcode library's provenance is device-only by design. Links sync before
+  entries, merge as a union, raise no conflict and are never deleted (a link whose entry is
+  gone stands in for nothing). A link never names its own entry, names each entry once, and
+  keeps at most eight: the first, which other devices most likely hold, and the latest seven.
+  Logging again after another Undo inherits the undone entry's list, so a chain stays one
+  list with its first entry first. The server checks the same rules and returns 400 for a
+  bad link; a server from before the kind refuses it with 400 as well, and the app keeps the
+  link and tries again next sync, as for conflicts. The branch never shipped, so `replaces`
+  is simply removed from `FoodEntry`.
+- Folding an original that comes back into the entry logged again from its scan took the
+  original's value for every field both changed and dropped the clash, so 80 g logged again
+  on the phone became the tablet's 60 g with nothing holding 80 g. `DocumentHost.reconcile`
+  now returns its clashes with the writes (`Reconciliation`), and the caller stages each as a
+  conflict about the entry logged again in the same transaction. Sync keeps that entry's
+  value and offers the original's; a resolution that brings the original back keeps the
+  person's choice and offers the entry's value, and Undo of that resolution removes the
+  conflict it made. The fold needs the version both devices agreed on, which sync used to
+  forget once the Undo's deletion was pushed, so every field differing from the relog (its
+  time too) clashed. A tombstone's base now keeps the version agreed on before it
+  (`SyncBase.previous`, SQLite schema 5 adds the column), and the fold merges against it.
+- "Showing now" compared a version applied onto the record with the record, and applying a
+  path into a set the record no longer has changes nothing, so after the set was removed the
+  card marked an old value as current, and both choices wrote nothing and dismissed the card.
+  The card now compares the value at each clashing path directly (`Merge.value(at:in:)`), a
+  missing item matching only a version that lacks it too, so a removed set is neither version
+  and the card's "now" line reads "Barbell Bench Press: set removed". When the clash is about
+  a set or exercise this device removed since, the choices say what they do: "Bring the set
+  back as this iPhone's" or "as the other device's", which brings it back whole with that
+  version's values (`Merge.apply(restoring:)`, used only by a resolution, so Undo and later
+  merges still never resurrect an item), and "Leave it removed", a new choice, `.current`,
+  that settles the conflict and writes nothing. Conflicts haven't shipped, so no installed app
+  meets a choice it can't decode.
+- A conflict kept three whole versions, so a clash in a workout of about 100 KB, well within
+  the API's 256 KB body limit, made a conflict over it; the 413 wasn't caught and failed
+  every later sync. A conflict above 200 KB now keeps, of each version, its top-level values
+  that aren't lists and, of each list, the items a clash names, whole (a list's order keeps
+  every item's own values): enough for the card's words and for a choice, which sets only
+  the clashing paths. Small conflicts, all food and weigh-in conflicts among them, are kept
+  whole as before. Trimming, rather than storing only the clashing values and the base
+  revision, keeps resolution, Undo and keeping both unchanged; chunking would have put many
+  writes behind one decision. If it's still too large the base goes, and if even that isn't
+  enough (a deletion conflict holds a whole version of the record) it's marked `tooLarge`:
+  it stays on the device that found it, sync never offers it, and its card says "Too large to
+  sync, so it's only on this iPhone." A 413 for a conflict marks it the same way, so a
+  misjudged size never blocks the rest of sync.
+- Settled conflicts were kept forever, and a card about a record later deleted everywhere
+  stayed open forever. Each sync now tidies between pull and push
+  (`SyncConflictStore.tidy`). An open field conflict whose record is gone here, with the
+  deletion acknowledged by the server, is settled with the new choice `.current`, marked
+  `automatic`, and pushed; both versions predate the deletion, so neither is a live edit.
+  Deletion conflicts are never settled this way, since their changed version is exactly
+  the live edit. The review lists such conflicts for a week under "Settled for you",
+  saying the record was deleted on every device since. A settled conflict is removed (a
+  synced deletion) 30 days after settling by the device that settled it, once the settled
+  version has reached the server; other devices wait 60 days, so the device whose Undo
+  could still reopen it decides, and a device that's gone for good holds nothing up. The
+  conflict Undo would reopen is never removed, and one too large to sync is removed only on
+  its own device.
+- Every push encoded every document to compare it with its base, about 1 s on the main actor
+  on each launch with three years of history. The store now records which documents were
+  written since sync last found them matching (`sync_changes`, SQLite schema 6, in the
+  write's own transaction, so a crash can't lose one), and push compares only those, so a
+  launch with nothing new encodes none. Of the brief's two options, a stored hash still
+  needs each document encoded to check it, so it saves nothing. A push clears a document only
+  once it matches: unchanged, applied and still as it was sent (one written while its push
+  was in flight stays recorded), or a deletion the server no longer has. A change pulled
+  that leaves a document other than as the server has it (merged, or kept deleted while an
+  original is folded into its replacement) is recorded without a write. Writes that bypass
+  the persistence layer don't exist (every host saves through it); stores that don't
+  record changes compare every document, as before. Every document is still compared once
+  for each new app build (`SyncEngine(appVersion:)`, the build number), since a new version
+  can encode a document differently without writing it, and until such a full comparison has
+  finished, so an interrupted one starts again. One difference: a stored row this device
+  can't read, which sync takes for a deletion, is pushed as one only by such a full
+  comparison, not by every sync as before.
+- A workout's deletion conflict showed its kept version as "None", since a whole record fell
+  through to the plain-field wording. It now reads as its first three exercises and their
+  sets ("Barbell Row: 3 sets", "… and 12 more"); other whole records read as their values.
+  `EXERLY_SYNC_CONFLICT_SEED=removed` seeds a removed-set clash and a conflict too large to
+  sync, for `testARemovedSetAndATooLargeConflictSayWhatTheyDo` and the screenshots.
+
+## 2026-10-23: Conflict review, round 3
+
+- A write and the record of its change were separate statements, and most callers pass no
+  transaction, so a crash between them left a saved edit that later syncs never compared.
+  Every persistence mutation (a session, a custom exercise or a document, saved or
+  deleted) now runs with its change record in one transaction of its own, nested in the
+  caller's when there is one, on disk and in memory, so no caller can forget it.
+- Two opens of an older file at once both read `user_version` before locking, so both ran
+  `ADD COLUMN previous` and one failed, as the schema 6 table would have. Migration now runs
+  as one `BEGIN IMMEDIATE` transaction that reads the version inside it; a racing open waits
+  (the five-second busy timeout) and finds the file current. Every step is also safe to
+  repeat: tables and indexes are created only if missing, and a column only where it is.
+  Migration takes the `nonisolated static migrate(url:)` shape `claude/taps` uses, so that
+  merge only adds the off-main-actor caller.
+- Training persistence skips rows it can't decode (a newer app's unknown set kind, say), so
+  their host reports them missing, and a full comparison pushed a deletion: an older build
+  opening the account turned a newer app's workout into a server tombstone. The state store
+  now says which records are stored but unreadable (`SyncStateStore.isUnreadable`, from the
+  rows SQLite already keeps aside). Sync never pushes such a record, and a pulled version of
+  one doesn't overwrite it either. Both are set aside in `rejected`, which the sync screen
+  lists, with the row left untouched for a build that can read it.
+- Undo of a resolution that folded an original into the entry logged again always removed
+  the conflicts that fold made, even when that entry had changed since and so stayed as the
+  choice left it: the conflict holding the entry's own 80 g, its only copy, vanished. Undo
+  now removes such a conflict only when it put that conflict's record back; otherwise the
+  conflict waits for a decision. The randomized obligation check now starts the phone from
+  scanned entries and adds logging a scan, undoing a log and logging the scan again, plus
+  resolving and then editing and undoing at once, and it counts a value as kept when an
+  entry standing in for its record, or a conflict about one, holds it. It found this bug
+  in 1 run of 4 without the fix. Two of the check's own rules changed. A choice that
+  brings an original back is a decision about what it overwrites in the entry logged again,
+  except for fields that clash and wait in a new conflict. A brought-back record's changes
+  count from the version agreed before its tombstone, so a value set back to that version
+  merges as no change, as it does for any record.
+- Pruning measured a settled conflict's age from its resolution, so one resolved offline and
+  synced 40 days later was removed on the next sync. Each device now keeps, locally, when it
+  first knew the server had the settled version (`conflictAcknowledgements`: its push
+  applied, or it pulled the version), and the 30- or 60-day wait counts from then. A
+  reopened conflict drops its time, and a conflict too large to sync counts from settling.
+- After a pull, sync cleared a document's change record when the writes it planned matched
+  the server's copy, but `TrainingStore` declines to delete a custom exercise that sessions
+  may use, so the phone kept one the server had deleted and never sent it back. A pulled
+  document is now recorded as changed inside the pull's transaction and cleared only after
+  publishing, when the store really holds the server's copy. Anything merged, kept or
+  declined is pushed as a full comparison would push it. A crash in between costs one extra
+  comparison, never a missed push.
+- Compatibility before mixed builds. A conflict's choice now decodes whatever it is: one this
+  build doesn't know (`Choice.unknown`, such as a newer app's) reads as settled elsewhere,
+  is never offered or acted on here, and is encoded back exactly as it came, so this build
+  neither rejects the conflict nor rewrites it. A document a build sets aside now records
+  its place in the change feed and that build, and the first sync of any other build pulls
+  again from just before the earliest, once, so an upgrade reads what an older build
+  couldn't. `SyncEngine.syncEncodingVersion` joins the build number in the token that
+  triggers comparing every document; dev builds keep their build number, so bump it
+  whenever a payload's encoding changes.
+- An older build opening data a newer one migrated fails closed (`newerSchema`), which
+  stays: it never downgrades the file. Every screen now shows the reason from the account
+  workspace instead of a fixed sentence, and for this case it reads "Your data is safe on
+  this device. A newer version of Exerly saved it, so update Exerly to open it." Nothing
+  destructive is offered; Try again stays.
+- Today's only way into the review was Needs a look, shown only while a conflict is open,
+  so "Settled for you" was unreachable once nothing was left to decide. While sync has
+  settled something in the last week, Today shows a calm "Settled for you" row instead:
+  an ordinary surface with no count badge or accent, saying how many changes sync
+  settled. `EXERLY_SYNC_CONFLICT_SEED=settled` seeds one for
+  `testWhatSyncSettledStaysReachableFromToday`.
+
+## 2026-10-23: Conflict review, round 4, on claude/taps
+
+- Taps opens an account by reading its history off the main actor (`StoredAccount`) and
+  starting the stores from it, so persistence never decoded the sessions and never learned
+  which rows it couldn't read: a newer app's workout looked deleted again, and a full
+  comparison pushed its deletion. The background read now passes the training rows it
+  couldn't decode to the training store, which notes them with persistence
+  (`TrainingPersistence.noteUnreadable`) before anything can sync, in canonical form, so
+  sync keeps them exactly as it does rows persistence read itself. The workspace counts them
+  once, from persistence.
+- The same background read stopped after hidden suggestions, so a relaunch started with no
+  entry links although they were on disk: a full comparison deleted the server's links, and
+  the original of a scan logged again, brought back, made a second entry. The read now
+  includes `food_entry_link` documents and the loaded nutrition store starts from them.
+- A push that met a record this build can't read set it aside with its own, sequence-less
+  record, replacing the one the pull had just made for the newer version (its revision
+  and place in the feed). After an upgrade nothing pointed at that version, so it was never
+  fetched. The push now leaves an existing record as it is and only adds one when there is
+  none.
+- The acknowledgement time followed whether a conflict was settled, not which settlement:
+  resolved and synced, then undone and resolved again offline, the new resolution inherited
+  the first one's time and was removed as soon as it synced a month later. An
+  acknowledgement now records the settled version the server took (its `changedAt`) with
+  the time (`ConflictAcknowledgement`, under a new key), a different settled version starts
+  the clock again, pruning counts only an acknowledgement of the version this device
+  holds, and Undo here forgets it in the same transaction.
+- The randomized check treats a value set back to the version a tombstone kept as no
+  change, which doesn't prove that an old value put back on purpose survives. Two fixed
+  tests now do: 40 g changed to 60 g everywhere and set back to 40 g stays beside another
+  device's meal change, waits in a conflict beside another device's 90 g, and stays once
+  the conflict is decided for it; and 40 g put back on one device while the other deletes
+  the entry (agreed at 60 g) waits in the deletion's conflict and comes back as 40 g on
+  both. Both passed as written: merges compare with the last version both devices agreed
+  on, never with older ones.
+- TodayDiary's eaten-and-back test failed often on 2026-10-23, on `claude/next` as on this
+  branch: 0 of 10 runs alone on `claude/next` first, then, alternating the two builds under
+  the same load, 3 of 4 on `claude/next` and 3 of 3 here, and 6 of 10 here alone at load
+  averages of 20 to 65. Every failure but one was the same: Your details' menu still
+  opening, or its item's tap lost, so the choice never took (the picker still read "What
+  you've eaten"), and Save closed the menu unchosen. The test now waits for the menu item
+  to take a tap and saves only once the picker shows the choice, choosing again if the tap
+  was lost; 10 of 10 passed after it, with the second choice never needed. The app wasn't
+  at fault: a person's tap lands on an open menu.
+
+## 2026-10-23: Conflict review, round 5
+
+- A full comparison clears every change record before it compares, and a server from before
+  `sync_conflict` or `food_entry_link` answers those with 400, which push treated as "try
+  next time" without recording anything: the comparison then marked the records trusted,
+  so after the API deploy those documents were never sent. That fallback now records the
+  document as changed again, so the next sync sends it without an edit or a new build.
+- Sync conflicts have never shipped (not on `main`, in no TestFlight build), so no installed
+  app holds an earlier acknowledgement format. Round 4's "new key" is dropped: acknowledgements
+  are stored under the one key `sync.conflicts.acknowledged`, in the
+  `ConflictAcknowledgement` format, which starts here, with no migration or legacy reading.
+- Noting a background read's unreadable rows checked each against an array, so thousands of
+  them at launch took quadratic time, and so did every sync lookup. Persistence now keeps a
+  set beside the ordered list, notes every row (its own reads' too) through one path in
+  canonical form, and answers `isUnreadable` from the set.
+
+## 2026-10-21: Shortcuts and Siri for every logging action
+
+- New actions: Log a food by name, Log a barcode, Repeat a day, Log by JSON,
+  Today summary, Log the next set and Rest. Each makes the same store call
+  as the screen it stands in for, and says what it did.
+- An app can have at most ten App Shortcuts with phrases. Log the next set
+  and Rest take the places of Weigh in and Search foods, which only open
+  screens and duplicate Log weight and the Search control. Those two stay
+  as actions and controls.
+- Log a barcode logs only one of the person's own foods: a saved food with
+  that barcode, or a database food logged before. A barcode never logged
+  isn't looked up and logged unseen; it says to scan it once in Exerly,
+  where its portion is checked first.
+- Log by JSON checks the text is JSON, then logs through
+  `NutritionStore.logShortcutFood`, so it gets that function's food IDs. The
+  fix for foods from one source sharing an ID lands with the nutrition
+  branch, not here.
+- Rest adds 30 seconds (or the seconds given) to a rest that's running, and
+  otherwise starts the rest the person's settings give after the set
+  completed last. It refuses anything over 30 minutes.
+- The release check for Apple product names in App Intent text now also
+  reads phrase lines, which name the app, so it catches a phrase on its own
+  line.
+
+## 2026-10-21: Sleep, heart rate variability and resting heart rate from Health
+
+- Each has its own switch under Health settings › Recovery from Health, and
+  asks Health only for its own type. They're read when the screen shows
+  them and never saved, synced, written or used for advertising.
+- They live in `HealthRecoveryReads.swift` with their own HealthKit client,
+  not in `HealthKitService` and `HealthSync`, so the write-access fix on the
+  nutrition branch doesn't conflict with them.
+- A night counts for the day you wake up. It runs 6 PM to 6 PM by when each
+  sample ends, in the time zone the sample was recorded in, so a flight
+  doesn't split it. Overlapping samples count once.
+- Source priority: when two sources recorded the same night or day, only
+  the best one counts. Health doesn't share the order a person set in it,
+  so Exerly ranks the person's own order first (none can be set yet), then
+  Apple's devices, which is Health's default, then the source with the most
+  samples, then the name.
+- No data shows as missing, never zero, with what to check in Health,
+  because Health doesn't say whether reading was allowed.
+
+## 2026-10-21: A one-tap button on every reminder
+
+- The sleep reminder was the only one without a button. It now has "Remind
+  me in 15 minutes". That changes no data, so it needs no unlock and opens
+  nothing. It works from the Lock Screen and while Exerly isn't running.
+- The reminder that comes back has an ID under `exerly.again.`, outside
+  `exerly.reminder.`, so rescheduling leaves it alone. It keeps its button,
+  and it comes back only for the signed-in account.
+
+## 2026-10-21: History from Health is previewed before it's imported
+
+- Turning on Read weigh-ins, from Health settings or the Body screen's
+  offer, first shows what it would add: how many, from when to when, how
+  many are already in Exerly, and each source. Nothing is read into Exerly
+  until Import. Import then turns the switch on, and `HealthSync` imports
+  the same readings as before. `HealthSync` is unchanged.
+- New switches: Read food from other apps and Read workouts from other
+  apps, with the same preview. They live in `HealthHistoryReads.swift`
+  with their own HealthKit client, away from the write-access code the
+  nutrition branch changes.
+- Food comes from Health's food entries (correlations), one entry per
+  food, logged into the meal the clock gives at its time, as unweighed
+  nutrients. Loose nutrient samples outside a food entry aren't read.
+  Each entry keeps its Health ID, so importing again adds nothing, and a
+  food deleted in Health is removed. Imported food is never written back
+  to Health (`HealthFoodRecord` skips `health:` food IDs).
+- Source priority uses the same order as recovery. Each day's food comes
+  from its best source only, so two apps saving the same meals don't
+  double it. Of workouts that overlap in time, only the best source's
+  count. Weigh-ins are all imported, as before, and shown by source.
+- Workouts become activity entries (type, minutes, active energy) through
+  the activity log's own save, once each. A workout deleted in Health
+  stays in the activity log; delete it there.
+- Exerly's own samples, from the phone or the watch, are never read back.
+
+## 2026-10-21: Spotlight logs a usual food in one tap
+
+- Spotlight shows a person's food as its indexed result, not as the Log a
+  food shortcut, and tapping it runs `OpenFoodIntent`. So a usual or recent
+  food opened its portion sheet, two taps rather than one. `OpenFoodIntent`
+  now logs a usual or recent food with the portion one tap logs on Today,
+  and opens Today on it. A saved food never logged still opens its portion
+  sheet first.
+- The Spotlight UI test failed because Spotlight opens slowly on a small
+  phone and typing before its field was ready was lost. Its search now
+  waits for Spotlight to be in front, then checks the typed text.
+- A UI test now shows that signing out takes the account's foods out of
+  Spotlight.
+- In the simulator, XCTest can't open notification buttons on the Lock
+  Screen. Also, the system relaunches a terminated Exerly without the UI
+  test's isolated account. Both stay device checks. The reminder buttons'
+  options (no unlock for Remind me, unlock for logging) are unit-tested.
+
+## 2026-10-23: Apple integration, review round 1
+
+- Log by JSON refuses `true` and `false` for a nutrient or a serving's
+  amount or weight. Foundation reads them as the numbers 1 and 0, so
+  `"energy": true` logged 1 kcal.
+- A night of sleep counts for the morning you wake, with samples ending
+  from 6 PM on counted for the next night. That's now read from the clock
+  where the sample was recorded, rather than adding six hours, which put
+  an evening nap on the wrong night where clocks change at midnight
+  (Santiago, for one). Tests cover nights across spring-forward and
+  fall-back, whose hours are the real ones.
+- A reminder put off with Remind me again (`exerly.again.` + its ID) now
+  goes with its reminder: rescheduling removes it once its reminder isn't
+  wanted, so signing out or turning reminders off takes it. Remind me
+  again also checks the account is still signed in with reminders on
+  before and after adding it, so one still being added when that changes
+  is removed once it lands.
+- A usual food logged from Spotlight now opens Today on the same
+  confirmation, with Undo, as a Log again chip. `OpenFoodIntent` hands the
+  app `exerly://logged` with the entry and its account; Today shows it only
+  for that account and while the entry is still logged. The UI test checks
+  Today is in front with the confirmation, and that Undo takes it back.
+- Turning on Read weigh-ins from its preview imports only the readings the
+  preview showed. Confirming used to turn the switch on, whose read queried
+  Health again and imported a reading saved while the preview was open,
+  unseen. Now the switch's next read compares what it finds with what was
+  shown; if Health has others, nothing is imported, the switch stays off,
+  and the preview opens again with them.
+- Health's food and workouts are now read in full each time (as the Health
+  screen opens, and on Sync now), not from an anchor, and reconciled with
+  what's in Exerly by `HealthHistory.foods` and `.workouts`. Anchored reads
+  saw only what was new, so a better source saving a day later won its
+  otherwise empty batch and both stayed, and a deletion made while reading
+  was off was never seen. Now each day (or run of overlapping workouts)
+  keeps its best source across everything Health has, and an import whose
+  record is gone from Health, or now outranked, is taken out. Reading all
+  food correlations costs more than an anchored read; it runs only on that
+  screen.
+- What an install imported is kept per account (`healthHistory.….imported`)
+  and stays when a switch is turned off. Only those are ever taken out, so
+  entries that came from another phone's Health are left alone, and one
+  deleted in Exerly isn't added back. After a reinstall, what's synced and
+  still in this phone's Health counts as imported here again. An entry the
+  person edited is never taken out.
+- A workout's activity ID is a name-based UUID of the account and the
+  Health UUID (`HealthHistory.activityID`), the same on every install.
+  Before adding any, the account's activities on those days are read, so
+  one already synced is found rather than added twice (the server also
+  refuses a second activity with that ID). A workout deleted in Health now
+  takes its activity out; this replaces the 2026-10-21 rule.
+- Workouts dated outside the ten years the activity log takes are checked
+  before the preview, shown as left in Health, and the rest import.
+  Before, the oldest was saved first and its rejection stopped the import.
+- Every Health read (history, its weigh-in preview, recovery) is bound to
+  the account it started for. After each wait for Health it checks the
+  account is still signed in with the same data open, and the task isn't
+  cancelled; otherwise nothing is saved or shown.
+- Correction to 2026-10-21: Spotlight can show a food as the Log a food
+  App Shortcut's top hit, and that ran `LogFoodIntent` in place: the entry
+  was logged under Spotlight's answer sheet, the app never opened, and
+  there was nothing to undo it with. The earlier UI test found the entry
+  but not where it was shown. The Log a food App Shortcut (and its Siri
+  phrases) now runs `OpenFoodIntent`, so every Spotlight tap opens Today on
+  the confirmation with Undo. `LogFoodIntent` stays a Shortcuts action, for
+  shortcuts and automations that shouldn't open the app.
+- Sync now on the Health screen now also reads food and workouts from
+  other apps and recovery, and is enabled when only those switches are
+  on. The recovery switches' explanations and the import preview's notes
+  are shorter, one line each where possible, so at the largest text size
+  the switches and Import stay in reach; the preview's sources heading is
+  "Sources, best first".
+
+## 2026-10-23: Apple integration, review round 2
+
+- Read weigh-ins checks the reviewed set against the final candidates,
+  the pairing read's included, immediately before saving. It used to
+  check and clear the set after the first query, so a reading the pairing
+  read found beside a reviewed one was imported unseen.
+- Decision 1, absence is never deletion. HealthKit makes a revoked read
+  look like no data, so nothing imported is ever taken out for being
+  missing from a read. Reads are anchored again: each returns what's new
+  and Health's deletions, and only a deletion takes an import out. Check
+  everything again is a deliberate full read; what it no longer finds is
+  listed as "No longer in Health", with "Remove these" off until chosen.
+  Turning a switch off keeps its anchor, so turning it on again catches
+  up with deletions made meanwhile.
+- Decision 2, ownership is explicit and synced. Each import is a
+  `health_import` document (one per Health sample, ID the sample's UUID):
+  its kind, the entry or activity it became, the install that owns it,
+  its source and time, a fingerprint, and whether it's imported,
+  displaced or removed. `import_provenance` didn't fit: it's written once
+  per file import and never changes. The install is a UUID in the app's
+  defaults, so a reinstall is a new install. Only the owner takes a record
+  out, or sets it aside for a better source's; a day or time held by
+  another install's record, or one they changed, is left as it is, and
+  nothing is added beside it. Adopting is a choice in Check everything
+  again: "Keep these as imported from Health on this iPhone", off until
+  chosen. Matching UUIDs never makes an install the owner.
+- Decision 3, any change locks an entry. The fingerprint is a hash of the
+  entry's canonical JSON as imported (amount, portion, day, meal,
+  nutrients, name, note), or of an activity's saved fields with numbers
+  compared by value. Once it differs, nothing automatic removes or
+  replaces it. Food removals are checked again inside the write
+  transaction; an activity's, just before it's deleted.
+- A record set aside for a better source's is `displaced`, not deleted
+  by the person, and comes back when that one goes: an activity through
+  the activity log's restore, a food read from Health again by its UUID.
+  A record never imported because it was set aside isn't remembered, so a
+  day's other source isn't added when the best one goes.
+- A switch turned off while Health is read drops that read: a generation
+  per kind is checked after each wait and before saving.
+- Food imports and their records are published once per batch
+  (`prepareWrites`). On the SE simulator, three years of synthetic history
+  (4,380 foods) imported in 15.6 s of main-actor time before and 1.6 s
+  after; reopening the screen with nothing new took 0.05 s before (a full
+  read of the stub) and 0.02 s after (an anchored read that touches only
+  changed days). Real HealthKit query time isn't in these numbers.
+- Workouts aren't added while the account can't be reached. A strict read
+  of the account's activities on those days runs first; offline, the
+  preview says they'll be added later and the anchor stays, so nothing is
+  sent twice and shows as needing attention. Online, one already in the
+  account is found, and only new ones are added.
+- Decision 4, Siri stays hands-free. The Log a food App Shortcut and its
+  Siri phrases run `LogFoodIntent` again, which logs in place and returns
+  `ShowsSnippetIntent`: `LoggedFoodSnippetIntent` (iOS 26, checked
+  against the 26.2 SDK) shows what was logged with
+  `Button(intent: UndoFoodIntent(entryID:accountID:))`. The snippet only
+  reads, as the system reruns it; Undo acts only for its account and entry,
+  and does nothing the second time. On the simulator the answer, Undo and
+  "Taken back" show in Spotlight. A food's own Spotlight result still runs
+  `OpenFoodIntent`, now `supportedModes = .foreground(.immediate)`: from
+  Spotlight's background runner, without it, the open intent failed with
+  nothing logged. Spotlight chooses which result to show; the UI test
+  checks whichever it gets.
+- At the accessibility sizes Today's confirmation wraps in full instead of
+  stopping at four lines, so "Logged Greek yogurt, plain to Breakfast"
+  keeps its meal.
+
+## 2026-10-23: Apple integration, review round 3
+
+- Rebased onto claude/next 2f7b53b5 (taps). Taps' Today confirmation
+  stands: it's the navigation bar's subtitle, with Undo in the bar's
+  leading corner. Round 2's "wraps in full" commit became empty and was
+  dropped. At the accessibility sizes that subtitle is one line, so on an
+  SE "Logged Greek yogurt, plain to Breakfast" shows as "Logged Greek
+  yog…"; VoiceOver still hears the whole sentence, announced and as
+  Undo's label. A `.largeSubtitle` toolbar item with two lines was tried
+  and drawn small and centred under the title, so it was left out; how
+  the meal shows at those sizes is open.
+- Coordinator's clarification of decision 1: absence never removes
+  anything automatically, but a removal the person chooses in a full
+  read's preview is allowed. The choice reads "Remove these from Exerly",
+  off until chosen, and the text says it deletes them from Exerly, not
+  from Health.
+- An activity's fingerprint hashes the fields it's saved and synced with:
+  `activity`, `duration_min`, `calories`, `intensity`, `entry_date` and
+  `type` (`ActivityRequest`, routes/activities.js). It read `duration` and
+  `category`, which are never saved, so an edit to the minutes or the
+  type didn't lock the activity. An API test checks the real server hands
+  each field back unchanged, and an app test that the server's copy keeps
+  the fingerprint.
+- Ownership has a generation. Each adoption, and each claim of an entry
+  with no record, is one generation on; `merge` keeps the higher
+  generation whatever its time, and only within one generation does the
+  later change stand. Before anything is taken out or set aside, the
+  account is synced; if it can't be reached, nothing in that read is
+  changed and the anchor stays, so Health's deletions are read again
+  later. Records written before generations read as generation 0.
+- Workout imports are journalled. The activity log (SwiftData) and the
+  records (SQLite) are separate stores, so the planned changes, each
+  activity's save, deletion or restore with the record it leaves, are
+  written to the account's SQLite settings first. Then each change to the
+  log is made only if it isn't already, and the records are saved and the
+  journal cleared in one transaction; Health's anchor moves on only
+  after. A journal left by a crash or a failure is finished the next time
+  the Health screen opens or imports, before anything is read. A
+  deletion is made only if the activity still has the fingerprint it was
+  planned with. Failures are reported, never dropped. Foods need no
+  journal: entries and records already share one transaction.
+- The whole plan is checked again as it's applied: it's made again from
+  what was read against the account as it is then, after the ownership
+  sync and any Health read, with no suspension before the write. If
+  anything differs, nothing is applied and the preview opens again with
+  "Exerly changed while this was open"; a background refresh
+  applies the new plan once instead.
+- One outcome per record: an explicit or Health's removal wins over
+  setting the same record aside in one confirmation. A record already set
+  aside can still be removed when Health deletes it, so it never comes
+  back and never outranks a lower-ranked source's food.
+- Exports include `health_import` documents (owner, generation,
+  fingerprint, state), and restoring an Exerly export brings them back.
+  A restored record keeps its old owner, so the restoring iPhone adopts
+  it only by choice.
+- Retention: a removed record is a tombstone of its ID, kind, owner,
+  generation, state and time, enough to stop its sample being imported
+  again and to merge; target, source, times, day and fingerprint are
+  dropped. Incremental plans always include tombstones. The API accepts
+  a record without its target only when it's removed.
+- The records are read with the rest of an account's history off the
+  main actor (`StoredAccount`). On the SE simulator, opening an account
+  with 4,927 records (1,460 removed): 0.208 s in all and 0.113 s on the
+  main actor before, 0.195 s and 0.006 s after.
+- Release: the API's `health_import` document kind, and the tombstone and
+  generation rules, must be deployed before an app with Health imports
+  ships. Only a merge to `main` deploys the API.
+
+## 2026-10-23: Apple integration rebased on sync; Health work finished as the account opens
+
+- Rebased onto claude/next fd55982b (sync). `health_import` is a host of
+  the sync engine beside sync's conflicts and links, and of
+  `documentHosts` for export and restore. It isn't a host of
+  `SyncConflictStore`, as `import_provenance` isn't: its merge is decided
+  by generation and time, with nothing for a person to choose. The API
+  keeps all three new kinds: `health_import`, `sync_conflict` and
+  `food_entry_link`.
+- Health records are saved and deleted through the persistence's document
+  calls, which record each in `sync_changes` in the same transaction, so
+  sync pushes them as changed. The workout journal is a row of the
+  existing `settings` table, which isn't synced or tracked: no new table,
+  and the schema stays at sync's 6. Two opens at once only read it; it's
+  written with one upsert and cleared in the records' own transaction.
+- An unfinished workout journal is finished as the account opens, not
+  only when the Health screen opens. `StoredAccount.read` reads it with
+  the account's history off the main actor; once `AppAccountWorkspace`
+  has the account open, and the activity log is set up for the same
+  account, the journal's changes are made on the main actor, where both
+  stores are written. The journal now carries the defaults key of its
+  account's Health switches, so its anchor moves on and reading workouts
+  turns on without the Health screen. A failure there leaves the journal
+  for the Health screen to finish and report.
+- The confirmation cut off at the largest text stays as it is here: the
+  coordinator is moving confirmations at those sizes into an inline row
+  at the top of Today in the design wave.
+- Signing out now also refreshes the App Shortcut parameters, and Log a
+  food's suggested foods are none when no account is open instead of an
+  error. Sign-out already cleared the foods indexed in Spotlight, but the
+  Log a food shortcut's own top hit ("Food, Greek yogurt, plain") could
+  still name the last account's food. The full NotificationActionsUITests
+  run caught it, where earlier tests had signed in other accounts with the
+  same foods.
+
+## 2026-10-24: Nothing from Health is taken out or replaced without the person
+
+- Coordinator's decision, after four review rounds of races in automatic
+  cross-device removal. Additions stay automatic: new samples are
+  imported, and a day's food comes from its best source when it's first
+  imported. Nothing destructive happens by itself any more. Health's
+  deletions, a later better source that would set aside what's in Exerly,
+  and what Check everything again no longer finds are listed per account
+  in Changes from Health: a card on the Health screen, and a quiet row on
+  Today under the day's logging while something waits. Each row says what
+  applying it does. "Apply changes" applies them on this iPhone; "Keep
+  everything" dismisses them. The preview's "Remove these" choice is gone:
+  what's no longer in Health is listed there instead.
+- The waiting changes are a `HealthChangeQueue` in the account's
+  `settings` table, on this device only, saved in the transaction that
+  adds what the same read found (and, for workouts, in the journal's
+  finishing transaction), so Health's anchor never moves past a change
+  that isn't recorded. They're read with the account's history off the
+  main actor.
+- Applying is the person's choice here, so it needs no cross-device
+  ownership check: the pull-before-delete step is gone. It plans again
+  from the waiting changes against Exerly as it is then: what they changed
+  is kept and holds its day or time, so nothing replaces it; each record
+  changed becomes this install's at the next generation. A food set aside
+  for a better source that's now going is read from Health again to put
+  back, as before.
+- `health_import` merges whole records in real sync: `reviewsConflicts`
+  is false for it, and both merge overloads use the generation rule, so a
+  conflict never yields a record with one side's owner and the other's
+  state.
+- The workout journal keeps each operation's activity apart from the
+  record it leaves, as a removed record is stored without one, and the
+  group (day or time) each belongs to. On replay, a group whose set-aside
+  activity has changed since is left whole: nothing in it is taken out,
+  and its replacement isn't added. Finishing work that carries no anchor,
+  as applying changes doesn't, leaves where reading stopped as it was.
+- A food put back keeps its record and generation, moving one on, so an
+  older copy arriving later doesn't set it aside again.
+- Sign-out, and account deletion, which ends in it, delete Siri's
+  donations for the intents that can carry account data (logging, Undo,
+  repeats, weigh-ins, water, summaries, sets and rest), each type tried
+  three times before it's reported. On the simulator the donation store
+  reports nothing deleted, even straight after a donation, so the hosted
+  test checks the calls the system accepts; that a donation is gone can
+  only be seen on a device.
+
+## 2026-10-24: Health imports never replace one source with another
+
+- Coordinator's decision, final, after round 5's review found every
+  remaining issue in better-source replacement. A day's food, or a
+  workout's time, comes from its best source when it's first imported.
+  A source arriving later for what's imported is never swapped in: it's
+  set aside, and the record notes it (`alsoIn`, "Also in Health from
+  Tracker, not imported"). More from the source already imported still
+  comes in. Deleted with it: the `displaced` state (the API refuses it
+  now), restoring by reading Health again, the plan's displacement,
+  restoration, deferral and groups, frozen groups, and the journal's
+  group dependencies and restore step. A day whose import was taken out
+  has no record left to hold it, so a source read after that can fill it.
+- Changes from Health only ever holds removals: Health's deletions of
+  this install's imports, unchanged since, and what a full read no longer
+  finds of them. Each is a small reference (kind, the sample's UUID, which
+  is also its record's ID, its entry or activity, and the fingerprint
+  when it was listed), not a payload.
+- Apply runs one at a time with reading Health, per account
+  (`HealthImportStore.serially`), so a deletion read while changes are
+  applied is listed after them. It applies exactly the changes shown,
+  each checked again as it's made: still imported, and its entry or
+  activity still as listed. Those that pass are taken out and become this
+  install's a generation on; the rest are dropped. Exactly those leave the
+  list. Keep everything dismisses exactly the changes shown.
+- The card and Today's row both show only the changes that would still do
+  something, so neither shows a change applied on another phone or edited
+  since, and the row never opens an empty card. The stored list is pruned
+  to those as Health is read, as changes are applied, and after each sync.
+  The card itself only reads, never writes, while it's drawn.
+- At most 2,000 changes wait. A read whose removals don't all fit adds
+  those that do and keeps its anchor, so the rest are read again once
+  there's room; nothing is lost.
+
+## 2026-10-24: No cap on Changes from Health; removals belong to who listed them
+
+- Coordinator's decision: the 2,000-entry cap and its held anchor are
+  gone. Every waiting change points at an existing import and settled
+  ones are pruned, so the list is already no longer than the account's
+  imports. The anchor moves on once a read's changes are recorded. Keep
+  everything removes the changes shown, and as the anchor has moved past
+  them, they don't come back. Each full read's "No longer in Health"
+  replaces the last one's, found afresh.
+- A waiting change records the owner and generation of its import when
+  it's listed. The card, Apply changes and a journal's recovery each drop
+  a change whose import has since been adopted by another install, or
+  moved on a generation, so a change listed here never takes out what
+  another iPhone took over.
+- `alsoIn` is one entry per source bundle identifier, with its name: at
+  most five, each name at most 60 characters. Records read back are held
+  to the same, and the API refuses anything else.
+- An imported food's editor shows "From Health · <source>" under its name,
+  where its source was shown before, with "Also in Health from <sources>,
+  not imported" under it; an imported workout's editor shows the same two
+  lines under its date.

@@ -23,10 +23,7 @@ struct AppleAuthorizationButton: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SignInWithAppleButton(label, onRequest: prepare, onCompletion: complete)
-                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .frame(height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            appleButton
                 .disabled(pending != nil || submitting)
                 .accessibilityIdentifier("account.appleAuthorization")
             if submitting {
@@ -48,6 +45,39 @@ struct AppleAuthorizationButton: View {
             pending = nil
         }
     }
+
+    @ViewBuilder private var appleButton: some View {
+        #if DEBUG
+        // UI tests can't complete Apple's sheet in the simulator. With
+        // EXERLY_TEST_APPLE_AUTHORIZATION set to "identityToken rawNonce
+        // authorizationCode", this button stands in for it. Never compiled
+        // into a release build.
+        if let simulated = Self.simulatedResult {
+            Button("Continue with Apple") { submit(simulated) }
+                .buttonStyle(ExActionStyle())
+        } else {
+            signInWithApple
+        }
+        #else
+        signInWithApple
+        #endif
+    }
+
+    private var signInWithApple: some View {
+        SignInWithAppleButton(label, onRequest: prepare, onCompletion: complete)
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(height: 50)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    #if DEBUG
+    private static var simulatedResult: AppleAuthorizationResult? {
+        guard let value = ProcessInfo.processInfo.environment["EXERLY_TEST_APPLE_AUTHORIZATION"] else { return nil }
+        let parts = value.split(separator: " ").map(String.init)
+        guard parts.count == 3 else { return nil }
+        return AppleAuthorizationResult(identityToken: parts[0], rawNonce: parts[1], authorizationCode: parts[2], name: nil)
+    }
+    #endif
 
     private func prepare(_ request: ASAuthorizationAppleIDRequest) {
         let attempt = AppleAuthorizationAttempt()
@@ -76,17 +106,22 @@ struct AppleAuthorizationButton: View {
                 let payload = try attempt.result(identityToken: credential.identityToken,
                                                  authorizationCode: credential.authorizationCode,
                                                  state: credential.state, name: name)
-                submitting = true
-                task = Task { @MainActor in
-                    defer { submitting = false }
-                    do { try await authorize(payload) }
-                    catch is CancellationError { }
-                    catch {
-                        guard !Task.isCancelled else { return }
-                        showError(AccountScreenError.message(error))
-                    }
-                }
+                submit(payload)
             } catch { showError("Apple did not return a valid sign-in response. Try again.") }
+        }
+    }
+
+    private func submit(_ payload: AppleAuthorizationResult) {
+        error = nil
+        submitting = true
+        task = Task { @MainActor in
+            defer { submitting = false }
+            do { try await authorize(payload) }
+            catch is CancellationError { }
+            catch {
+                guard !Task.isCancelled else { return }
+                showError(AccountScreenError.message(error))
+            }
         }
     }
 

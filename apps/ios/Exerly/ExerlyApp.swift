@@ -7,6 +7,7 @@ struct ExerlyApp: App {
     private let isUnitTestHost: Bool
 
     init() {
+        LaunchTiming.begin()
         #if DEBUG
         isUnitTestHost = NSClassFromString("XCTestCase") != nil
         // Hosted unit tests inject their own storage and transport. Do not also
@@ -45,6 +46,7 @@ struct ExerlyApp: App {
         #else
         container = try? ModelContainer(for: schema, migrationPlan: ExerlyMigrationPlan.self)
         #endif
+        SyncEngine.launchContainer = container
         HealthSync.shared.registerAtLaunch()
         // Live Activity buttons and the watch can launch the app in the background to run.
         WorkoutActivityActions.install()

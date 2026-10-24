@@ -36,10 +36,21 @@ struct MainTabView: View {
     /// A recipe file someone shared, opened in Exerly, to review and save.
     @State private var sharedRecipe: SharedRecipe?
     @State private var sharedRecipeUnreadable = false
+    /// An export from another app shared to Exerly, to preview and import.
+    @State private var sharedExport: SharedExport?
+    @State private var sharedExportUnreadable = false
+    /// The Import & export hub, opened after setup when asked for there.
+    @State private var bringingHistory = false
 
     private struct SharedRecipe: Identifiable {
         let id = UUID()
         let recipe: RecipeImport
+    }
+
+    private struct SharedExport: Identifiable {
+        let id = UUID()
+        let source: ImportSource
+        let file: HistoryImportFlow.ImportFile
     }
 
     private var unit: MassUnit { auth.currentUser?.unitSystem == "metric" ? .kilograms : .pounds }
@@ -94,6 +105,29 @@ struct MainTabView: View {
         .alert("This recipe file can't be read", isPresented: $sharedRecipeUnreadable) {
             Button("OK", role: .cancel) {}
         } message: { Text("It may be damaged, or from a newer version of Exerly.") }
+        .sheet(item: $sharedExport) { shared in
+            if let workspace = account.training {
+                NavigationStack {
+                    HistoryImportFlow(workspace: workspace, source: shared.source, unit: unit, timeZone: timeZone, shared: [shared.file])
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { sharedExport = nil } } }
+                }
+            }
+        }
+        .alert("Exerly can't import this file", isPresented: $sharedExportUnreadable) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Share the file MacroFactor, Hevy, Strong or Exerly exported, without editing it.") }
+        .sheet(isPresented: $bringingHistory) {
+            if let workspace = account.training {
+                NavigationStack {
+                    ImportExportView(workspace: workspace, unit: unit, timeZone: timeZone)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { bringingHistory = false } } }
+                }
+            }
+        }
+        .task(id: account.training?.identity) {
+            guard let id = auth.currentUser?.id, account.training?.accountID == id, BringHistory.take(accountID: id) else { return }
+            bringingHistory = true
+        }
     }
 
     /// The selected tab; a tap on the one already showing reaches here too.
@@ -124,7 +158,17 @@ struct MainTabView: View {
             // Waits for the account's data, so the copy is saved to it.
             guard let workspace = account.training, workspace.accountID == auth.currentUser?.id else { return }
             do { sharedRecipe = SharedRecipe(recipe: try RecipeShareItem.read(url)) } catch { sharedRecipeUnreadable = true }
-        case _ where ExerlyLinks.foodID(in: url) != nil:
+        case _ where url.isFileURL && ["csv", "tsv", "txt", "xlsx", "json"].contains(url.pathExtension.lowercased()):
+            // Waits for the account's data, so the import is checked against it.
+            guard let workspace = account.training, workspace.accountID == auth.currentUser?.id else { return }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            if let data = try? Data(contentsOf: url), let source = HistoryImportReader.detect(data) {
+                sharedExport = SharedExport(source: source, file: .init(name: url.lastPathComponent, data: data))
+            } else {
+                sharedExportUnreadable = true
+            }
+        case _ where ExerlyLinks.foodID(in: url) != nil || ExerlyLinks.logged(in: url) != nil:
             selectedTab = .today
             todayLink = url
         default: break
@@ -192,7 +236,7 @@ private struct FoodSearchTabContent: View {
         self.unit = unit
         self.timeZone = timeZone
         self.entered = entered
-        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition))
+        _actions = StateObject(wrappedValue: NutritionDiaryActions(store: workspace.nutrition, conflicts: workspace.conflicts))
     }
 
     var body: some View {

@@ -15,17 +15,35 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         case invalidAccountID(String)
     }
 
-    public static let currentSchemaVersion = 4
+    public nonisolated static let currentSchemaVersion = 6
 
     /// Rows that could not be decoded, as `table/id`. They stay in the file
     /// untouched so a later version can read them.
     public private(set) var unreadableRows: [String] = []
+    /// The same rows, to look one up, or skip one noted already, at once: a
+    /// long history read in the background can note thousands at launch.
+    private var unreadableSet: Set<String> = []
+
+    public func noteUnreadable(_ rows: [String]) {
+        for row in rows { note(row) }
+    }
+
+    /// Notes `table/id` once, with the ID in canonical form.
+    private func note(_ row: String) {
+        let parts = row.split(separator: "/", maxSplits: 1).map(String.init)
+        let canonical = parts.count == 2 ? "\(parts[0])/\(DocumentWrite.canonicalID(parts[1]))" : row
+        if unreadableSet.insert(canonical).inserted { unreadableRows.append(canonical) }
+    }
+
+    func isUnreadableRow(_ row: String) -> Bool { unreadableSet.contains(row) }
 
     let database: SQLiteDatabase
     private let path: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     public private(set) var isClosed = false
+    /// Tests: runs between a write and the record of its change, as a crash could.
+    var beforeRecordingChange: (() throws -> Void)?
 
     /// Every persistence opened in this process, so deleting a file can close
     /// the ones still using it.
@@ -75,37 +93,39 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         }
     }
 
-    func schemaVersion() throws -> Int {
+    func schemaVersion() throws -> Int { try Self.schemaVersion(database) }
+
+    nonisolated static func schemaVersion(_ database: SQLiteDatabase) throws -> Int {
         guard case .integer(let version) = try database.query("PRAGMA user_version").first?.first else { return 0 }
         return Int(version)
     }
 
     /// Ordered migrations; migration `n` moves the schema from version n to n + 1.
-    private static let migrations = [
+    private nonisolated static let migrations = [
         """
-        CREATE TABLE sessions (
+        CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             started_at REAL NOT NULL,
             ended_at REAL,
             payload BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
-        CREATE INDEX sessions_started_at ON sessions (started_at);
-        CREATE TABLE custom_exercises (
+        CREATE INDEX IF NOT EXISTS sessions_started_at ON sessions (started_at);
+        CREATE TABLE IF NOT EXISTS custom_exercises (
             id TEXT PRIMARY KEY,
             payload BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
         """,
         """
-        CREATE TABLE settings (
+        CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value BLOB NOT NULL,
             updated_at REAL NOT NULL
         );
         """,
         """
-        CREATE TABLE sync_bases (
+        CREATE TABLE IF NOT EXISTS sync_bases (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
             revision INTEGER NOT NULL,
@@ -116,30 +136,76 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         );
         """,
         """
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             kind TEXT NOT NULL,
             id TEXT NOT NULL,
             payload BLOB NOT NULL,
             PRIMARY KEY (kind, id)
         );
         """,
+        "ALTER TABLE sync_bases ADD COLUMN previous BLOB;",
+        """
+        CREATE TABLE IF NOT EXISTS sync_changes (
+            kind TEXT NOT NULL,
+            id TEXT NOT NULL,
+            PRIMARY KEY (kind, id)
+        );
+        """,
     ]
 
-    private func migrate() throws {
-        let version = try schemaVersion()
-        guard version <= Self.currentSchemaVersion else {
-            throw PersistenceError.newerSchema(found: version, supported: Self.currentSchemaVersion)
+    private func migrate() throws { try Self.migrate(database) }
+
+    /// Brings the file at `url` up to the current schema on whatever thread
+    /// calls it, so an older file's history can be read off the main actor
+    /// (StoredAccount).
+    nonisolated static func migrate(url: URL) throws {
+        let database = try SQLiteDatabase(url: url)
+        defer { database.close() }
+        try database.executeScript("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
+        try migrate(database)
+    }
+
+    /// Another connection can be migrating the same file (an abandoned open
+    /// and its replacement), so the version that decides the steps is read
+    /// again under the write lock, held until every step is done; a current
+    /// file takes no lock at all. Each step is safe to repeat as well.
+    private nonisolated static func migrate(_ database: SQLiteDatabase) throws {
+        func check(_ version: Int) throws {
+            guard version <= currentSchemaVersion else {
+                throw PersistenceError.newerSchema(found: version, supported: currentSchemaVersion)
+            }
         }
-        for step in version..<Self.currentSchemaVersion {
-            try database.transaction {
-                try database.executeScript(Self.migrations[step])
+        let seen = try schemaVersion(database)
+        try check(seen)
+        guard seen < currentSchemaVersion else { return }
+        try database.transaction {
+            let version = try schemaVersion(database)
+            try check(version)
+            for step in version..<currentSchemaVersion {
+                try run(migrations[step], on: database)
                 try database.executeScript("PRAGMA user_version = \(step + 1)")
             }
         }
     }
 
+    /// A step adding a column runs only where the column is missing.
+    private nonisolated static func run(_ script: String, on database: SQLiteDatabase) throws {
+        let words = script.split(whereSeparator: \.isWhitespace).map(String.init)
+        if words.count >= 6, words[0] == "ALTER", words[3] == "ADD", words[4] == "COLUMN" {
+            let columns = try database.query("PRAGMA table_info(\(words[2]))").compactMap { row -> String? in
+                if case .text(let name) = row[1] { name } else { nil }
+            }
+            if columns.contains(words[5]) { return }
+        }
+        try database.executeScript(script)
+    }
+
     public func performAtomically(_ body: () throws -> Void) throws {
         try database.transaction(body)
+    }
+
+    public func afterCommit(_ action: @escaping () -> Void) {
+        database.afterCommit(action)
     }
 
     // MARK: TrainingPersistence
@@ -152,29 +218,50 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
         try load(Exercise.self, table: "custom_exercises", order: "id")
     }
 
+    // Each write and the record of its change are one transaction, nested
+    // in the caller's when there is one, so neither persists without the other.
+
     public func save(_ session: WorkoutSession) throws {
-        try database.execute(
-            """
-            INSERT INTO sessions (id, started_at, ended_at, payload, updated_at) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at,
-                payload = excluded.payload, updated_at = excluded.updated_at
-            """,
-            session.id.uuidString, session.startedAt, session.endedAt, try encoder.encode(session), Date()
-        )
+        let payload = try encoder.encode(session)
+        try database.transaction {
+            try database.execute(
+                """
+                INSERT INTO sessions (id, started_at, ended_at, payload, updated_at) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, ended_at = excluded.ended_at,
+                    payload = excluded.payload, updated_at = excluded.updated_at
+                """,
+                session.id.uuidString, session.startedAt, session.endedAt, payload, Date()
+            )
+            try recordChange(TrainingStore.sessionKind, session.id.uuidString)
+        }
     }
 
     public func deleteSession(_ id: UUID) throws {
-        try database.execute("DELETE FROM sessions WHERE id = ?", id.uuidString)
+        try database.transaction {
+            try database.execute("DELETE FROM sessions WHERE id = ?", id.uuidString)
+            try recordChange(TrainingStore.sessionKind, id.uuidString)
+        }
+    }
+
+    /// Sync pushes only documents changed since they matched the server;
+    /// recorded in the write's own transaction, a crash can't lose one.
+    func recordChange(_ kind: String, _ id: String) throws {
+        try beforeRecordingChange?()
+        try database.execute("INSERT OR IGNORE INTO sync_changes (kind, id) VALUES (?, ?)", kind, DocumentWrite.canonicalID(id))
     }
 
     public func save(_ exercise: Exercise) throws {
-        try database.execute(
-            """
-            INSERT INTO custom_exercises (id, payload, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
-            """,
-            exercise.id.rawValue, try encoder.encode(exercise), Date()
-        )
+        let payload = try encoder.encode(exercise)
+        try database.transaction {
+            try database.execute(
+                """
+                INSERT INTO custom_exercises (id, payload, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+                """,
+                exercise.id.rawValue, payload, Date()
+            )
+            try recordChange(TrainingStore.exerciseKind, exercise.id.rawValue)
+        }
     }
 
     public func loadValue(forKey key: String) throws -> Data? {
@@ -204,8 +291,8 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             guard case .text(let id) = row[0] else { continue }
             if case .blob(let payload) = row[1], let value = try? decoder.decode(T.self, from: payload) {
                 values.append(value)
-            } else if !unreadableRows.contains("\(table)/\(id)") {
-                unreadableRows.append("\(table)/\(id)")
+            } else {
+                note("\(table)/\(id)")
             }
         }
         return values
@@ -221,13 +308,19 @@ extension SQLiteTrainingPersistence: DocumentPersistence {
     }
 
     public func saveDocument(kind: String, id: String, payload: Data) throws {
-        try database.execute(
-            "INSERT INTO documents (kind, id, payload) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET payload = excluded.payload",
-            kind, id, payload
-        )
+        try database.transaction {
+            try database.execute(
+                "INSERT INTO documents (kind, id, payload) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET payload = excluded.payload",
+                kind, id, payload
+            )
+            try recordChange(kind, id)
+        }
     }
 
     public func deleteDocument(kind: String, id: String) throws {
-        try database.execute("DELETE FROM documents WHERE kind = ? AND id = ?", kind, id)
+        try database.transaction {
+            try database.execute("DELETE FROM documents WHERE kind = ? AND id = ?", kind, id)
+            try recordChange(kind, id)
+        }
     }
 }

@@ -7,6 +7,7 @@ const { createHash } = require('node:crypto');
 const store = require('../data');
 const apple = require('../lib/apple');
 const sessions = require('../lib/sessions');
+const { confirmIdentity, consumeNonce, notConfirmed } = require('../lib/reauth');
 const { asyncHandler, badRequest, conflict, ApiError } = require('../lib/errors');
 const { authenticate, adminEmails } = require('../lib/auth');
 const { rateLimit } = require('../lib/ratelimit');
@@ -24,14 +25,6 @@ const NONCE_RETENTION_MS = 24 * 3600 * 1000;
 function placeholderEmail(subject) {
   const digest = createHash('sha256').update(`apple:${subject}`).digest('hex').slice(0, 24);
   return `apple-${digest}@users.exerly.invalid`;
-}
-
-/** Records a token's nonce; a second use of the same nonce is a replay. */
-async function consumeNonce(nonceHash) {
-  if (await store.findOne('auth_nonces', { nonce_hash: nonceHash })) {
-    throw new ApiError(401, 'This sign-in was already used. Try again.');
-  }
-  await store.insert('auth_nonces', { nonce_hash: nonceHash, created_at: new Date() });
 }
 
 /**
@@ -108,12 +101,38 @@ router.post(
   })
 );
 
+// Connecting an Apple ID is a way into the account, so it needs the same
+// proof as deleting it (confirmIdentity): the password, or for an account
+// without one, a fresh Sign in with Apple as an Apple ID it already has
+// (currentIdentityToken and currentNonce).
 router.post(
   '/api/account/identities/apple',
   authenticate,
   asyncHandler(async (req, res) => {
-    const verified = await apple.verifyIdentityToken(req.body.identityToken, req.body.nonce);
-    await consumeNonce(verified.nonceHash);
+    await confirmIdentity(
+      {
+        password: req.body.password,
+        identityToken: req.body.currentIdentityToken,
+        nonce: req.body.currentNonce,
+      },
+      req.account,
+      'connect Apple'
+    );
+    // A refused token is a 403 like every other refusal here: the session is
+    // fine, and a 401 would make the app refresh it or sign out.
+    let verified;
+    try {
+      verified = await apple.verifyIdentityToken(req.body.identityToken, req.body.nonce);
+      await consumeNonce(verified.nonceHash);
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      throw notConfirmed(
+        verified
+          ? 'That Apple sign-in was already used. Try again.'
+          : 'Apple couldn’t confirm that Apple ID. Try again.',
+        'apple_not_confirmed'
+      );
+    }
     const identity = await store.findOne('account_identities', {
       provider: 'apple',
       subject: verified.subject,
@@ -141,6 +160,7 @@ router.delete(
     if (!req.account.hash) {
       throw badRequest('Set a password before disconnecting Apple, or you could not sign in again');
     }
+    await confirmIdentity({ password: req.body?.password }, req.account, 'disconnect Apple');
     await store.remove('account_identities', { account_id: req.account.id, provider: 'apple' });
     res.json({ provider: 'apple', connected: false });
   })
@@ -189,13 +209,14 @@ router.get(
 );
 
 // App Store Review Guideline 5.1.1(v): accounts can be deleted in the app.
-// Every row the account owns goes in one transaction. Apple's authorization
-// is revoked first when the account uses Sign in with Apple and revocation is
-// configured; if that fails, nothing is deleted.
+// The person confirms who they are first (confirmIdentity). Wrong guesses
+// share one budget per account with the other routes that ask (lib/reauth.js). Every row the
+// account owns goes in one transaction, which also ends every session and
+// token. Apple's authorization is revoked first when the account uses Sign in
+// with Apple and revocation is configured; if that fails, nothing is deleted.
 router.delete(
   '/api/account',
   authenticate,
-  rateLimit({ name: 'delete-account', max: 5, windowMs: 60 * 60 * 1000 }),
   asyncHandler(
     async (req, res) => {
       if (req.body?.confirm !== true) {
@@ -206,6 +227,7 @@ router.delete(
         account_id: user.id,
         provider: 'apple',
       });
+      await confirmIdentity(req.body, user, 'delete your account');
       let appleRevoked = false;
       if (linked && apple.revocationConfigured()) {
         const code = req.body.appleAuthorizationCode;

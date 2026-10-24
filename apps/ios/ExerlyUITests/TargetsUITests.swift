@@ -25,21 +25,24 @@ final class TargetsUITests: ExerlyUITestCase {
         // Mifflin–St Jeor: 10 × 72.25 + 6.25 × 167.5 − 5 × 34 − 161 = 1438 kcal × 1.375.
         XCTAssertTrue((preview.value as? String ?? "").hasPrefix("1,978 kilocalories a day"), preview.value as? String ?? "")
         tap(app.buttons["Lose"], in: app)
+        // Round amounts a week: 0.75 kg is over 1 % of 72.25 kg, so two presets.
+        XCTAssertEqual(app.buttons["planEditor.rate.0"].label, "0.25 kilograms a week")
+        XCTAssertFalse(app.buttons["planEditor.rate.2"].exists)
         tap(app.buttons["planEditor.rate.1"], in: app)
-        XCTAssertEqual(app.buttons["planEditor.rate.1"].label, "0.36 kilograms a week")
+        XCTAssertEqual(app.buttons["planEditor.rate.1"].label, "0.50 kilograms a week")
         tap(app.buttons["planEditor.save"], in: app)
 
         let energy = app.descendants(matching: .any)["targets.today.energy"]
         XCTAssertTrue(energy.waitForExistence(timeout: 10))
-        // 1978 − 0.005 × 72.25 × 7700 / 7 = 1580.6 kcal; whole days share the week's 11,064.
-        XCTAssertTrue(["1,580 kilocalories", "1,581 kilocalories"].contains(energy.value as? String ?? ""), energy.value as? String ?? "")
+        // 1978 − 0.5 × 7700 / 7 = 1428 kcal.
+        XCTAssertEqual(energy.value as? String, "1,428 kilocalories")
         let plans = try await waitForDocuments("nutrition_plan", token: person.token) { $0.contains { $0["mode"] as? String == "coached" } }
         let plan = try XCTUnwrap(plans.first { $0["mode"] as? String == "coached" })
         XCTAssertEqual(plan["startDate"] as? String, Self.day(0).date)
         XCTAssertEqual((plan["goal"] as? [String: Any])?["direction"] as? String, "lose")
-        XCTAssertEqual((plan["goal"] as? [String: Any])?["weeklyRate"] as? Double, 0.005)
+        XCTAssertEqual((plan["goal"] as? [String: Any])?["weeklyRate"] as? Double, 0.0069204, "0.5 kg of 72.25 kg")
         XCTAssertEqual((plan["basis"] as? [String: Any])?["expenditure"] as? Double, 1978)
-        XCTAssertEqual((plan["targets"] as? [[String: Any]])?.first?["energy"] as? Double, 1581)
+        XCTAssertEqual((plan["targets"] as? [[String: Any]])?.first?["energy"] as? Double, 1428)
     }
 
     /// Targets set up offline are saved on the device, survive a relaunch and
@@ -103,6 +106,64 @@ final class TargetsUITests: ExerlyUITestCase {
         let new = try XCTUnwrap(plans.first { $0["id"] as? String != old })
         XCTAssertEqual(new["mode"] as? String, "coached")
         XCTAssertEqual(new["startDate"] as? String, Self.day(0).date)
+    }
+
+    /// Goal weight on Targets works as on Progress: a goal the trend has
+    /// passed says Goal reached, the editor offers Gain or Maintain in Save's
+    /// place until the goal can be reached, and Add opens the field ready to type.
+    func testAGoalWeightReachedOnTargetsIsReplacedFromAdd() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "targets-goal-weight", units: "imperial")
+        try await deleteSetupWeight(token: person.token)
+        // A loss toward 190 lb from a trend of 84 kg (185.2 lb).
+        let old = try await seedPlan(token: person.token, startOffset: -14, goalWeight: 190)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openTargets(app)
+        let eta = app.descendants(matching: .any)["targets.eta"]
+        reveal(eta, in: app)
+        XCTAssertTrue(eta.label.hasPrefix("Goal reached"), eta.label)
+        capture(app, "targets-goal-reached")
+
+        tap(app.buttons["targets.edit"], in: app)
+        let gain = app.buttons["planEditor.redirect"]
+        XCTAssertTrue(gain.waitForExistence(timeout: 5))
+        XCTAssertEqual(gain.label, "Gain to 190 lb")
+        XCTAssertTrue(app.buttons["planEditor.redirect.maintain"].exists)
+        XCTAssertFalse(app.buttons["planEditor.save"].exists, "Gain or Maintain takes Save's place")
+        capture(app, "targets-goal-redirect")
+        tap(app.buttons["Remove goal weight"], in: app)
+        let save = app.buttons["planEditor.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5) && save.isEnabled)
+        XCTAssertFalse(gain.exists)
+        tap(save, in: app)
+
+        let add = app.buttons["targets.addGoalWeight"]
+        reveal(add, in: app)
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        tapCount = 0
+        tap(add, in: app)
+        let field = app.textFields["planEditor.goalWeight"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["planEditor.addGoalWeight"].exists, "No second Add (run 7 tapped it twice)")
+        await fulfillment(of: [expectation(for: NSPredicate(format: "hasKeyboardFocus == true"), evaluatedWith: field)], timeout: 5)
+        capture(app, "targets-goal-add")
+        field.typeText("175")
+        let editorETA = app.descendants(matching: .any)["planEditor.eta"]
+        XCTAssertTrue(editorETA.label.hasPrefix("Around"), editorETA.label)
+        dismissKeyboard(app)
+        tap(save, in: app)
+        XCTAssertEqual(tapCount, 2, "Add and Save; the goal weight is typed")
+        reveal(eta, in: app)
+        XCTAssertTrue(eta.waitForExistence(timeout: 10))
+        XCTAssertTrue(eta.label.hasPrefix("Around"), eta.label)
+        capture(app, "targets-goal-set")
+
+        let plans = try await waitForDocuments("nutrition_plan", token: person.token) { $0.count == 3 }
+        let kept = try XCTUnwrap(plans.first { $0["id"] as? String == old })
+        XCTAssertEqual(((kept["goal"] as? [String: Any])?["goalWeight"] as? [String: Any])?["value"] as? Double, 190)
+        let goals = plans.compactMap { ($0["goal"] as? [String: Any])?["goalWeight"] as? [String: Any] }
+        XCTAssertTrue(goals.contains { $0["value"] as? Double == 175 && $0["unit"] as? String == "lb" }, "\(goals)")
     }
 
     /// A due check-in shows its change and evidence; Accept starts the new
@@ -298,32 +359,5 @@ final class TargetsUITests: ExerlyUITestCase {
         if mode != "manual" { payload["basis"] = ["expenditure": expenditure, "expenditureError": 300, "trendWeight": trend] }
         _ = try await request("PUT", "/v1/documents/nutrition_plan/\(id)", body: ["base_revision": 0, "payload": payload], token: token)
         return id
-    }
-
-    /// The account's live documents of a kind, from the change feed.
-    private func documents(_ kind: String, token: String) async throws -> [[String: Any]] {
-        var latest: [String: [String: Any]?] = [:]
-        var cursor = 0
-        while true {
-            let page = try await request("GET", "/v1/changes?after=\(cursor)&limit=1000", token: token)
-            for change in page["changes"] as? [[String: Any]] ?? [] where change["kind"] as? String == kind {
-                guard let id = change["id"] as? String else { continue }
-                latest[id] = change["payload"] as? [String: Any]
-            }
-            cursor = page["cursor"] as? Int ?? cursor
-            guard page["has_more"] as? Bool == true else { break }
-        }
-        return Array(latest.compactMapValues { $0 }.values)
-    }
-
-    private func waitForDocuments(_ kind: String, token: String, timeout: Int = 40,
-                                  _ matches: @escaping ([[String: Any]]) -> Bool) async throws -> [[String: Any]] {
-        for _ in 0..<timeout {
-            let found = try await documents(kind, token: token)
-            if matches(found) { return found }
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        XCTFail("The server's \(kind) documents never matched")
-        return []
     }
 }

@@ -286,3 +286,4 @@ function needsCheckin(program, today) {
 }
 
 module.exports = router;
+Object.assign(module.exports, { GOAL_TYPES, PROTEIN_STRATEGIES, MAX_RATE_KG_PER_WEEK });

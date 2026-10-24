@@ -21,6 +21,8 @@ struct ExNumericTextField: UIViewRepresentable {
     /// Each change focuses the field, as a tap on its caption does.
     var focusRequest = 0
     @Environment(\.colorScheme) private var colorScheme
+    /// The form's fields in the order Next visits them, by identifier.
+    @Environment(\.exFieldOrder) private var fieldOrder
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -62,8 +64,7 @@ struct ExNumericTextField: UIViewRepresentable {
             // A preset, a step or a new measure replaced the number being edited.
             if field.isFirstResponder { Coordinator.selectAll(field) }
         }
-        field.attributedPlaceholder = NSAttributedString(string: placeholder.isEmpty ? title : placeholder,
-                                                         attributes: [.foregroundColor: UIColor(Color.exTextSecondary)])
+        field.attributedPlaceholder = field.isFirstResponder ? nil : placeholderText
         field.accessibilityLabel = title
         field.accessibilityIdentifier = identifier
         field.textAlignment = centered ? .center : .left
@@ -74,6 +75,11 @@ struct ExNumericTextField: UIViewRepresentable {
         let descriptor = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
         field.font = UIFont(descriptor: descriptor, size: 0)
         context.coordinator.host?.rootView = keypad(for: field, coordinator: context.coordinator)
+    }
+
+    /// Hidden while typing: the caret sat on top of a "–" placeholder (run 7).
+    var placeholderText: NSAttributedString {
+        NSAttributedString(string: placeholder.isEmpty ? title : placeholder, attributes: [.foregroundColor: UIColor(Color.exTextSecondary)])
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
@@ -93,7 +99,11 @@ struct ExNumericTextField: UIViewRepresentable {
             }
             field.deleteBackward()
             coordinator?.changed(field)
-        }, done: { [weak field] in field?.resignFirstResponder() })
+        }, done: { [weak field] in field?.resignFirstResponder() },
+           next: coordinator.hasNext ? { [weak field] in
+               guard let field else { return }
+               if let next = coordinator.field(after: field) { next.becomeFirstResponder() } else { field.resignFirstResponder() }
+           } : nil)
             .environment(\.colorScheme, colorScheme))
     }
 
@@ -101,6 +111,8 @@ struct ExNumericTextField: UIViewRepresentable {
         var parent: ExNumericTextField
         var host: UIHostingController<AnyView>?
         var focusRequest: Int
+        /// Whether a field follows this one in its form's order, for the keypad's Next.
+        var hasNext = false
 
         init(_ parent: ExNumericTextField) {
             self.parent = parent
@@ -109,7 +121,14 @@ struct ExNumericTextField: UIViewRepresentable {
 
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
 
+        func textFieldDidEndEditing(_ field: UITextField) { field.attributedPlaceholder = parent.placeholderText }
+
         func textFieldDidBeginEditing(_ field: UITextField) {
+            field.attributedPlaceholder = nil
+            if hasNext != (self.field(after: field) != nil) {
+                hasNext.toggle()
+                host?.rootView = parent.keypad(for: field, coordinator: self)
+            }
             // After the tap that focused the field has placed its caret.
             DispatchQueue.main.async { Self.selectAll(field) }
             // The system shows only the field itself above the keypad; once
@@ -125,6 +144,27 @@ struct ExNumericTextField: UIViewRepresentable {
                 rect.size.height += below
                 scroll.scrollRectToVisible(rect, animated: true)
             }
+        }
+
+        /// The next field in the form's declared order that's on the same
+        /// screen (the sheet or page on top), skipping any not shown: run 7 had
+        /// to hide the keypad and tap each of a new food's numbers in turn.
+        /// Its place on screen isn't used, since a caption that wraps moves a
+        /// field out of its row (review round 1).
+        func field(after field: UITextField) -> UITextField? {
+            let following = ExFieldOrder.following(parent.identifier, in: parent.fieldOrder)
+            guard !following.isEmpty, let window = field.window else { return nil }
+            var top = window.rootViewController
+            while let presented = top?.presentedViewController, !presented.isBeingDismissed { top = presented }
+            guard let screen = top?.view, field.isDescendant(of: screen) else { return nil }
+            var shown: [String: UITextField] = [:]
+            func collect(_ view: UIView) {
+                if let text = view as? UITextField, text !== field, text.isEnabled, !text.isHidden, text.alpha > 0.01,
+                   let identifier = text.accessibilityIdentifier, shown[identifier] == nil { shown[identifier] = text }
+                view.subviews.forEach(collect)
+            }
+            collect(screen)
+            return following.lazy.compactMap { shown[$0] }.first
         }
 
         static func selectAll(_ field: UITextField) {
@@ -154,6 +194,8 @@ struct ExNumericKeypad: View {
     let insert: (String) -> Void
     let delete: () -> Void
     let done: () -> Void
+    /// Moves to the next field, when there is one.
+    var next: (() -> Void)?
 
     private var decimal: String { Locale.current.decimalSeparator ?? "." }
 
@@ -163,6 +205,12 @@ struct ExNumericKeypad: View {
                 Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(Color.exTextSecondary)
                     .lineLimit(1).accessibilityHidden(true)
                 Spacer()
+                if let next {
+                    Button("Next", action: next).font(.system(size: 16, weight: .semibold))
+                        .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
+                        .buttonStyle(.plain).foregroundStyle(Color.exPrimaryText)
+                        .accessibilityHint("Moves to the next field").accessibilityIdentifier("exerly.keypadNext")
+                }
                 // Not "Done": a sheet's own Done or Save, which applies the number, is the only one.
                 Button(action: done) {
                     Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 18, weight: .semibold))
@@ -191,4 +239,30 @@ struct ExNumericKeypad: View {
                 .background(Color.exSurface1, in: RoundedRectangle(cornerRadius: ExRadius.control))
         }.buttonStyle(.plain).accessibilityIdentifier("exerly.keypad.\(title)")
     }
+}
+
+/// The order a form's number fields take Next in, by their identifiers.
+enum ExFieldOrder {
+    /// The identifiers after `identifier` in `order`; none when it isn't in it.
+    static func following(_ identifier: String, in order: [String]) -> ArraySlice<String> {
+        guard !identifier.isEmpty, let index = order.firstIndex(of: identifier) else { return [] }
+        return order[(index + 1)...]
+    }
+}
+
+private struct ExFieldOrderKey: EnvironmentKey {
+    static let defaultValue: [String] = []
+}
+
+extension EnvironmentValues {
+    var exFieldOrder: [String] {
+        get { self[ExFieldOrderKey.self] }
+        set { self[ExFieldOrderKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Next on the number keypad visits the fields with these identifiers in
+    /// this order, skipping any not on screen; a field outside it has no Next.
+    func exFieldOrder(_ identifiers: [String]) -> some View { environment(\.exFieldOrder, identifiers) }
 }

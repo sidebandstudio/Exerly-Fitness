@@ -24,22 +24,31 @@ function checkRevision(req, current) {
   }
 }
 async function change(user, kind, record) {
+  return changes(user, [{ kind, record }]);
+}
+/** Appends changes to the feed in order, in one statement. Returns the last sequence. */
+async function changes(user, entries) {
   return store.transaction(async () => {
     const cursor = await store.findOne('sync_cursors', { account_id: user.id });
-    const sequence = (cursor?.sequence ?? 0) + 1;
-    await store.upsert('sync_cursors', { account_id: user.id }, { sequence });
-    await store.insert('sync_changes', {
-      account_id: user.id,
-      sequence,
-      kind,
-      entity_id: record.client_id || record.id,
-      server_id: record.id,
-      revision: record.revision ?? 1,
-      deleted: !!record.deleted_at,
-      payload: record,
-      created_at: new Date(),
-    });
-    return sequence;
+    const first = (cursor?.sequence ?? 0) + 1;
+    const last = first + entries.length - 1;
+    await store.upsert('sync_cursors', { account_id: user.id }, { sequence: last });
+    const now = new Date();
+    await store.insertMany(
+      'sync_changes',
+      entries.map(({ kind, record }, i) => ({
+        account_id: user.id,
+        sequence: first + i,
+        kind,
+        entity_id: record.client_id || record.id,
+        server_id: record.id,
+        revision: record.revision ?? 1,
+        deleted: !!record.deleted_at,
+        payload: record,
+        created_at: now,
+      }))
+    );
+    return last;
   });
 }
-module.exports = { entityID, checkRevision, change };
+module.exports = { entityID, checkRevision, change, changes };

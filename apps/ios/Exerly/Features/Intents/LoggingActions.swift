@@ -1,5 +1,6 @@
 import ExerlyCore
 import Foundation
+import SwiftData
 import WidgetKit
 
 /// Why a logging intent couldn't run, in words that can be read aloud.
@@ -168,6 +169,15 @@ enum LoggingActions {
         return (store.recentPortions(limit: 100) + saved).filter { seen.insert($0.id).inserted }
     }
 
+    /// A food chosen in Spotlight: a usual or recent one is logged with its
+    /// remembered portion and Today opens on its confirmation, with Undo;
+    /// another opens its portion sheet.
+    static func open(_ foodID: String, in account: IntentAccess.Account, now: Date = .now) throws -> URL {
+        guard usualFoods(in: account, now: now).contains(where: { $0.id == foodID }) else { return ExerlyLinks.food(foodID) }
+        let entry = try logEntry(foodID, servings: nil, in: account, now: now)
+        return ExerlyLinks.logged(entry.id, accountID: account.workspace.accountID)
+    }
+
     /// Today's first Log again chip for a time of day, logged into `meal`:
     /// a meal reminder's Log usual button.
     static func logUsual(_ meal: String, at time: Date, in account: IntentAccess.Account) throws -> String {
@@ -182,6 +192,35 @@ enum LoggingActions {
     /// else multiples of the usual amount.
     static func logFood(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
                         now: Date = .now) throws -> String {
+        try loggedFood(foodID, servings: servings, meal: meal, in: account, now: now).text
+    }
+
+    /// `logFood`, with the entry, for the answer's Undo.
+    static func loggedFood(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
+                           now: Date = .now) throws -> (text: String, entry: FoodEntry) {
+        let entry = try logEntry(foodID, servings: servings, meal: meal, in: account, now: now)
+        return (sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(entry.meal).",
+                          left(account.store, entry.date)), entry)
+    }
+
+    /// Takes back an entry a shortcut logged, if it's this account's and
+    /// still logged; again, it does nothing. True when it took it back.
+    @discardableResult
+    static func undo(entry id: UUID, accountID: String, in account: IntentAccess.Account) throws -> Bool {
+        guard account.workspace.accountID == accountID, account.store.entries.contains(where: { $0.id == id }) else { return false }
+        try account.store.deleteEntry(id)
+        return true
+    }
+
+    /// What the answer's snippet shows for an entry a shortcut logged: what
+    /// and where, or nil once it's been taken back or isn't this account's.
+    static func logged(entry id: UUID, accountID: String, in account: IntentAccess.Account) -> FoodEntry? {
+        guard account.workspace.accountID == accountID else { return nil }
+        return account.store.entries.first { $0.id == id }
+    }
+
+    private static func logEntry(_ foodID: String, servings: Double?, meal: String? = nil, in account: IntentAccess.Account,
+                                 now: Date) throws -> FoodEntry {
         guard var portion = portion(of: foodID, in: account, now: now) else {
             throw LoggingIntentError.invalid("That food isn't in your recent or saved foods. Search for it in Exerly.")
         }
@@ -196,9 +235,56 @@ enum LoggingActions {
         }
         let store = account.store, today = LocalDate(now, in: account.timeZone)
         let meal = meal ?? store.suggestedMeal(at: now, timeZone: account.timeZone)
-        let entry = try store.log(portion, on: today, meal: meal)
-        return sentences("Logged \(entry.food.name), \(NutritionFormat.portion(entry, unit: account.unit)), to \(meal).",
-                         left(store, today))
+        return try store.log(portion, on: today, meal: meal)
+    }
+
+    /// The first of their foods matching a name, as Log a food finds it
+    /// when the name is typed or spoken, logged with its usual portion.
+    static func logFood(named name: String, servings: Double?, meal: String?, in account: IntentAccess.Account,
+                        now: Date = .now) throws -> String {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let food = foods(matching: name, in: account).first else {
+            throw LoggingIntentError.invalid("None of your foods is called \(name). Search for it in Exerly.")
+        }
+        return try logFood(food.id, servings: servings, meal: meal, in: account, now: now)
+    }
+
+    /// One of their foods by the digits under its barcode, with its usual
+    /// portion. A barcode never logged before isn't looked up: its portion is
+    /// checked in the scanner first.
+    static func logBarcode(_ digits: String, servings: Double?, meal: String?, in account: IntentAccess.Account,
+                           now: Date = .now) throws -> String {
+        guard !GTIN.candidates(typed: digits).isEmpty else {
+            throw LoggingIntentError.invalid("Enter the 8 to 14 digits under the barcode.")
+        }
+        guard let foodID = account.store.ownFoodID(barcode: digits) else {
+            throw LoggingIntentError.invalid("That barcode isn't one of your foods yet. Scan it once in Exerly, and after that this logs it.")
+        }
+        return try logFood(foodID, servings: servings, meal: meal, in: account, now: now)
+    }
+
+    /// A food from another app's shortcut, in the "Log by JSON" format,
+    /// into the meal given or the one for this time.
+    static func logJSON(_ text: String, meal: String?, in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        let store = account.store, today = LocalDate(now, in: account.timeZone)
+        let meal = meal ?? store.suggestedMeal(at: now, timeZone: account.timeZone)
+        let data = Data(text.utf8)
+        guard (try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed])) != nil else {
+            throw LoggingIntentError.invalid("Nothing was logged: that isn't JSON.")
+        }
+        let entry: FoodEntry
+        do {
+            entry = try store.logShortcutFood(data, on: today, meal: meal, at: now)
+        } catch let problem as ShortcutsJSON.Problem {
+            throw LoggingIntentError.invalid("Nothing was logged: \(problem).")
+        }
+        return sentences("Logged \(entry.food.name), \(FoodFormat.kcal(entry.nutrients.energy)) kcal, to \(meal).", left(store, today))
+    }
+
+    /// Today's consumption and what remains of each goal, as JSON for another
+    /// app's shortcut.
+    static func todaySummary(in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        String(bytes: try account.store.todaySummaryJSON(on: LocalDate(now, in: account.timeZone)), encoding: .utf8) ?? "{}"
     }
 
     /// Today's repeat button: the last time in the past week (or `days`
@@ -214,15 +300,33 @@ enum LoggingActions {
             return "There's no \(meal.lowercased()) \(days == 1 ? "from yesterday" : "in the last week") to repeat."
         }
         let copied = try store.apply(repeated, to: today)
-        var day = "yesterday"
-        if repeated.source != today.adding(days: -1) {
-            var style = Date.FormatStyle.dateTime.weekday(.wide)
-            style.timeZone = zone
-            day = NutritionFormat.pickerDate(repeated.source, timeZone: zone).formatted(style)
-        }
         let foods = copied.count == 1 ? "1 food" : "\(copied.count) foods"
-        return sentences("Repeated \(day)'s \(meal.lowercased()): \(foods), \(FoodFormat.kcal(repeated.energy)) kcal.",
+        return sentences("Repeated \(day(repeated.source, today: today, zone: zone))'s \(meal.lowercased()): \(foods), "
+            + "\(FoodFormat.kcal(repeated.energy)) kcal.", left(store, today))
+    }
+
+    /// Today's repeat-the-day button: the latest day in the past week with
+    /// food, all of it copied to today. Only into an empty day, so running it
+    /// twice doesn't log the day twice.
+    static func repeatDay(within days: Int = 7, in account: IntentAccess.Account, now: Date = .now) throws -> String {
+        let store = account.store, zone = account.timeZone, today = LocalDate(now, in: zone)
+        guard store.entries(on: today).isEmpty else { return "Today already has food, so nothing was repeated." }
+        guard let repeated = store.repeatable(nil, for: today, within: days) else {
+            return "There's no day with food in the last week to repeat."
+        }
+        let copied = try store.apply(repeated, to: today)
+        let foods = copied.count == 1 ? "1 food" : "\(copied.count) foods"
+        let source = day(repeated.source, today: today, zone: zone)
+        return sentences("Repeated \(source == "yesterday" ? source : source + "'s food"): \(foods), \(FoodFormat.kcal(repeated.energy)) kcal.",
                          left(store, today))
+    }
+
+    /// "yesterday", else the weekday.
+    private static func day(_ source: LocalDate, today: LocalDate, zone: TimeZone) -> String {
+        guard source != today.adding(days: -1) else { return "yesterday" }
+        var style = Date.FormatStyle.dateTime.weekday(.wide)
+        style.timeZone = zone
+        return NutritionFormat.pickerDate(source, timeZone: zone).formatted(style)
     }
 
     /// Today's calories against the target, and protein.
@@ -239,6 +343,39 @@ enum LoggingActions {
         }
         let protein = FoodFormat.grams(progress.protein.consumed)
         text += progress.protein.target.map { " Protein \(protein) of \(FoodFormat.grams($0)) g." } ?? " Protein \(protein) g."
+        return text
+    }
+
+    // MARK: Water
+
+    /// Today's water row: a glass, or an amount in the person's units, added
+    /// to today through the row's queue, so it syncs as the row's does. The
+    /// queue is opened for the signed-in account when no screen has.
+    static func logWater(_ amount: Double?, sync: SyncEngine? = nil, container: ModelContainer? = nil,
+                         token: String? = KeychainService.shared.getToken(), defaults: UserDefaults = .standard) async throws -> String {
+        guard let token, let accountID = APIClient.accountID(in: token) else { throw LoggingIntentError.signedOut }
+        let sync = sync ?? .shared
+        let container = container ?? SyncEngine.launchContainer
+        let user = defaults.data(forKey: APIClient.accountCacheKey(token)).flatMap { try? JSONDecoder().decode(UserDTO.self, from: $0) }
+        if !sync.isConfigured(for: accountID) {
+            guard let container else { throw LoggingIntentError.unavailable }
+            sync.configure(container: container, accountID: accountID, timeZone: user?.timezone)
+        }
+        let imperial = user?.unitSystem != "metric"
+        var milliliters = WaterServing.glass.milliliters(imperial: imperial)
+        if let amount {
+            guard let typed = WaterDisplay.milliliters(amount, imperial: imperial) else {
+                throw LoggingIntentError.invalid(imperial ? "Enter 0.1 to 169 fl oz." : "Enter a whole number from 1 to 5,000 ml.")
+            }
+            milliliters = typed
+        }
+        let today = sync.today
+        let current = (try? await sync.diary(for: today, cachedOnly: true))?.water ?? WaterDayDTO(entry_date: today.rawValue, ml: 0, revision: 0)
+        do { try sync.addWater(current, milliliters: milliliters) } catch { throw LoggingIntentError.invalid("Nothing was saved. Open Exerly and try again.") }
+        let total = (try? await sync.diary(for: today, cachedOnly: true))?.waterMl ?? current.ml + milliliters
+        let words = { (ml: Int) in WaterDisplay.amount(ml, imperial: imperial) }
+        var text = "Logged \(words(milliliters)) of water. \(words(total)) today"
+        if let goal = user?.waterGoalMl { text += total >= goal ? ", your goal reached." : ", \(words(goal - total)) to go." } else { text += "." }
         return text
     }
 

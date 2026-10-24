@@ -9,7 +9,7 @@ final class HealthUITests: ExerlyUITestCase {
     private var designCapture: Bool { ProcessInfo.processInfo.environment["EXERLY_DESIGN_CAPTURE"] == "1" }
 
     /// `launch(resetSession: true)` with the Health seed and write probe.
-    private func launchWithHealth(seed: String?, probeIDs: [String] = []) -> XCUIApplication {
+    private func launchWithHealth(seed: String?, probeIDs: [String] = [], recovery: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         if let appearance = ProcessInfo.processInfo.environment["EXERLY_TEST_APPEARANCE"],
@@ -23,6 +23,7 @@ final class HealthUITests: ExerlyUITestCase {
         app.launchEnvironment["EXERLY_TEST_STORE_ID"] = UUID().uuidString
         app.launchEnvironment["EXERLY_HEALTH_PROBE"] = "1"
         if let seed { app.launchEnvironment["EXERLY_HEALTH_SEED"] = seed }
+        if recovery { app.launchEnvironment["EXERLY_HEALTH_RECOVERY_SEED"] = "1" }
         app.launchEnvironment["EXERLY_HEALTH_PROBE_IDS"] = probeIDs.joined(separator: ",")
         app.launch()
         return app
@@ -32,6 +33,48 @@ final class HealthUITests: ExerlyUITestCase {
     private func wait(for element: XCUIElement, _ format: String, _ argument: String, timeout: TimeInterval = 20) async {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: format, argument), object: element)
         await fulfillment(of: [expectation], timeout: timeout)
+    }
+
+    /// Changes from Health waiting, as Today's quiet row and the Health
+    /// screen's card show them: calm, and nothing changes until applied.
+    func testChangesFromHealthCapture() async throws {
+        guard designCapture else { throw XCTSkip("Opt-in visual review of Changes from Health") }
+        try await control([:])
+        let person = try await createAccount(prefix: "health-changes", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_HEALTH_CHANGES_SEED": "1"])
+        signIn(app, email: person.email)
+        let row = app.buttons["today.healthChanges"]
+        reveal(row, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        capture(app, "health-changes-today")
+        tap(row, in: app)
+        XCTAssertTrue(app.buttons["health.changes.apply"].waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "health-changes-sheet")
+        tap(app.buttons["health.changes.done"], in: app)
+        openHealthSettings(app)
+        let apply = app.buttons["health.changes.apply"]
+        XCTAssertTrue(apply.waitForExistence(timeout: 10), app.debugDescription)
+        capture(app, "health-changes-card")
+        reveal(apply, in: app)
+        capture(app, "health-changes-card-actions")
+    }
+
+    /// An import whose day another source also has says so where its source
+    /// is shown, under "From Health", where VoiceOver reads it.
+    func testAnImportSaysWhatElseHealthHasForItsDay() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "health-also-in", units: "metric")
+        let app = launch(resetSession: true, environment: ["EXERLY_HEALTH_CHANGES_SEED": "1"])
+        signIn(app, email: person.email)
+        let yogurt = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                                                          "nutrition.entry.", "Synthetic Greek yogurt")).firstMatch
+        XCTAssertTrue(yogurt.waitForExistence(timeout: 20), app.debugDescription)
+        tap(yogurt, in: app)
+        let note = app.staticTexts["health.alsoInHealth"]
+        XCTAssertTrue(note.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(note.label, "Also in Health from Tracker, not imported")
+        XCTAssertEqual(app.staticTexts["health.fromHealth"].label, "From Health · Diary")
+        if designCapture { capture(app, "health-also-in") }
     }
 
     private func openHealthSettings(_ app: XCUIApplication) {
@@ -52,6 +95,12 @@ final class HealthUITests: ExerlyUITestCase {
                 if all.exists { all.tap() } else { app.buttons["Turn On All"].firstMatch.tap() }
             }
             allow.tap()
+        }
+        // History is previewed before it's imported.
+        let importButton = app.buttons["health.preview.import"]
+        if importButton.waitForExistence(timeout: 10) {
+            if designCapture { capture(app, "health-preview-\(identifier)") }
+            importButton.tap()
         }
         await wait(for: toggle, "value == %@", "1", timeout: 15)
     }
@@ -110,8 +159,49 @@ final class HealthUITests: ExerlyUITestCase {
         XCTAssertFalse(app.descendants(matching: .any)["health.prompt"].exists, "The offer is gone once weigh-ins flow")
         let row = app.buttons["body.weighIn.\(today)"]
         reveal(row, in: app)
-        XCTAssertEqual(row.label, "Weigh-in, Today, 71.8 kilograms")
+        // Read with its time, body fat and source, so two readings on one day differ.
+        XCTAssertTrue(row.label.hasPrefix("Weigh-in, Today at "), row.label)
+        XCTAssertTrue(row.label.hasSuffix(", 71.8 kilograms, 21.4 percent body fat, from Apple Health"), row.label)
         if designCapture { capture(app, "health-body") }
+    }
+
+    /// Opt-in: the recovery switches with seeded nights, and the preview
+    /// before food from other apps is imported.
+    func testRecoveryAndImportPreviewCapture() async throws {
+        guard designCapture else { throw XCTSkip("Opt-in visual review of Health's recovery and import preview") }
+        try await control([:])
+        let person = try await createAccount(prefix: "health-recovery", units: "metric")
+        let app = launchWithHealth(seed: "71.8|21.4|0|07:10;72.1||3|07:05", recovery: true)
+        signIn(app, email: person.email)
+        openHealthSettings(app)
+        for signal in ["sleep", "hrv", "restingHeartRate"] {
+            let toggle = app.switches["health.recovery.\(signal)"]
+            reveal(toggle, in: app)
+            await turnOn("health.recovery.\(signal)", in: app)
+        }
+        let sleep = app.descendants(matching: .any)["health.recovery.sleep.value"]
+        reveal(sleep, in: app)
+        XCTAssertTrue(sleep.waitForExistence(timeout: 15), app.debugDescription)
+        capture(app, "health-recovery")
+        let restingHeartRate = app.descendants(matching: .any)["health.recovery.restingHeartRate.value"]
+        reveal(restingHeartRate, in: app)
+        capture(app, "health-recovery-resting")
+
+        let weights = app.switches["health.readWeights"]
+        reveal(weights, in: app)
+        tap(weights, in: app)
+        let allow = app.buttons["Allow"]
+        if allow.waitForExistence(timeout: 6) {
+            // All of them, so the synthetic scale readings can be written for the preview.
+            let all = app.cells["UIA.Health.AuthSheet.AllCategoryButton"]
+            if all.exists { all.tap() } else if app.buttons["Turn On All"].exists { app.buttons["Turn On All"].firstMatch.tap() }
+            allow.tap()
+        }
+        XCTAssertTrue(app.buttons["health.preview.import"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertEqual(app.staticTexts["health.preview.adding"].label, "2 weigh-ins")
+        capture(app, "health-preview-weigh-ins")
+        tap(app.buttons["health.preview.cancel"], in: app)
+        XCTAssertEqual(weights.value as? String, "0", "Cancelling reads nothing in")
     }
 
     private func relaunch(_ app: XCUIApplication) {

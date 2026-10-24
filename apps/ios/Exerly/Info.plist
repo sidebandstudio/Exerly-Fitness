@@ -72,6 +72,21 @@
 				<string>com.exerly.fitness.recipe</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Workout or nutrition export</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.comma-separated-values-text</string>
+				<string>public.tab-separated-values-text</string>
+				<string>org.openxmlformats.spreadsheetml.sheet</string>
+				<string>public.json</string>
+			</array>
+		</dict>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
@@ -100,9 +115,9 @@
 		</dict>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Exerly uses the camera to scan food barcodes and read nutrition labels on your device.</string>
+	<string>Exerly uses the camera to scan food barcodes, read nutrition labels on your device, and take progress photos that stay on this iPhone.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Exerly reads weight and body fat to add your scale's weigh-ins to your trend weight, and steps and active energy to show your daily activity. You choose each in Exerly's Apple Health settings.</string>
+	<string>Exerly reads weight and body fat to add your scale's weigh-ins to your trend weight, food and workouts other apps saved, to add to your diary and activity after you review them, steps and active energy to show your daily activity, and sleep, heart rate variability and resting heart rate to show your recovery. You choose each in Exerly's Apple Health settings, and Health data is never used for advertising.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Exerly saves the food, weigh-ins and workouts you choose to Apple Health, and updates or removes them when you edit or delete them in Exerly.</string>
 	<key>NSLocalNetworkUsageDescription</key>

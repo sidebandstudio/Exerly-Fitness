@@ -49,6 +49,14 @@ struct NutritionEntryEditor: View {
             preferredUnit: unit, timeZone: timeZone))
     }
 
+    /// An entry imported from Health: where it came from, and what else
+    /// Health has for its day.
+    private var healthSourceLines: [String] {
+        guard let editing, let record = workspace.healthImports.records[editing.id], record.kind == .food,
+              record.state == .imported else { return [] }
+        return record.sourceLines
+    }
+
     var body: some View {
         NavigationStack {
             ScrollViewReader { scroll in
@@ -165,7 +173,10 @@ struct NutritionEntryEditor: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(draft.food.name).font(.exH3).foregroundStyle(Color.exTextPrimary)
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
-            if let origin = FoodFormat.origin(of: draft.snapshot) {
+            let fromHealth = healthSourceLines
+            if !fromHealth.isEmpty {
+                HealthSourceLines(lines: fromHealth).font(.exCaption)
+            } else if let origin = FoodFormat.origin(of: draft.snapshot) {
                 Text(origin).font(.exCaption).foregroundStyle(Color.exTextSecondary)
             }
         }

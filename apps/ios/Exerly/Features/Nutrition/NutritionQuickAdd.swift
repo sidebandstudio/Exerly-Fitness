@@ -97,6 +97,7 @@ struct NutritionQuickAddView: View {
                     Text("Calories, macros, or both. Leave a value blank if you don't know it; 0 means none.")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 }
+                .exFieldOrder(["nutrition.quick.energy", "nutrition.quick.protein", "nutrition.quick.carbohydrate", "nutrition.quick.fat"])
                 TextField("Name (optional)", text: $draft.name, prompt: Text("Name, e.g. Restaurant lunch").foregroundColor(.exTextSecondary))
                     .font(.exBody).focused($naming).submitLabel(.done).onSubmit { naming = false }
                     .padding(ExSpacing.content).background(Color.exSurface2, in: RoundedRectangle(cornerRadius: ExRadius.control))

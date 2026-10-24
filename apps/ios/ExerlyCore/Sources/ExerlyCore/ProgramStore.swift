@@ -143,10 +143,16 @@ extension ProgramStore: DocumentHost {
     }
 
     public func validate(kind: String, id: String, payload: Data) throws {
+        try validate(kind: kind, id: id, payload: payload, library: training.library)
+    }
+
+    /// Checked against `library`, which can hold custom exercises saved in
+    /// the same unit, as an import's are.
+    func validate(kind: String, id: String, payload: Data, library: ExerciseLibrary) throws {
         guard kind == Self.kind else { throw DocumentError(message: "Unknown kind \(kind)") }
         let program = try ExerlyJSON.decoder.decode(Program.self, from: payload)
         guard program.id.uuidString == id else { throw DocumentError(message: "The program ID doesn't match") }
-        let errors = program.validationErrors(library: training.library)
+        let errors = program.validationErrors(library: library)
         guard errors.isEmpty else { throw DocumentError(message: errors.joined(separator: "; ")) }
     }
 

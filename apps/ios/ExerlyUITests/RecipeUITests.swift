@@ -580,14 +580,16 @@ final class RecipeUITests: ExerlyUITestCase {
         XCTAssertEqual(unmatched.label, "1 line not matched")
         capture(app, "import-02-review")
         XCTAssertEqual(app.descendants(matching: .any)["recipe.name"].value as? String, "Synthetic black bean bowl")
-        for (id, amount, line) in [("usda:2707359", "1 can (15 oz), 770", "1 (15 oz) can black beans, drained and rinsed"),
-                                   ("usda:2708402", "1 cup, cooked · 158 g", "1 cup cooked rice"),
-                                   ("usda:2710186", "2 × 1 tbsp", "2 tbsp olive oil"), ("usda:2709170", "1 fruit · 65 g", "1 lime, juiced")] {
+        // Canned beans without added fat, drained to about 60 % of the can: 255 g, 342 kcal, to check.
+        for (id, amount, line, exact) in [("usda:2707363", "1 can, drained (9 oz), 342", "1 (15 oz) can black beans, drained and rinsed", false),
+                                          ("usda:2708402", "1 cup, cooked · 158 g", "1 cup cooked rice", true),
+                                          ("usda:2710186", "2 × 1 tablespoon", "2 tbsp olive oil", true),
+                                          ("usda:2709170", "1 fruit · 65 g", "1 lime, juiced", true)] {
             let row = app.buttons["recipe.ingredient.\(id)"]
             reveal(row, in: app)
             XCTAssertTrue(row.exists, app.debugDescription)
             XCTAssertTrue(row.label.contains(amount) && row.label.hasSuffix("from \(line)"), row.label)
-            XCTAssertFalse(row.label.contains("not checked"), "Read exactly from the line: \(row.label)")
+            XCTAssertEqual(row.label.contains("not checked"), !exact, row.label)
         }
         let two = app.buttons["2"]
         reveal(two, in: app)
@@ -605,7 +607,7 @@ final class RecipeUITests: ExerlyUITestCase {
         XCTAssertTrue(add.label.hasPrefix("Add 3 oz"), "At the line's amount: \(add.label)")
         capture(app, "import-03-resolve")
         tap(add, in: app)
-        tap(app.buttons["nutrition.reviewPlate"], in: app)
+        // One line, one food: straight back to the recipe.
         XCTAssertTrue(unmatched.waitForNonExistence(timeout: 5))
         let tempehRow = app.buttons["recipe.ingredient.\(tempeh.id)"]
         reveal(tempehRow, in: app)
@@ -614,11 +616,16 @@ final class RecipeUITests: ExerlyUITestCase {
         reveal(source, in: app)
         XCTAssertEqual(source.label, "From 127.0.0.1")
         capture(app, "import-04-resolved")
+        // The drained beans are an estimate: Save opens them to check first.
+        tap(app.buttons["recipe.save"], in: app)
+        let confirm = app.buttons["recipe.ingredientConfirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        tap(confirm, in: app)
         tap(app.buttons["recipe.save"], in: app)
 
         let saved = app.descendants(matching: .any)["nutrition.librarySaved"]
         XCTAssertTrue(saved.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertEqual(tapCount, 8, "Create, Import recipe, Import, the refused Save, Search, + the tempeh, Review, Save")
+        XCTAssertEqual(tapCount, 9, "Create, Import recipe, Import, the refused Save, Search, + the tempeh, Save, Done, Save")
         let bowl = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "nutrition.libraryFood.",
                                                     "Synthetic black bean bowl")).firstMatch
         reveal(bowl, in: app)
@@ -626,6 +633,84 @@ final class RecipeUITests: ExerlyUITestCase {
         let yield = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Makes 2 servings")).firstMatch
         XCTAssertTrue(yield.waitForExistence(timeout: 5), "Its yield, from the page")
         XCTAssertTrue(app.buttons["recipe.source"].waitForExistence(timeout: 5), "Credited to its page")
+    }
+
+    /// Code-blind run 7: "2 tbsp olive oil" matched the person's own olive
+    /// oil, which names no serving, and came in as 4 oz (about 1,000 kcal).
+    /// It weighs by an oil's density, and the ingredient sheet offers spoons
+    /// and cups beside grams and ounces.
+    func testAnImportedSpoonOfTheirOwnOilWeighsByDensity() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-import-oil")
+        let oil = SeedFood(name: "Olive oil", per100g: ["energy": 884, "protein": 0, "carbohydrate": 0, "fat": 100])
+        let payload: [String: Any] = ["id": oil.id, "name": oil.name, "source": "custom", "per100g": oil.per100g,
+                                      "servings": [], "favorite": false, "createdAt": "2026-10-01T12:00:00.000Z"]
+        _ = try await request("PUT", "/v1/documents/saved_food/\(oil.id)", body: ["base_revision": 0, "payload": payload], token: person.token)
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openFoodLibrary(app)
+        importBeanBowl(app)
+
+        XCTAssertTrue(app.descendants(matching: .any)["recipe.unmatched"].waitForExistence(timeout: 15), app.debugDescription)
+        let row = app.buttons["recipe.ingredient.\(oil.id)"]
+        reveal(row, in: app)
+        XCTAssertTrue(row.exists, app.debugDescription)
+        // 2 × 14.8 ml × 0.91 g/ml = 27 g, 238 kcal.
+        XCTAssertTrue(row.label.hasPrefix("Olive oil, 2 × 1 tbsp · 27 g, 238 kilocalories"), row.label)
+        XCTAssertFalse(row.label.contains("not checked"), row.label)
+        capture(app, "import-05-own-oil")
+        tap(row, in: app)
+        XCTAssertTrue(app.buttons["recipe.ingredientConfirm"].waitForExistence(timeout: 5))
+        for measure in ["Grams", "Ounces", "1 tbsp, 13 g each", "1 tsp, 4.5 g each", "1 cup, 215 g each"] {
+            XCTAssertTrue(app.buttons[measure].exists, "\(measure) in \(app.buttons.allElementsBoundByIndex.map(\.label))")
+        }
+        XCTAssertTrue(app.buttons["1 tbsp, 13 g each"].isSelected)
+        capture(app, "import-06-oil-measures")
+        tap(app.buttons["1 tsp, 4.5 g each"], in: app)
+        tap(app.buttons["recipe.ingredientCancel"], in: app)
+    }
+
+    /// Code-blind run 7 made a food for an unmatched line, hiding the keypad
+    /// to reach each number; it came in at 4 oz rather than the line's 3 oz,
+    /// back in search. Next moves between the numbers, the food comes in at
+    /// 3 oz, and the recipe is back.
+    func testAFoodMadeForAnUnmatchedLineComesInAtTheLinesAmount() async throws {
+        try await control([:])
+        let person = try await createAccount(prefix: "recipe-import-new", units: "imperial")
+        let app = launch(resetSession: true)
+        signIn(app, email: person.email)
+        openFoodLibrary(app)
+        importBeanBowl(app)
+        let unmatched = app.descendants(matching: .any)["recipe.unmatched"]
+        XCTAssertTrue(unmatched.waitForExistence(timeout: 15), app.debugDescription)
+        tap(app.buttons["recipe.unmatchedSearch.0"], in: app)
+        let create = app.buttons["nutrition.createFood"]
+        reveal(create, in: app)
+        tap(create, in: app)
+        let name = app.textFields["nutrition.foodName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        replace(name, with: "Synthetic smoky tempeh", in: app)
+        XCTAssertEqual(name.label, "Food name", "Still labelled once filled")
+        let fields = ["energy": "192", "protein": "20", "carbohydrate": "8", "fat": "11"]
+        dismissKeyboard(app)
+        let energy = app.textFields["nutrition.nutrient.energy"]
+        reveal(energy, in: app)
+        tap(energy, in: app)
+        XCTAssertTrue(app.buttons["exerly.keypadNext"].waitForExistence(timeout: 5), "Next, with a field after this one")
+        for (index, nutrient) in ["energy", "protein", "carbohydrate", "fat"].enumerated() {
+            app.typeText(fields[nutrient]!)
+            XCTAssertEqual(app.textFields["nutrition.nutrient.\(nutrient)"].value as? String, fields[nutrient])
+            if index < 3 { tap(app.buttons["exerly.keypadNext"], in: app) }
+        }
+        capture(app, "import-07-new-food-next")
+        tap(app.buttons["nutrition.saveFood"], in: app)
+
+        let tempeh = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+                                                      "recipe.ingredient.", "Synthetic smoky tempeh, 3 oz")).firstMatch
+        XCTAssertTrue(unmatched.waitForNonExistence(timeout: 10), "Back in the recipe, the line resolved")
+        reveal(tempeh, in: app)
+        XCTAssertTrue(tempeh.exists, app.debugDescription)
+        XCTAssertFalse(app.buttons["nutrition.reviewPlate"].exists)
     }
 
     /// One person saves a recipe to Files from the share sheet; another, on

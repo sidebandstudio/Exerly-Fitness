@@ -147,8 +147,11 @@ public struct HealthFoodRecord: HealthRecord {
     /// Amounts above zero of the nutrients Health has a type for, sorted by type.
     public var quantities: [HealthQuantity]
 
-    /// The entry as Health holds it, or nil when it reports nothing Health can hold.
+    /// The entry as Health holds it, or nil when it reports nothing Health
+    /// can hold or came from Health.
     public init?(entry: FoodEntry, timeZone: TimeZone) {
+        // Read from Health: Health stays its source.
+        guard !entry.food.foodID.hasPrefix(HealthHistory.foodIDPrefix) else { return nil }
         let nutrients = entry.nutrients
         let quantities = Nutrient.healthWritable.compactMap { nutrient -> HealthQuantity? in
             guard let type = nutrient.healthType, let value = nutrients[nutrient], value.isFinite, value > 0 else { return nil }

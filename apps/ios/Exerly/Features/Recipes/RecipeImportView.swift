@@ -95,7 +95,7 @@ struct RecipeImportView: View {
             do {
                 let page = try await api.importRecipe(from: url)
                 // Without matches every line is left to search for, which is still a start.
-                let found = (try? await api.matchFoods(page.ingredients.map { IngredientLine($0).food })) ?? []
+                let found = (try? await api.matchFoods(page.ingredients.map { IngredientLine($0).match })) ?? []
                 guard !Task.isCancelled else { return }
                 finish(RecipeImport(page: page, own: store.foods, database: found, unit: unit))
             } catch ExerlyCore.APIError.server(_, let message) {

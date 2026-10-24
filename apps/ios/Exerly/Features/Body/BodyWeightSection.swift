@@ -1,19 +1,34 @@
 import ExerlyCore
 import SwiftUI
 
-/// Progress → Body's weight: the trend chart with its band and readings,
-/// change and rate over a chosen span, expenditure with its uncertainty, and
-/// every weigh-in, each editable.
-struct BodyWeightSection: View {
+/// Progress → Body's weight: the trend chart with its band and readings, the
+/// goal and its planned path, change and rate over a chosen span, what the
+/// trend rests on, expenditure with its uncertainty, and every weigh-in, each
+/// editable. `measurements` sits between the goal and expenditure.
+/// Places on Progress → Body its screen scrolls to.
+enum BodyWeightSectionID {
+    static let weighIns = "body.weighIns"
+}
+
+struct BodyWeightSection<Measurements: View>: View {
     @ObservedObject var workspace: TrainingWorkspace
     let unit: MassUnit
     let timeZone: TimeZone
     let onWeighIn: () -> Void
     let onEdit: (WeightEntry) -> Void
     let onDelete: (WeightEntry) -> Void
+    /// A weigh-in deleted from a sheet opened here.
+    let onDeleted: (WeightEntry) -> Void
+    let onEditGoal: () -> Void
+    /// Opens the goal editor at an empty goal weight.
+    let onAddGoalWeight: () -> Void
+    /// Scrolls the screen to the weigh-ins (`BodyWeightSectionID.weighIns`).
+    let onShowWeighIns: () -> Void
+    @ViewBuilder var measurements: Measurements
     @AppStorage("body.weightRange") private var range: BodyRange = .quarter
     @State private var selection: LocalDate?
     @State private var showsAll = false
+    @State private var explaining = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -25,9 +40,13 @@ struct BodyWeightSection: View {
                 let start = range.start(today: today, first: estimates.first?.date)
                 let points = WeightTrend.series(estimates, from: start, through: today)
                 let readings = store.weights.filter { $0.date >= start && $0.date <= today }
-                trendCard(summary, estimates: estimates, points: points, readings: readings, start: start, today: today)
+                let goals = WeightGoal.stretches(store.versionsInForce, estimates: estimates, from: start, through: today)
+                trendCard(summary, estimates: estimates, points: points, readings: readings, goals: goals, start: start, today: today)
+                BodyGoalCard(plan: store.plan(on: today), stretch: goals.last { $0.end == today }, summary: summary, unit: unit,
+                             today: today, onEdit: onEditGoal, onAddGoalWeight: onAddGoalWeight)
                 // Under the chart: above it, the offer pushed the chart off an SE's first screen (run 6).
                 HealthWeighInPrompt()
+                measurements
                 expenditureCard(summary.expenditure, points: points)
                 history(store.weights.reversed(), today: today)
             } else {
@@ -36,62 +55,105 @@ struct BodyWeightSection: View {
                              message: "Weigh in a few mornings a week. Exerly turns the readings into a trend weight, "
                                 + "then into your expenditure once you've logged food for a while.",
                              action: "Weigh in", actionID: "body.weighIn", perform: onWeighIn)
+                measurements
             }
+        }
+        .sheet(isPresented: $explaining) {
+            TrendExplanationSheet(workspace: workspace, unit: unit, timeZone: timeZone, onDeleted: onDeleted)
         }
     }
 
     // MARK: Trend
 
     private func trendCard(_ summary: WeightTrend.Summary, estimates: [EnergyBalance.Estimate], points: [WeightTrend.Point],
-                           readings: [WeightEntry], start: LocalDate, today: LocalDate) -> some View {
+                           readings: [WeightEntry], goals: [WeightGoal.Stretch], start: LocalDate, today: LocalDate) -> some View {
         ExCard {
             BodyCardHeader(title: "Trend weight") { WeighInButton(identifier: "body.weighIn", action: onWeighIn) }
-            readout(summary, points: points, today: today)
+            readout(summary, points: points, goals: goals, today: today)
             rangePicker
             if summary.weighInDays >= 2, points.count >= 2 {
                 let shown = range.phrase(start: start, firstShown: points.first?.date)
-                WeightTrendChart(points: points, readings: readings, unit: unit, range: range, selection: $selection)
+                WeightTrendChart(points: points, readings: readings, unit: unit, range: range, goals: goals, selection: $selection)
                     // 200, so the legend under it is on an SE's first screen too (run 6).
                     .frame(height: typeSize.isAccessibilitySize ? 280 : 200)
                     .accessibilityLabel("Weight trend, \(shown == range.phrase ? range.spoken : shown)")
                     .accessibilityValue(chartSummary(summary, points: points, readings: readings, shown: shown))
                     .accessibilityIdentifier("body.chart")
-                legend
+                legend(gaps: WeightTrend.runs(points).contains { !$0.measured }, plan: !goals.isEmpty,
+                       goal: goals.contains { $0.goal.goalWeight != nil })
             } else {
                 Text("The chart starts with your second weigh-in. Until then the trend is your one reading.")
                     .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
             }
             rangeStats(estimates, points: points, readings: readings, start: start, today: today)
+            // Run 7 found past readings only by tapping the trend number.
+            Button(action: onShowWeighIns) {
+                HStack {
+                    Label("All \(workspace.nutrition.weights.count) weigh-ins", systemImage: "list.bullet")
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.caption.weight(.semibold)).accessibilityHidden(true)
+                }
+                .font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText).frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Shows every weigh-in, to edit or delete one")
+            .accessibilityIdentifier("body.allWeighIns")
         }
     }
 
-    /// The current trend, or the touched day's values while scrubbing.
+    /// The current trend, or the touched day's values while scrubbing. Tapping
+    /// it shows what the trend rests on.
     @ViewBuilder
-    private func readout(_ summary: WeightTrend.Summary, points: [WeightTrend.Point], today: LocalDate) -> some View {
+    private func readout(_ summary: WeightTrend.Summary, points: [WeightTrend.Point], goals: [WeightGoal.Stretch],
+                         today: LocalDate) -> some View {
         let picked = selection.flatMap { day in points.first { $0.date == day } }
         let trend = picked?.trend ?? summary.trend
         let error = picked?.trendError ?? summary.trendError
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(BodyFormat.weight(trend, unit, withUnit: false)).font(.exStat).monospacedDigit()
-                    .foregroundStyle(Color.exTextPrimary).contentTransition(.numericText(value: trend))
-                Text(unit.rawValue).font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
-                Text("±\(BodyFormat.number(Mass.kg(error).value(in: unit)))").font(.exLabel).foregroundStyle(Color.exTextMuted)
+        let detail = readoutDetail(picked, summary: summary, goals: goals, today: today)
+        Button { explaining = true } label: {
+            HStack(alignment: .top, spacing: ExSpacing.small) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(BodyFormat.weight(trend, unit, withUnit: false)).font(.exStat).monospacedDigit()
+                            .foregroundStyle(Color.exTextPrimary).contentTransition(.numericText(value: trend))
+                        Text(unit.rawValue).font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
+                        Text("±\(BodyFormat.number(Mass.kg(error).value(in: unit)))").font(.exLabel).foregroundStyle(Color.exTextMuted)
+                    }
+                    Text(detail).font(.exCaption).foregroundStyle(Color.exTextSecondary)
+                        .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                    // At the largest sizes the number fills the row, so the way in is a line of its own.
+                    if typeSize.isAccessibilitySize {
+                        Label("What it rests on", systemImage: "info.circle").font(.exLabel).foregroundStyle(Color.exPrimaryText)
+                    }
+                }
+                Spacer(minLength: 0)
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: "info.circle").font(.body.weight(.medium)).foregroundStyle(Color.exPrimaryText)
+                        .frame(width: 28, height: 28).accessibilityHidden(true)
+                }
             }
-            Text(readoutDetail(picked, summary: summary, today: today)).font(.exCaption).foregroundStyle(Color.exTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .ignore)
+        .buttonStyle(.plain)
         .accessibilityLabel("Trend weight \(BodyFormat.spokenWeight(trend, unit)), give or take "
-            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). \(readoutDetail(picked, summary: summary, today: today, spoken: true))")
+            + "\(BodyFormat.number(Mass.kg(error).value(in: unit))). "
+            + readoutDetail(picked, summary: summary, goals: goals, today: today, spoken: true))
+        .accessibilityHint("Double-tap to see the readings it rests on")
         .accessibilityIdentifier("body.trend")
     }
 
-    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, today: LocalDate, spoken: Bool = false) -> String {
+    private func readoutDetail(_ picked: WeightTrend.Point?, summary: WeightTrend.Summary, goals: [WeightGoal.Stretch],
+                               today: LocalDate, spoken: Bool = false) -> String {
         let store = workspace.nutrition
         if let picked {
             let day = BodyFormat.day(picked.date, today: today)
-            return picked.reading.map { "\(day) · scale \(BodyFormat.weight($0, unit))" } ?? "\(day) · no weigh-in"
+            var parts = [picked.reading.map { "\(day) · scale \(BodyFormat.weight($0, unit))" } ?? "\(day) · no weigh-in"]
+            // The goal that applied that day, not today's.
+            if let goal = goals.last(where: { $0.start <= picked.date && $0.end >= picked.date }), picked.date >= goal.anchor {
+                parts.append("planned \(BodyFormat.weight(goal.planned(on: picked.date), unit))")
+                if let weight = goal.goal.goalWeight { parts.append("goal \(BodyFormat.reading(weight, unit))") }
+            }
+            return parts.joined(separator: " · ")
         }
         var parts: [String] = []
         if let week = summary.weekChange { parts.append(spoken ? BodyCopy.spokenWeekChange(week, unit) : BodyCopy.weekChange(week, unit)) }
@@ -128,22 +190,42 @@ struct BodyWeightSection: View {
         }
     }
 
-    private var legend: some View {
-        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: ExSpacing.tight))
-            : AnyLayout(HStackLayout(spacing: ExSpacing.item))
-        return layout {
+    private func legend(gaps: Bool, plan: Bool, goal: Bool) -> some View {
+        var spoken = "Dots are scale readings, the line is the trend, and the shading is its likely range."
+        if gaps { spoken += " Where the trend is dashed there were no weigh-ins, so it's an estimate." }
+        if plan { spoken += " The grey dashed line is the path your goal planned." }
+        if goal { spoken += " The pink dotted line is the goal weight." }
+        return ExFlowLayout(spacing: ExSpacing.small) {
             legendItem { Circle().fill(Color.exTextSecondary.opacity(0.6)).frame(width: 6, height: 6) } label: { Text("Scale") }
             legendItem {
                 Capsule().fill(LinearGradient(colors: [.exPrimary, .exAccent], startPoint: .leading, endPoint: .trailing))
                     .frame(width: 14, height: 3)
             } label: { Text("Trend") }
+            if gaps {
+                legendItem { dash(Color.exPrimary.opacity(0.7), dash: [3, 2.5]) } label: { Text("No weigh-ins") }
+            }
             legendItem {
                 RoundedRectangle(cornerRadius: 2).fill(Color.exPrimary.opacity(0.25)).frame(width: 14, height: 8)
             } label: { Text("Likely range (±1 SD)") }
+            if plan {
+                legendItem { dash(Color.exTextSecondary.opacity(0.8), dash: [4, 3]) } label: { Text("Planned") }
+            }
+            if goal {
+                legendItem { dash(Color.exAccent, dash: [1.5, 2]) } label: { Text("Goal") }
+            }
         }
         .font(.exSmall).foregroundStyle(Color.exTextMuted)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Dots are scale readings, the line is the trend, and the shading is its likely range.")
+        .accessibilityLabel(spoken)
+    }
+
+    private func dash(_ color: Color, dash: [CGFloat]) -> some View {
+        Path { path in
+            path.move(to: CGPoint(x: 0, y: 1.5))
+            path.addLine(to: CGPoint(x: 16, y: 1.5))
+        }
+        .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: dash))
+        .frame(width: 16, height: 3)
     }
 
     private func legendItem(@ViewBuilder symbol: () -> some View, @ViewBuilder label: () -> Text) -> some View {
@@ -202,11 +284,7 @@ struct BodyWeightSection: View {
             ExEyebrow("Expenditure")
             if value.isMeasured {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(BodyFormat.kcal(value.kcal)).font(.exStat).monospacedDigit().foregroundStyle(Color.exTextPrimary)
-                        Text("kcal a day").font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
-                        Text("±\(BodyFormat.kcal(value.error))").font(.exLabel).foregroundStyle(Color.exTextMuted)
-                    }
+                    ExFigure(value: BodyFormat.kcal(value.kcal), unit: "kcal a day", detail: "±\(BodyFormat.kcal(value.error))")
                     Text("Likely \(BodyFormat.kcal(value.kcal - value.error)) to \(BodyFormat.kcal(value.kcal + value.error)) kcal a day")
                         .font(.exCaption).foregroundStyle(Color.exTextSecondary)
                 }
@@ -268,7 +346,7 @@ struct BodyWeightSection: View {
     private func history(_ entries: [WeightEntry], today: LocalDate) -> some View {
         let shown = showsAll ? entries : Array(entries.prefix(10))
         return VStack(alignment: .leading, spacing: ExSpacing.item) {
-            ExSectionHeading("Weigh-ins", detail: "\(entries.count)")
+            ExSectionHeading("Weigh-ins", detail: "\(entries.count)").id(BodyWeightSectionID.weighIns)
             VStack(spacing: 0) {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
                     if index > 0 { Rectangle().fill(Color.exBorder.opacity(0.5)).frame(height: 0.5).padding(.leading, ExSpacing.content) }
@@ -324,7 +402,7 @@ struct BodyWeightSection: View {
                 Button("Delete", systemImage: "trash", role: .destructive) { onDelete(entry) }
             }
         }
-        .accessibilityLabel("Weigh-in, \(day), \(BodyFormat.spokenReading(entry.weight, unit))")
+        .accessibilityLabel(BodyFormat.spokenWeighIn(entry, day: day, unit: unit, timeZone: timeZone))
         .accessibilityHint("Double-tap to edit")
         .accessibilityAction(named: "Delete") { if entry.source != .appleHealth { onDelete(entry) } }
         .accessibilityIdentifier("body.weighIn.\(entry.date)")

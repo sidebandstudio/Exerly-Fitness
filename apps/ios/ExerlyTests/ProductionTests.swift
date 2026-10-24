@@ -1335,6 +1335,39 @@ final class ProductionTests: XCTestCase {
         XCTAssertNil(TrendResponseDTO.savedWeights([], from: "2026-08-01", to: "2026-08-07").summary)
     }
 
+    func testWaterComesOffDownToZeroAndTheLogWaterShortcutUsesTheSameQueue() async throws {
+        let token = "e30.eyJzdWIiOiJhIn0.fixture"
+        keychain.saveSession(token: token, refreshToken: "fixture-refresh")
+        StubURLProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self), configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false, observeClock: false)
+        let user = UserDTO(id: "a", email: "a@exerly.test", timezone: "UTC", unitSystem: "metric", waterGoalMl: 2000)
+        defaults.set(try JSONEncoder().encode(user), forKey: APIClient.accountCacheKey(token))
+        func log(_ amount: Double?, token: String? = token) async throws -> String {
+            try await LoggingActions.logWater(amount, sync: engine, container: container, token: token, defaults: defaults)
+        }
+        // With no screen open, the shortcut opens the signed-in account's queue.
+        XCTAssertFalse(engine.isConfigured(for: "a"))
+        let glass = try await log(nil)
+        XCTAssertEqual(glass, "Logged 250 ml of water. 250 ml today, 1,750 ml to go.")
+        XCTAssertTrue(engine.isConfigured(for: "a"))
+        let bottle = try await log(500)
+        XCTAssertEqual(bottle, "Logged 500 ml of water. 750 ml today, 1,250 ml to go.")
+        // Taking off more than the day has stops at zero and queues only what was there.
+        let day = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(try engine.addWater(XCTUnwrap(day.water), milliliters: -1000), -750)
+        let emptied = try await engine.diary(for: engine.today, cachedOnly: true)
+        XCTAssertEqual(emptied.waterMl, 0)
+        XCTAssertThrowsError(try engine.addWater(XCTUnwrap(emptied.water), milliliters: -250), "Nothing left to take off")
+        let deltas = try ModelContext(container).fetch(FetchDescriptor<PendingMutation>())
+            .compactMap { try JSONSerialization.jsonObject(with: $0.payload) as? [String: Any] }.compactMap { $0["deltaMl"] as? Int }
+        XCTAssertEqual(deltas.sorted(), [-750, 250, 500])
+        do { _ = try await log(9000); XCTFail("Too much at once") } catch {
+            XCTAssertEqual(error as? LoggingIntentError, .invalid("Enter a whole number from 1 to 5,000 ml."))
+        }
+        do { _ = try await log(nil, token: nil); XCTFail("Signed out") } catch { XCTAssertEqual(error as? LoggingIntentError, .signedOut) }
+    }
+
     func testWaterAdditionsSurviveLostAcknowledgementRelaunchAndAnotherDevice() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let url = FileManager.default.temporaryDirectory.appending(path: "water-\(UUID().uuidString).store")
@@ -1925,6 +1958,53 @@ final class ProductionTests: XCTestCase {
         XCTAssertTrue(other.sleepEntries?.isEmpty == true)
     }
 
+    /// An activity imported from Health is recognised as changed when its
+    /// minutes or its type change, and as unchanged after the server's copy
+    /// of it comes back: whole numbers without a point, nulls for what wasn't
+    /// given, and the server's own columns beside them.
+    func testAnImportedActivitysFingerprintFollowsItsMinutesAndTypeThroughTheServer() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        let day = testToday.rawValue
+        var rows: [String: [String: Any]] = [:]
+        StubURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync" { return (200, Data(#"{"changes":[],"cursor":0,"has_more":false}"#.utf8)) }
+            if request.httpMethod == "GET" { return (200, try JSONSerialization.data(withJSONObject: Array(rows.values))) }
+            // As routes/activities.js and lib/versionedLogs.js keep and return it.
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.requestBody(request)) as? [String: Any])
+            let entity = try XCTUnwrap(body["client_id"] as? String)
+            let revision = (rows[entity]?["revision"] as? Int ?? 0) + 1
+            let minutes = try XCTUnwrap(body["duration_min"] as? Double)
+            rows[entity] = ["id": "server-\(entity)", "client_id": entity, "revision": revision, "account_id": "a",
+                            "email": "synthetic@example.com", "activity": body["activity"]!,
+                            "duration_min": minutes == minutes.rounded() ? Int(minutes) as Any : minutes as Any,
+                            "calories": body["calories"] ?? NSNull(), "intensity": body["intensity"] ?? NSNull(),
+                            "type": body["type"] ?? NSNull(), "entry_date": body["entry_date"]!, "revision_locked": true,
+                            "created_at": "2026-10-20T08:00:00.000Z", "updated_at": "2026-10-20T08:00:00.000Z", "deleted_at": NSNull()]
+            return (revision == 1 ? 201 : 200, try JSONSerialization.data(withJSONObject: rows[entity]!))
+        }
+        let container = try ModelContainer(for: Schema(versionedSchema: ExerlySchemaV3.self), configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let engine = SyncEngine(api: api, monitorNetwork: false, automaticallySync: false)
+        engine.configure(container: container, accountID: "a")
+        let id = UUID().uuidString.lowercased()
+        try engine.saveImportedActivity(ActivityRequest(type: "Running", duration: 30, calories: 320, intensity: nil, entryDate: day,
+                                                        category: "health"), clientID: id)
+        let imported = try XCTUnwrap(engine.activityFingerprint(id))
+        await engine.synchronize(force: true)
+        let reached = await engine.refreshActivities(from: day, to: day)
+        XCTAssertTrue(reached)
+        XCTAssertEqual(engine.activityFingerprint(id), imported, "The server's copy is the activity as it was imported")
+        var entries = try await engine.activityEntries(from: day, to: day, cachedOnly: true)
+        var saved = try XCTUnwrap(entries.first)
+        try engine.saveActivity(ActivityRequest(type: "Running", duration: 35, calories: 320, intensity: nil, entryDate: day,
+                                                category: "health"), editing: saved)
+        XCTAssertNotEqual(engine.activityFingerprint(id), imported, "Its minutes changed")
+        entries = try await engine.activityEntries(from: day, to: day, cachedOnly: true)
+        saved = try XCTUnwrap(entries.first)
+        try engine.saveActivity(ActivityRequest(type: "Running", duration: 30, calories: 320, intensity: nil, entryDate: day,
+                                                category: "cardio"), editing: saved)
+        XCTAssertNotEqual(engine.activityFingerprint(id), imported, "Its type changed")
+    }
+
     func testActivityAndSleepReviewConflictsThenDeleteAndUndoTheSameRecord() async throws {
         keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
         let day = testToday.rawValue
@@ -2099,7 +2179,9 @@ final class ProductionTests: XCTestCase {
         saved.merge(values) { _, new in new }
         let user = UserDTO(id: "a", email: "preferences@exerly.test", name: PreferenceFields.text(saved["name"]!),
                            onboardingCompleted: true, height: 167.75, weight: 72.25,
-                           unitSystem: PreferenceFields.text(saved["unitSystem"]!), preferencesRevision: revision)
+                           unitSystem: PreferenceFields.text(saved["unitSystem"]!), preferencesRevision: revision,
+                           nutritionDisplay: saved["nutritionDisplay"].map(PreferenceFields.text),
+                           waterGoalMl: saved["waterGoalMl"].flatMap { if case .number(let ml) = $0 { Int(ml) } else { nil } })
         return PreferencesSnapshot(schemaVersion: 1, accountID: "a", revision: revision, values: saved, user: user)
     }
 
@@ -2131,6 +2213,251 @@ final class ProductionTests: XCTestCase {
         let otherEnvironment = PreferencesStore(accountID: "a", api: otherAPI, defaults: defaults, ownerIsActive: { true })
         XCTAssertNil(otherEnvironment.draft)
         XCTAssertNotEqual(otherEnvironment.storageKey, reopened.storageKey)
+    }
+
+    /// Done tapped while a reopened screen still refreshes used to close it
+    /// with the change unsent; the save now waits for the refresh.
+    func testAPreferenceSavedWhileTheScreenIsStillLoadingIsSent() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var patches = 0
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            patches += 1
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            remote = self.preferencesDocument(revision: 2, values: body.changes)
+            return (200, try JSONEncoder().encode(remote))
+        }
+        await PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true }).load()
+        // Reopened as a screen is: the saved draft shows while it refreshes.
+        let store = PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true })
+        let loading = Task { await store.load() }
+        for _ in 0..<50 where !store.isLoading { await Task.yield() }
+        XCTAssertTrue(store.isLoading)
+        store.edit("name", value: "Quick Taylor")
+        await store.save()
+        await loading.value
+        XCTAssertEqual(patches, 1, "Sent once the refresh finished, not dropped")
+        XCTAssertFalse(store.hasEdits)
+        XCTAssertEqual(store.draft?.base.revision, 2)
+    }
+
+    /// Review round 1: offline, a choice made in Customize Today or the water
+    /// sheet did nothing. It's kept at once, survives a relaunch, and is sent
+    /// once a request gets through, with only its own fields.
+    func testQuickPreferencesMadeOfflineAreKeptAndSentAloneOnceOnline() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var offline = true
+        var bodies: [PreferenceMutation] = []
+        StubURLProtocol.handler = { request in
+            if offline { throw URLError(.notConnectedToInternet) }
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            bodies.append(body)
+            XCTAssertEqual(body.baseRevision, remote.revision)
+            remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+            return (200, try JSONEncoder().encode(remote))
+        }
+        let later: [Duration] = [.seconds(3600)]
+        let quick = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later)
+        quick.set("nutritionDisplay", .string("consumed"))
+        await quick.waitForSend()
+        quick.set("waterGoalMl", .number(2662))
+        await quick.waitForSend()
+        XCTAssertTrue(quick.isWaitingForConnection)
+        XCTAssertTrue(quick.leadsWithEaten(nil), "Shown at once")
+        XCTAssertEqual(quick.waterGoal(nil), 2662)
+
+        var accepted: [PreferencesSnapshot] = []
+        let reopened = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later) { accepted.append($0) }
+        await reopened.waitForSend()
+        XCTAssertTrue(reopened.leadsWithEaten(nil), "Kept across a relaunch")
+        XCTAssertEqual(reopened.waterGoal(nil), 2662)
+        XCTAssertTrue(bodies.isEmpty)
+
+        offline = false
+        reopened.flush()
+        await reopened.waitForSend()
+        XCTAssertFalse(reopened.hasUnsent)
+        XCTAssertFalse(reopened.isWaitingForConnection)
+        XCTAssertEqual(Set(bodies.flatMap(\.changes.keys)), ["nutritionDisplay", "waterGoalMl"], "Only the two fields")
+        XCTAssertEqual(remote.values["nutritionDisplay"], .string("consumed"))
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(2662))
+        XCTAssertEqual(remote.values["name"], .string("Taylor"))
+        XCTAssertEqual(accepted.last?.revision, remote.revision)
+        let other = QuickPreferences(accountID: "b", api: api, defaults: defaults, retryDelays: later)
+        XCTAssertFalse(other.hasUnsent, "Each account keeps its own")
+    }
+
+    /// Review round 1: the water goal saved the whole Your details draft, an
+    /// unfinished name with it, and settled a conflict with that draft. It
+    /// sends only itself, over another device's save, and the draft and its
+    /// base stay as they were.
+    func testAQuickPreferenceSendsOnlyItselfAndLeavesTheDetailsDraftAlone() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var bodies: [(key: String, body: PreferenceMutation)] = []
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            bodies.append((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", body))
+            if bodies.count == 1 {
+                // Another device saves between the read and this write.
+                remote = self.preferencesDocument(revision: remote.revision + 1, values: ["name": .string("Other Device Taylor")])
+                return (409, Data(#"{"message":"Preferences changed"}"#.utf8))
+            }
+            guard body.baseRevision == remote.revision else { return (409, Data(#"{"message":"Preferences changed"}"#.utf8)) }
+            remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+            return (200, try JSONEncoder().encode(remote))
+        }
+        let details = PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true })
+        await details.load()
+        details.edit("name", value: "Unfinished Taylor")
+        let savedDraft = defaults.data(forKey: details.storageKey)
+
+        let quick = QuickPreferences(accountID: "a", api: api, defaults: defaults)
+        quick.set("waterGoalMl", .number(2662))
+        await quick.waitForSend()
+        XCTAssertEqual(bodies.count, 2, "Sent again over the other device's save")
+        XCTAssertTrue(bodies.allSatisfy { $0.body.changes == ["waterGoalMl": .number(2662)] }, "Only the goal, never the draft's name")
+        XCTAssertNotEqual(bodies[0].key, bodies[1].key, "A new write, not a replay of the refused one")
+        XCTAssertEqual(remote.values["name"], .string("Other Device Taylor"))
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(2662))
+        XCTAssertEqual(defaults.data(forKey: details.storageKey), savedDraft, "The unfinished draft is untouched")
+        let reopened = PreferencesStore(accountID: "a", api: api, defaults: defaults, ownerIsActive: { true })
+        XCTAssertEqual(reopened.draft?.fields["name"], "Unfinished Taylor")
+        XCTAssertEqual(reopened.draft?.base.revision, 1, "Its review still compares with what it started from")
+    }
+
+    /// A change made while one is sending waits for it and goes next, newest value only.
+    func testAQuickPreferenceChangedWhileSendingGoesNext() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var sent: [JSONValue?] = []
+        StubURLProtocol.responseDelay = { $0.httpMethod == "PATCH" ? 0.3 : 0 }
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: Self.requestBody(request))
+            sent.append(body.changes["waterGoalMl"])
+            remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+            return (200, try JSONEncoder().encode(remote))
+        }
+        let quick = QuickPreferences(accountID: "a", api: api, defaults: defaults)
+        quick.set("waterGoalMl", .number(2000))
+        for _ in 0..<200 where sent.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        quick.set("waterGoalMl", .number(2500))
+        quick.set("waterGoalMl", .number(3000))
+        await quick.waitForSend()
+        XCTAssertEqual(sent, [.number(2000), .number(3000)])
+        XCTAssertEqual(quick.waterGoal(nil), nil, "Nothing left unsent: the account's own value shows")
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3000))
+    }
+
+    /// Confirming review, P1: a queue kept from a session that ended still
+    /// retried, and after signing back into the same account it sent its
+    /// older goal over the one saved since and rewrote the account's queue.
+    func testSigningBackInStopsTheEndedSessionsQuickPreferenceQueue() async throws {
+        let token = Self.sessionToken()
+        keychain.saveSession(token: token, refreshToken: "fixture-refresh")
+        let account = #"{"_id":"a","email":"a@example.test","name":"Taylor","onboardingCompleted":true}"#
+        var remote = preferencesDocument()
+        var operations: [String: (body: Data, response: PreferencesSnapshot)] = [:]
+        var offline = true
+        StubURLProtocol.handler = { request in
+            if offline { throw URLError(.notConnectedToInternet) }
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/login"):
+                return (200, Data(#"{"token":"\#(token)","refreshToken":"login-refresh","user":\#(account)}"#.utf8))
+            case ("GET", "/api/preferences"):
+                return (200, try JSONEncoder().encode(remote))
+            case ("PATCH", "/api/preferences"):
+                // The server: a key replays its answer for the same body and refuses another one.
+                let key = request.value(forHTTPHeaderField: "Idempotency-Key") ?? ""
+                let raw = Self.requestBody(request)
+                if let previous = operations[key] {
+                    guard previous.body == raw else { return (409, Data(#"{"message":"This operation key was already used with different content"}"#.utf8)) }
+                    return (200, try JSONEncoder().encode(previous.response))
+                }
+                let body = try JSONDecoder().decode(PreferenceMutation.self, from: raw)
+                guard body.baseRevision == remote.revision else { return (409, Data(#"{"message":"Preferences changed"}"#.utf8)) }
+                remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+                operations[key] = (raw, remote)
+                return (200, try JSONEncoder().encode(remote))
+            default:
+                return (200, Data("{\"account\":\(account),\"account_id\":\"a\",\"onboarding\":{\"complete\":true,\"needs_repair\":false,\"user\":\(account)}}".utf8))
+            }
+        }
+        let auth = AuthViewModel(api: api, keychain: keychain, defaults: defaults, automaticallyCheck: false, onSessionInvalidated: {})
+        let ended = QuickPreferences.signedIn(accountID: "a", auth: auth, api: api, defaults: defaults, retryDelays: [.seconds(1)])
+        ended.set("waterGoalMl", .number(2000))
+        await ended.waitForSend()
+        XCTAssertTrue(ended.isWaitingForConnection, "Its retry is pending")
+
+        auth.logout()
+        offline = false
+        await auth.login(email: "a@example.test", password: "fixture-password")
+        let quick = QuickPreferences.signedIn(accountID: "a", auth: auth, api: api, defaults: defaults, retryDelays: [.seconds(3600)])
+        XCTAssertFalse(quick === ended, "The new session has its own queue")
+        XCTAssertEqual(quick.waterGoal(nil), 2000, "It holds what the ended session left unsent")
+        quick.set("waterGoalMl", .number(3000))
+        await quick.waitForSend()
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3000))
+
+        try await Task.sleep(for: .milliseconds(1500))
+        await ended.waitForSend()
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3000), "The ended session's queue sent nothing more")
+        XCTAssertFalse(quick.hasUnsent)
+        XCTAssertEqual(quick.waterGoal(auth.currentUser), 3000)
+        let stored = try XCTUnwrap(defaults.data(forKey: quick.storageKey))
+        XCTAssertEqual(try JSONDecoder().decode(QuickPreferences.Queue.self, from: stored), QuickPreferences.Queue(), "Nothing rewrote the account's queue")
+    }
+
+    /// Confirming review, P2: a lost response's replay answers with the
+    /// revision it made, so Today showed the goal another device had
+    /// replaced since. The queue adopts the account as it is now, and a
+    /// change made meanwhile still goes.
+    func testAQuickPreferenceReplayShowsTheAccountAsItIsNowAndKeepsANewerChange() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        var remote = preferencesDocument()
+        var receipt: PreferencesSnapshot?
+        var writes: [(key: String, body: Data)] = []
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, try JSONEncoder().encode(remote)) }
+            let raw = Self.requestBody(request)
+            writes.append((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "", raw))
+            let body = try JSONDecoder().decode(PreferenceMutation.self, from: raw)
+            if writes.count == 1 {
+                // Committed as revision 2, the response lost; another device then saves revision 3.
+                receipt = self.preferencesDocument(revision: 2, values: body.changes)
+                remote = self.preferencesDocument(revision: 3, values: ["waterGoalMl": .number(3500)])
+                throw URLError(.networkConnectionLost)
+            }
+            if writes[writes.count - 1].key == writes[0].key { return (200, try JSONEncoder().encode(XCTUnwrap(receipt))) }
+            guard body.baseRevision == remote.revision else { return (409, Data(#"{"message":"Preferences changed"}"#.utf8)) }
+            remote = self.preferencesDocument(revision: remote.revision + 1, values: remote.values.merging(body.changes) { $1 })
+            return (200, try JSONEncoder().encode(remote))
+        }
+        let later: [Duration] = [.seconds(3600)]
+        let first = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later)
+        first.set("waterGoalMl", .number(2000))
+        await first.waitForSend()
+        XCTAssertTrue(first.isWaitingForConnection)
+
+        var accepted: [PreferencesSnapshot] = []
+        let reopened = QuickPreferences(accountID: "a", api: api, defaults: defaults, retryDelays: later) { accepted.append($0) }
+        reopened.set("nutritionDisplay", .string("consumed"))
+        await reopened.waitForSend()
+        XCTAssertEqual(writes.count, 3)
+        XCTAssertEqual(writes[0].key, writes[1].key, "The lost write is replayed")
+        XCTAssertEqual(writes[0].body, writes[1].body)
+        XCTAssertFalse(accepted.contains { $0.revision == 2 }, "The replay's older revision is never shown")
+        XCTAssertEqual(accepted.first?.revision, 3)
+        XCTAssertFalse(reopened.hasUnsent)
+        XCTAssertEqual(reopened.waterGoal(accepted.last?.user), 3500, "The other device's goal")
+        XCTAssertTrue(reopened.leadsWithEaten(accepted.last?.user), "The change made meanwhile went")
+        XCTAssertEqual(remote.values["nutritionDisplay"], .string("consumed"))
+        XCTAssertEqual(remote.values["waterGoalMl"], .number(3500))
     }
 
     func testPreferencesLostAcknowledgementReplaysAfterReopeningAndDoesNotUndoLaterDeviceChanges() async throws {
@@ -2373,6 +2700,30 @@ final class ProductionTests: XCTestCase {
         signedOut.configure(accountID: nil)
         await signedOut.waitForSchedule()
         XCTAssertTrue(scheduler.pending.isEmpty)
+    }
+
+    func testARemindedAgainReminderGoesWithItsReminder() async throws {
+        keychain.saveSession(token: "e30.eyJzdWIiOiJhIn0.fixture", refreshToken: "fixture-refresh")
+        let scheduler = TestReminderScheduler()
+        let service = NotificationService(api: api, defaults: defaults, keychain: keychain, scheduler: scheduler)
+        service.configure(accountID: "a")
+        service.accept(preferencesDocument(values: ["reminders": .object(["sleep": .bool(true)]), "reminderTimes": .object(["sleep": .string("22:00")])]))
+        await service.setDeviceEnabled(true)
+        let sleep = try XCTUnwrap(service.scheduled.first?.id)
+        let snoozed = ReminderActions.againPrefix + sleep
+        scheduler.pending[snoozed] = ReminderSpec(id: snoozed, title: "Sleep reminder", body: "", components: DateComponents())
+        scheduler.unrelated = [ReminderActions.againPrefix + "another-app"]
+        await service.reschedule()
+        XCTAssertNotNil(scheduler.pending[snoozed], "Rescheduling keeps it while its reminder stays")
+
+        await service.setDeviceEnabled(false)
+        XCTAssertNil(scheduler.pending[snoozed], "Reminders turned off take it too")
+        scheduler.pending[snoozed] = ReminderSpec(id: snoozed, title: "Sleep reminder", body: "", components: DateComponents())
+        keychain.deleteToken()
+        service.configure(accountID: nil)
+        await service.waitForSchedule()
+        XCTAssertTrue(scheduler.pending.isEmpty, "Signing out takes it")
+        XCTAssertEqual(scheduler.unrelated, [ReminderActions.againPrefix + "another-app"], "Only Exerly's reminders are touched")
     }
 
     func testReminderSchedulingFailureIsVisibleAndDoesNotEraseSavedPreferences() async throws {

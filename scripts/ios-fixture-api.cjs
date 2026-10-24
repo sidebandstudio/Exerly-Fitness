@@ -15,6 +15,23 @@ const { createApp } = require('../apps/api/app');
 const { reset: resetRateLimits } = require('../apps/api/lib/ratelimit');
 const { start: startCluster } = require('../apps/api/tests/helpers/cluster');
 const recipePages = require('../apps/api/lib/recipePages');
+const mail = require('../apps/api/lib/mail');
+const passwordReset = require('../apps/api/lib/passwordReset');
+const apple = require('../apps/api/lib/apple');
+// Deleting an account connected to Apple revokes Apple's authorization when
+// that's configured. With appleRevocation on, the fixture claims it is and
+// records the codes instead of calling Apple.
+const appleRevocations = [];
+apple.revokeAuthorizationCode = async (code) => {
+  if (code !== 'synthetic-apple-code') throw new Error('Apple refused the code');
+  appleRevocations.push(code);
+};
+function setAppleRevocation(on) {
+  for (const key of ['APPLE_TEAM_ID', 'APPLE_KEY_ID', 'APPLE_PRIVATE_KEY']) {
+    if (on) process.env[key] = 'isolated-simulator';
+    else delete process.env[key];
+  }
+}
 // Synthetic recipe pages for import, since the simulator can't reach real sites.
 // One line names a food the generic table doesn't have, so it's left to resolve.
 const syntheticRecipePages = {
@@ -50,6 +67,12 @@ const stopCluster = () => {
 };
 process.once('exit', stopCluster);
 let offline = false;
+// The account export alone fails, the rest of the API answering: the app's
+// export then falls back to the phone's copy.
+let failExport = false;
+// Holds each sync request (/v1/) this long before answering, for a launch whose
+// first sync is still out when someone logs (TodayLoggingUITests).
+let syncDelayMs = 0;
 let disconnect = false;
 let dropSetupAcknowledgement = false;
 let dropPreferencesAcknowledgement = false;
@@ -62,6 +85,9 @@ let dailyLogsRoundTrip = null;
 let setupRoundTrip = null;
 let preferencesRoundTrip = null;
 const foodDatabaseRequests = [];
+// What the simulator's stand-in camera sees next: a synthetic code as `<symbology>:<data>`.
+let barcodeFeed = { id: 0, payload: null };
+const launchTimings = [];
 providers.searchOpenFoodFactsProducts = async (query, limit) => {
   foodDatabaseRequests.push({ type: 'search', query, limit });
   if (query === 'provider unavailable')
@@ -143,7 +169,23 @@ providers.lookupBarcode = async (identity) => ({
           await store.remove('goals', { email });
         });
       }
+      if (req.body.linkAppleEmail) {
+        const email = String(req.body.linkAppleEmail);
+        if (!email.endsWith('@exerly.test')) return res.sendStatus(400);
+        const user = await store.findOne('users', { email });
+        if (!user) return res.sendStatus(404);
+        await store.insert('account_identities', {
+          account_id: user.id,
+          provider: 'apple',
+          subject: `001234.${user.id}.0001`,
+          email: null,
+          created_at: new Date(),
+        });
+      }
+      setAppleRevocation(req.body.appleRevocation === true);
       offline = req.body.offline === true;
+      failExport = req.body.failExport === true;
+      syncDelayMs = Math.max(0, Math.min(60000, Number(req.body.syncDelayMs) || 0));
       disconnect = req.body.disconnect === true;
       dropSetupAcknowledgement = req.body.dropSetupAcknowledgement === true;
       dropPreferencesAcknowledgement = req.body.dropPreferencesAcknowledgement === true;
@@ -156,6 +198,45 @@ providers.lookupBarcode = async (identity) => ({
     }
   });
   app.get('/__test/ready', (_req, res) => res.json({ isolated: true }));
+  app.get('/__test/apple-revocations', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    res.json({ codes: appleRevocations });
+  });
+  app.get('/__test/barcode-feed', (_req, res) => res.json(barcodeFeed));
+  app.post('/__test/barcode-feed', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    barcodeFeed = {
+      id: barcodeFeed.id + 1,
+      payload: req.body.payload ? String(req.body.payload) : null,
+    };
+    res.json(barcodeFeed);
+  });
+  // A Debug build launched by the UI tests reports, once Today's first frame
+  // with its logging controls is on screen, how long that took from its
+  // process starting (LaunchToLoggingUITests).
+  app.post('/__test/launch-timings', (req, res) => {
+    const processMs = Number(req.body?.processToReadyMs);
+    const initMs = Number(req.body?.initToReadyMs);
+    if (!Number.isFinite(processMs) || !Number.isFinite(initMs)) return res.sendStatus(400);
+    const entries = Number(req.body?.entries);
+    launchTimings.push({
+      processToReadyMs: processMs,
+      initToReadyMs: initMs,
+      entries: Number.isFinite(entries) ? entries : null,
+      // Where each logging control was laid out, [x, y, width, height] in points.
+      frames: req.body?.frames && typeof req.body.frames === 'object' ? req.body.frames : {},
+    });
+    res.sendStatus(204);
+  });
+  app.get('/__test/launch-timings', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    res.json({ timings: launchTimings });
+  });
+  app.delete('/__test/launch-timings', (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    launchTimings.length = 0;
+    res.json({ cleared: true });
+  });
   // Read by the API's own fetcher, which sends no fixture header; "plain" has no recipe data.
   app.get('/__test/recipe-pages/:slug', (req, res) => {
     const recipe = syntheticRecipePages[req.params.slug];
@@ -183,6 +264,19 @@ providers.lookupBarcode = async (identity) => ({
     } catch (error) {
       next(error);
     }
+  });
+  // The newest password reset email to a synthetic address, from the API's
+  // memory mail transport. Nothing is ever sent.
+  app.get('/__test/password-reset-mail', async (req, res) => {
+    if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
+    if (typeof req.query.email !== 'string' || !req.query.email.endsWith('@exerly.test'))
+      return res.sendStatus(400);
+    // Codes are issued after the request is answered.
+    await passwordReset.settle();
+    const message = mail.sent(req.query.email.toLowerCase()).at(-1);
+    const code = message?.text.match(/code is ([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1];
+    if (!code) return res.sendStatus(404);
+    res.json({ code, subject: message.subject });
   });
   app.get('/__test/session-upgrades', async (req, res, next) => {
     if (req.get('X-Test-Fixture') !== 'isolated-simulator') return res.sendStatus(403);
@@ -368,6 +462,16 @@ providers.lookupBarcode = async (identity) => ({
     }
   });
   app.use((req, res, next) => {
+    if (syncDelayMs > 0 && req.path.startsWith('/v1/')) {
+      setTimeout(next, syncDelayMs);
+      return;
+    }
+    next();
+  });
+  app.use((req, res, next) => {
+    if (failExport && req.path === '/api/export') {
+      return res.status(503).json({ message: 'Simulator export interruption' });
+    }
     if (
       offline &&
       (req.path.startsWith('/api/') || req.path.startsWith('/v1/') || req.path.startsWith('/auth/'))

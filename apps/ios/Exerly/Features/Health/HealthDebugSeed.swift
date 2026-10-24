@@ -15,6 +15,10 @@ enum HealthDebugSeed {
         return value
     }
 
+    /// Whether a UI test asked for synthetic sleep, heart rate variability
+    /// and resting heart rate, written when each switch is turned on.
+    static var recovery: Bool { ProcessInfo.processInfo.environment["EXERLY_HEALTH_RECOVERY_SEED"] == "1" }
+
     static func readings(_ spec: String, timeZone: TimeZone, now: Date = Date()) -> [(at: Date, kilograms: Double, bodyFat: Double?)] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
@@ -26,6 +30,34 @@ enum HealthDebugSeed {
                   let at = calendar.date(bySettingHour: time[0], minute: time[1], second: 0, of: day) else { return nil }
             return (at, kilograms, Double(parts[1]))
         }
+    }
+
+    /// A UI test's synthetic changes from Health waiting for the person
+    /// (EXERLY_HEALTH_CHANGES_SEED=1): a soup imported yesterday that Health
+    /// then deleted, and oats a full read no longer found, and today's yogurt
+    /// with the tracker's set aside for it. Once per account, saved as reads
+    /// would save them.
+    @MainActor
+    static func seedChanges(_ workspace: TrainingWorkspace, timeZone: TimeZone) throws {
+        guard ProcessInfo.processInfo.environment["EXERLY_HEALTH_CHANGES_SEED"] == "1",
+              workspace.healthImports.records.isEmpty, workspace.healthImports.queue.isEmpty else { return }
+        let now = Date()
+        let soup = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-26 * 3600), name: "Synthetic lentil soup",
+                                     nutrients: NutrientAmounts([.energy: 320, .protein: 18]), source: "com.example.diary", sourceName: "Diary")
+        let oats = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-50 * 3600), name: "Synthetic oats",
+                                     nutrients: NutrientAmounts([.energy: 380, .protein: 13]), source: "com.example.tracker", sourceName: "Tracker")
+        // Today's yogurt, from the diary app; the tracker's for the same day was set aside.
+        let yogurt = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-3600), name: "Synthetic Greek yogurt",
+                                       nutrients: NutrientAmounts([.energy: 150, .protein: 15]), source: "com.example.diary", sourceName: "Diary")
+        var changes = HealthFoodChanges()
+        changes.adding = [soup, oats, yogurt]
+        let imports = workspace.healthImports
+        try imports.apply(changes, to: workspace.nutrition, install: HealthImportInstall.id(), timeZone: timeZone)
+        try imports.save(imports.noting([yogurt.id: [.init(source: "com.example.tracker", name: "Tracker")]], now: now))
+        let listed = [(soup.id, HealthChangeQueue.Entry.Reason.deleted), (oats.id, .missing)].compactMap { id, reason in
+            imports.records[id].map { HealthChangeQueue.Entry($0, reason: reason) }
+        }
+        try imports.save([], queue: HealthChangeQueue(entries: listed))
     }
 
     static func seedIfRequested(_ client: HealthStoreClient, timeZone: TimeZone) async {

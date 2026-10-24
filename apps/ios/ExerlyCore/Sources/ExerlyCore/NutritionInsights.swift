@@ -81,7 +81,7 @@ extension NutritionStore {
         var hours = (0..<24).map { IntakeTiming.Hour(hour: $0, energy: 0, entries: 0) }
         var untimed = 0
         for entry in entries where (start...end).contains(entry.date) {
-            guard LocalDate(entry.loggedAt, in: timeZone) == entry.date else {
+            guard entry.timeUnknown != true, LocalDate(entry.loggedAt, in: timeZone) == entry.date else {
                 untimed += 1
                 continue
             }

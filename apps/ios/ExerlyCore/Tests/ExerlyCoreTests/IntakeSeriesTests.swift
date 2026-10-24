@@ -43,6 +43,18 @@ import Testing
         #expect(IntakeRange.quarter.barDays == 1 && IntakeRange.year.barDays == 7)
     }
 
+    /// PARITY N28: the overview's spans are yesterday and 7, 30, 90 and 365 days, each ending yesterday.
+    @Test func eachSpanIsItsNumberOfDaysEndingYesterday() {
+        for (range, days) in [(IntakeRange.yesterday, 1), (.week, 7), (.month, 30), (.year, 365)] {
+            let span = range.span(today: monday)
+            #expect(span.upperBound == monday.adding(days: -1) && span.lowerBound.days(until: span.upperBound) + 1 == days, "\(range)")
+        }
+        let quarter = IntakeRange.quarter.span(today: monday)
+        withKnownIssue("IntakeSeries.swift:20 makes 3 months 91 days, 13 weeks, with no recorded reason") {
+            #expect(quarter.lowerBound.days(until: quarter.upperBound) + 1 == 90)
+        }
+    }
+
     @Test func thisMonthRunsFromTheFirstThroughToday() {
         #expect(IntakeRange.thisMonth.span(today: monday) == LocalDate("2026-10-01")!...monday)
         let first = LocalDate("2026-11-01")!

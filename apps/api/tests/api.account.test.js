@@ -135,7 +135,10 @@ test('deleting an account removes every row it owns and nothing else', async () 
     400,
     'needs confirmation'
   );
-  const deleted = await api.del('/api/account', { token: doomed.token, body: { confirm: true } });
+  const deleted = await api.del('/api/account', {
+    token: doomed.token,
+    body: { confirm: true, password: doomed.password },
+  });
   assert.equal(deleted.status, 200);
   assert.equal(deleted.body.deleted, true);
 
@@ -157,18 +160,22 @@ test('deleting an account removes every row it owns and nothing else', async () 
 test('an Apple account is revoked with Apple before anything is deleted', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   apple.publicKey = async () => publicKey;
-  const nonce = randomBytes(16).toString('hex');
-  const identityToken = jwt.sign(
-    {
-      iss: 'https://appleid.apple.com',
-      aud: 'com.exerly.fitness',
-      sub: '001234.delete.0001',
-      nonce: apple.sha256(nonce),
-    },
-    privateKey,
-    { algorithm: 'RS256', keyid: 'k', expiresIn: '10m' }
-  );
-  const signedIn = await api.post('/auth/apple', { identityToken, nonce });
+  // A fresh Apple authorization each time, as the app asks Apple again.
+  const appleConfirmation = () => {
+    const nonce = randomBytes(16).toString('hex');
+    const identityToken = jwt.sign(
+      {
+        iss: 'https://appleid.apple.com',
+        aud: 'com.exerly.fitness',
+        sub: '001234.delete.0001',
+        nonce: apple.sha256(nonce),
+      },
+      privateKey,
+      { algorithm: 'RS256', keyid: 'k', expiresIn: '10m' }
+    );
+    return { identityToken, nonce };
+  };
+  const signedIn = await api.post('/auth/apple', appleConfirmation());
   assert.equal(signedIn.status, 201);
   const token = signedIn.body.token;
   const remove = (body) => api.del('/api/account', { token, body });
@@ -188,7 +195,15 @@ test('an Apple account is revoked with Apple before anything is deleted', async 
     assert.equal(missing.status, 400);
     assert.equal(missing.body.details.code, 'apple_reauthorization_required');
 
-    const failed = await remove({ confirm: true, appleAuthorizationCode: 'bad-code' });
+    const noCode = await remove({ confirm: true, ...appleConfirmation() });
+    assert.equal(noCode.status, 400);
+    assert.equal(noCode.body.details.code, 'apple_reauthorization_required');
+
+    const failed = await remove({
+      confirm: true,
+      ...appleConfirmation(),
+      appleAuthorizationCode: 'bad-code',
+    });
     assert.equal(failed.status, 502);
     assert.equal(
       await api.store.count('users', { id: signedIn.body.user._id }),
@@ -196,7 +211,11 @@ test('an Apple account is revoked with Apple before anything is deleted', async 
       'nothing deleted'
     );
 
-    const done = await remove({ confirm: true, appleAuthorizationCode: 'fresh-code' });
+    const done = await remove({
+      confirm: true,
+      ...appleConfirmation(),
+      appleAuthorizationCode: 'fresh-code',
+    });
     assert.equal(done.status, 200);
     assert.equal(done.body.apple_revoked, true);
     assert.deepEqual(calls, ['bad-code', 'fresh-code']);
@@ -214,7 +233,12 @@ test('after deletion, the account’s own tokens learn it was deleted; nobody el
     expiresIn: -60,
   });
   assert.equal(
-    (await api.del('/api/account', { token: doomed.token, body: { confirm: true } })).status,
+    (
+      await api.del('/api/account', {
+        token: doomed.token,
+        body: { confirm: true, password: doomed.password },
+      })
+    ).status,
     200
   );
 
@@ -224,7 +248,10 @@ test('after deletion, the account’s own tokens learn it was deleted; nobody el
     assert.equal(res.body.details?.code, 'account_deleted');
   }
   // A retried deletion whose first response was lost says the same.
-  const retried = await api.del('/api/account', { token: doomed.token, body: { confirm: true } });
+  const retried = await api.del('/api/account', {
+    token: doomed.token,
+    body: { confirm: true, password: doomed.password },
+  });
   assert.equal(retried.body.details?.code, 'account_deleted');
 
   const alive = await signUp(api);

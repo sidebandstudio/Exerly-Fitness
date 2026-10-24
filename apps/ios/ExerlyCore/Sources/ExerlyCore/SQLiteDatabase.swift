@@ -22,8 +22,9 @@ final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init(url: URL) throws {
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+    /// `readOnly` opens an existing file for reading alone (StoredAccount).
+    init(url: URL, readOnly: Bool = false) throws {
+        let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) | SQLITE_OPEN_FULLMUTEX
         let status = sqlite3_open_v2(url.path, &handle, flags, nil)
         guard status == SQLITE_OK else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open"
@@ -106,6 +107,7 @@ final class SQLiteDatabase {
     }
 
     private var depth = 0
+    private var committed: [() -> Void] = []
 
     /// Runs `body` in a transaction, committing on success and rolling back on
     /// error. A nested call uses a savepoint, so it can fail on its own.
@@ -113,15 +115,31 @@ final class SQLiteDatabase {
         let savepoint = "level\(depth)"
         try executeScript(depth == 0 ? "BEGIN IMMEDIATE" : "SAVEPOINT \(savepoint)")
         depth += 1
-        defer { depth -= 1 }
+        // A rollback drops only what this transaction added, nested ones
+        // included; a sibling saved before it keeps its actions.
+        let added = committed.count
+        let result: T
         do {
-            let result = try body()
+            result = try body()
             try executeScript(depth == 1 ? "COMMIT" : "RELEASE \(savepoint)")
-            return result
         } catch {
             try? executeScript(depth == 1 ? "ROLLBACK" : "ROLLBACK TO \(savepoint); RELEASE \(savepoint)")
+            committed.removeSubrange(added...)
+            depth -= 1
             throw error
         }
+        depth -= 1
+        if depth == 0 {
+            let actions = committed
+            committed = []
+            actions.forEach { $0() }
+        }
+        return result
+    }
+
+    /// Runs `action` after the outermost transaction commits; at once outside one.
+    func afterCommit(_ action: @escaping () -> Void) {
+        if depth == 0 { action() } else { committed.append(action) }
     }
 
     private static func value(_ parameter: Any?) -> Value {

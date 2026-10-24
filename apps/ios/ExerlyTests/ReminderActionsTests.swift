@@ -133,9 +133,14 @@ final class ReminderActionsTests: XCTestCase {
         XCTAssertEqual(categories["exerly.workout"]?.actions.map(\.title), ["Start workout"])
         let weight = try XCTUnwrap(categories["exerly.weighIn"]?.actions.first as? UNTextInputNotificationAction)
         XCTAssertEqual([weight.title, weight.textInputButtonTitle], ["Log weight", "Log"])
+        XCTAssertEqual(categories["exerly.sleep"]?.actions.map(\.title), ["Remind me in 15 minutes"])
         for action in categories.values.flatMap(\.actions) {
-            XCTAssertEqual(action.options, ["search", "startWorkout"].contains(action.identifier) ? .foreground : .authenticationRequired,
-                           "Logging asks for an unlocked phone; \(action.identifier)")
+            let options: UNNotificationActionOptions = switch action.identifier {
+            case "search", "startWorkout": .foreground
+            case "remindAgain": []
+            default: .authenticationRequired
+            }
+            XCTAssertEqual(action.options, options, "Logging asks for an unlocked phone, and only opening opens the app; \(action.identifier)")
         }
 
         let meal = ["meal": "Breakfast", "time": "07:30"], breakfast = ReminderActions.mealCategory("Breakfast")
@@ -147,6 +152,7 @@ final class ReminderActionsTests: XCTestCase {
         XCTAssertEqual(action("search", breakfast, meal), .open(ExerlyLinks.search))
         XCTAssertEqual(action("startWorkout", ReminderActions.workoutCategory, [:]), .open(ExerlyLinks.startWorkout))
         XCTAssertEqual(action("logWeight", ReminderActions.weighInCategory, [:], text: "182.4"), .logWeight("182.4"))
+        XCTAssertEqual(action("remindAgain", ReminderActions.sleepCategory, [:]), .remindAgain(minutes: 15))
         XCTAssertEqual(action(UNNotificationDefaultActionIdentifier, ReminderActions.weighInCategory, [:]), .open(ExerlyLinks.weighIn),
                        "Tapping a weigh-in reminder opens a weigh-in")
         XCTAssertNil(action(UNNotificationDefaultActionIdentifier, breakfast, meal), "Tapping a meal reminder just opens the app")
@@ -250,6 +256,64 @@ final class ReminderActionsTests: XCTestCase {
                                                    access: access, namespace: "test")
         XCTAssertEqual(notice, Notice(title: "Nothing was logged", body: "That reminder was for another account. Open Exerly to log."))
         XCTAssertTrue(screens.nutrition.weights.isEmpty)
+    }
+
+    /// Every reminder has a button that works from the Lock Screen: the sleep
+    /// reminder's comes back in 15 minutes, for the signed-in account only,
+    /// and again from the reminder it brought back.
+    func testRemindAgainBringsTheirReminderBackIn15MinutesWithoutOpeningAnything() async throws {
+        let plan = try ReminderPlan.make(snapshot(["timezone": .string(zone.identifier), "reminders": .object(["sleep": .bool(true)]),
+                                                   "reminderTimes": .object(["sleep": .string("22:30")])]), namespace: "test")
+        XCTAssertEqual(plan.reminders.map(\.category), [ReminderActions.sleepCategory])
+        let screens = try TrainingWorkspace(accountID: "reminders", root: temporaryRoot())
+        let access = try access(screens)
+        let content = UNMutableNotificationContent()
+        content.title = "Sleep reminder"
+        content.categoryIdentifier = ReminderActions.sleepCategory
+        var added: [UNNotificationRequest] = []
+        let on = { (id: String) in id == "reminders" }
+        let notice = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                                   namespace: "test", add: { added.append($0) }, remindsAgain: on)
+        XCTAssertNil(notice, "Nothing to say")
+        let again = try XCTUnwrap(added.first)
+        XCTAssertEqual(again.identifier, ReminderActions.againPrefix + reminder("sleep"))
+        XCTAssertFalse(again.identifier.hasPrefix("exerly.reminder."), "Rescheduling the reminders leaves it")
+        XCTAssertEqual((again.trigger as? UNTimeIntervalNotificationTrigger)?.timeInterval, 900)
+        XCTAssertEqual(again.content.title, "Sleep reminder")
+        XCTAssertEqual(again.content.categoryIdentifier, ReminderActions.sleepCategory, "With its button, to put it off again")
+
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: again.identifier, content: again.content, access: access,
+                                          namespace: "test", add: { added.append($0) }, remindsAgain: on)
+        XCTAssertEqual(added.last?.identifier, again.identifier, "Again from the one it brought back, replacing it")
+
+        let nobody = IntentAccess(screens: nil, token: nil, root: temporaryRoot(), widgets: nil)
+        for (id, who) in [(reminder("sleep", of: "someone-else"), access), (reminder("sleep"), nobody)] {
+            _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: id, content: content, access: who, namespace: "test",
+                                              add: { added.append($0) }, remindsAgain: on)
+        }
+        XCTAssertEqual(added.count, 2, "Another account's reminder, or one left after signing out, doesn't come back")
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { added.append($0) }, remindsAgain: { _ in false })
+        XCTAssertEqual(added.count, 2, "Nor one whose reminders were turned off")
+    }
+
+    /// Signing out, or turning reminders off, while Remind me again is still
+    /// adding its reminder takes it away once it's added.
+    func testARemindAgainStillBeingAddedWhenTheySignOutDoesntStay() async throws {
+        let screens = try TrainingWorkspace(accountID: "reminders", root: temporaryRoot())
+        let access = try access(screens)
+        let content = UNMutableNotificationContent()
+        content.categoryIdentifier = ReminderActions.sleepCategory
+        var signedIn = true, removed: [String] = []
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { _ in signedIn = false }, remindsAgain: { _ in signedIn },
+                                          remove: { removed += $0 })
+        XCTAssertEqual(removed, [ReminderActions.againPrefix + reminder("sleep")])
+        signedIn = true
+        removed = []
+        _ = await ReminderActions.perform(.remindAgain(minutes: 15), reminder: reminder("sleep"), content: content, access: access,
+                                          namespace: "test", add: { _ in }, remindsAgain: { _ in signedIn }, remove: { removed += $0 })
+        XCTAssertTrue(removed.isEmpty, "Still signed in, it stays")
     }
 
     func testOpeningButtonsHandTheAppTheirLink() async throws {

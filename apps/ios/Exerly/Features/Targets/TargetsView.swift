@@ -17,9 +17,9 @@ struct TargetsHostView: View {
                 ContentUnavailableView {
                     Label("Targets could not open", systemImage: "externaldrive.badge.exclamationmark")
                 } description: {
-                    Text("Your saved data is still on this device. Keep Exerly installed and try again.")
+                    Text(account.openingError ?? "")
                 } actions: {
-                    Button("Try again") { Task { await account.configure(auth.accountAPI) } }
+                    Button("Try again") { Task { await account.configure(auth.accountAPI, retrying: true) } }
                         .buttonStyle(.borderedProminent).tint(Color.exActionFill)
                 }
             } else { ProgressView("Opening your targets…") }
@@ -220,9 +220,12 @@ struct TargetsView: View {
     @ViewBuilder
     private func goalWeight(_ goal: NutritionGoal, today: LocalDate, trend: Double?) -> some View {
         if let target = goal.goalWeight {
-            HStack(alignment: .firstTextBaseline) {
+            // Stacked at the largest sizes, where side by side both wrapped ("190.0" over "lb").
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+            row {
                 Text("Goal weight").font(.exBody).foregroundStyle(Color.exTextSecondary)
-                Spacer(minLength: ExSpacing.small)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: ExSpacing.small) }
                 Text(BodyFormat.reading(target, unit)).font(.exStatSmall).monospacedDigit().foregroundStyle(Color.exTextPrimary)
             }
             .accessibilityElement(children: .combine)
@@ -239,19 +242,31 @@ struct TargetsView: View {
                             .frame(height: 110)
                     }
                 case .reached:
-                    Text("Your trend weight is already at or past this goal.").font(.exCaption)
-                        .foregroundStyle(Color.exSuccess).accessibilityIdentifier("targets.eta")
+                    // As on Progress: reached, and what to do next, rather than a loss rate toward a weight already passed.
+                    VStack(alignment: .leading, spacing: ExSpacing.small) {
+                        Text("Goal reached").font(.exLabel.weight(.semibold)).foregroundStyle(Color.exSuccess).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Color.exSuccess.opacity(0.14), in: Capsule())
+                        Text("Your trend weight is at or past your goal weight. Edit the plan to maintain it or aim for a new one.")
+                            .font(.exCaption).foregroundStyle(Color.exTextSecondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("targets.eta")
                 case .noGoalWeight, .maintaining:
                     EmptyView()
                 }
             }
         } else {
-            HStack(spacing: ExSpacing.small) {
+            // Add under the sentence at the largest sizes, as on Progress.
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                : AnyLayout(HStackLayout(spacing: ExSpacing.small))
+            row {
                 Text("No goal weight. Add one to see when you'd reach it.").font(.exCaption).foregroundStyle(Color.exTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("Add") { open(.edit) }.font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                Button("Add") { open(.edit, addsGoalWeight: true) }.font(.exLabel.weight(.semibold)).foregroundStyle(Color.exPrimaryText)
                     .frame(minWidth: 44, minHeight: 44).accessibilityLabel("Add a goal weight")
+                    .accessibilityIdentifier("targets.addGoalWeight")
             }
         }
     }
@@ -263,11 +278,8 @@ struct TargetsView: View {
             ExEyebrow("What it's based on")
             if let basis = plan.basis {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(BodyFormat.kcal(basis.expenditure)).font(.exStatMedium).monospacedDigit().foregroundStyle(Color.exTextPrimary)
-                        Text("kcal a day").font(.exBodyMedium).foregroundStyle(Color.exTextSecondary)
-                        Text("±\(BodyFormat.kcal(basis.expenditureError))").font(.exLabel).foregroundStyle(Color.exTextMuted)
-                    }
+                    ExFigure(value: BodyFormat.kcal(basis.expenditure), unit: "kcal a day", detail: "±\(BodyFormat.kcal(basis.expenditureError))",
+                             valueFont: .exStatMedium)
                     Text("Expenditure when this version started, likely \(BodyFormat.kcal(basis.expenditure - basis.expenditureError)) "
                         + "to \(BodyFormat.kcal(basis.expenditure + basis.expenditureError)) kcal, at a trend weight of "
                         + "\(BodyFormat.weight(basis.trendWeight, unit)).")
@@ -301,6 +313,7 @@ struct TargetsView: View {
                 Text("Now").font(.exLabel).foregroundStyle(Color.exTextSecondary)
                 Spacer(minLength: ExSpacing.small)
                 Text(BodyFormat.kcal(value.kcal)).font(.exStatSmall).monospacedDigit().foregroundStyle(Color.exTextPrimary)
+                    .lineLimit(1).fixedSize()
                 Text("±\(BodyFormat.kcal(value.error)) kcal").font(.exCaption).foregroundStyle(Color.exTextMuted)
             }
             .accessibilityElement(children: .ignore)
@@ -505,16 +518,9 @@ struct TargetsView: View {
         PlanBasisChoice.current(summary: summary, plans: store.plans, profile: TargetsProfile.body(auth.currentUser))
     }
 
-    private func open(_ kind: TargetsEditorRequest.Kind) {
-        let today = today
-        let summary = WeightTrend.summary(BodyEstimates.shared.estimates(store, through: today), through: today)
-        var draft = NutritionPlanDraft(store.plan(on: today), goal: TargetsProfile.goal(auth.currentUser, unit: unit))
-        switch kind {
-        case .coach: draft.mode = .coached
-        case .adjust(_, let proposed, _): draft = NutritionPlanDraft(proposed)
-        case .setup, .edit: break
-        }
-        editor = TargetsEditorRequest(kind: kind, draft: draft, choice: basisChoice(summary: summary), current: store.plan(on: today))
+    private func open(_ kind: TargetsEditorRequest.Kind, addsGoalWeight: Bool = false) {
+        editor = .make(kind, store: store, user: auth.currentUser, unit: unit, today: today)
+        editor?.addsGoalWeight = addsGoalWeight
     }
 }
 
@@ -537,4 +543,21 @@ struct TargetsEditorRequest: Identifiable {
     let choice: PlanBasisChoice?
     /// The version in force.
     let current: NutritionPlan?
+    /// Opened from "Add a goal weight": the editor starts at its field.
+    var addsGoalWeight = false
+
+    /// The editor for `kind` on `today`: from the version in force, or toward
+    /// setup's goal when there's none yet, resting on the latest estimate.
+    @MainActor
+    static func make(_ kind: Kind, store: NutritionStore, user: UserDTO?, unit: MassUnit, today: LocalDate) -> TargetsEditorRequest {
+        let summary = WeightTrend.summary(BodyEstimates.shared.estimates(store, through: today), through: today)
+        var draft = NutritionPlanDraft(store.plan(on: today), goal: TargetsProfile.goal(user, unit: unit))
+        switch kind {
+        case .coach: draft.mode = .coached
+        case .adjust(_, let proposed, _): draft = NutritionPlanDraft(proposed)
+        case .setup, .edit: break
+        }
+        let choice = PlanBasisChoice.current(summary: summary, plans: store.plans, profile: TargetsProfile.body(user))
+        return TargetsEditorRequest(kind: kind, draft: draft, choice: choice, current: store.plan(on: today))
+    }
 }

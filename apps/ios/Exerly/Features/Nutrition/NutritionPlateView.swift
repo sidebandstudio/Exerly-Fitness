@@ -96,7 +96,7 @@ struct NutritionPlateView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Log meal") {
-                        if let entries = draft.save() {
+                        if let entries = draft.save(consuming: workspace.barcodes) {
                             UINotificationFeedbackGenerator().notificationOccurred(.success)
                             onLogged()
                             onLoggedEntries?(entries)
@@ -111,14 +111,17 @@ struct NutritionPlateView: View {
                                     timeZone: timeZone, unit: draft.unit, actions: actions, onLogged: {},
                                     pickedCount: draft.rows.count, pickedFoodIDs: Set(draft.rows.map { $0.food.id }), onPick: { food, amount in
                                         draft.add(food, amount: amount) ? draft.rows.count : nil
-                                    }, pickError: { draft.error })
+                                    }, onPickScan: { food, amount, pending in
+                                        // The row carries the scan, consumed only when the meal logs.
+                                        draft.stage(food, amount: amount, pending: pending) ? draft.rows.count : nil
+                                    }, pickedScans: { draft.pending }, pickError: { draft.error })
             }
             .sheet(item: $editing) { row in
                 NutritionPlatePortionEditor(workspace: workspace, plate: draft, row: row)
             }
             .sheet(isPresented: $discarding) {
                 NutritionConfirmation(title: "Discard this meal?", message: "These foods have not been logged. Your existing diary will stay unchanged.",
-                                      confirm: "Discard meal", cancelLabel: "Keep building", destructive: true) { dismiss() }
+                                      confirm: "Discard meal", cancelLabel: "Keep building", destructive: true) { draft.discard(); dismiss() }
                     cancel: { discarding = false }
             }
         }

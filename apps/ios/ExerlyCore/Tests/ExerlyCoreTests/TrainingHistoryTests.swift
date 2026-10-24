@@ -149,4 +149,16 @@ import Testing
         #expect(week[.quads]?.sets == 5)
         #expect(week[.adductors]?.sets == 2.5)
     }
+
+    /// PARITY A03: volume per muscle over any range of local dates counts only
+    /// the sessions in it, with synergists at half credit.
+    @Test func muscleVolumeOverADateRangeCountsOnlyItsSessions() {
+        let history = TrainingHistory(sessions: sessions, library: library)
+        let wednesday = history.muscleVolume(from: LocalDate("2026-10-07")!, through: LocalDate("2026-10-07")!)
+        #expect(wednesday[.quads] == MuscleVolume(sets: 2, tonnage: Tonnage(resistance: 3 * 110 + 8 * 90)))
+        #expect(wednesday[.adductors]?.sets == 1 && wednesday[.adductors]?.tonnage.resistance == 525)
+        let all = history.muscleVolume(from: LocalDate("2026-10-05")!, through: LocalDate("2026-10-09")!)
+        #expect(all[.quads]?.sets == 5, "The warm-up and the set not done don't count")
+        #expect(history.muscleVolume(from: LocalDate("2026-10-10")!, through: LocalDate("2026-10-31")!).isEmpty)
+    }
 }

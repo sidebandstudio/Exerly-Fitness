@@ -139,6 +139,51 @@ import Testing
         #expect(nutrition.summary(on: today).reporting[.energy] == 2)
     }
 
+    /// PARITY N27: alcohol, caffeine, cholesterol, choline and water each take a
+    /// goal in their own unit, and a day is judged against it.
+    @Test func alcoholCaffeineCholesterolCholineAndWaterTakeGoals() throws {
+        let nutrition = try store()
+        let today = monday.adding(days: 2)
+        #expect(nutrition.plan(on: today)?.goal(for: .caffeine, on: today) == NutrientGoal(ceiling: 400))
+        #expect(nutrition.plan(on: today)?.goal(for: .cholesterol, on: today) == NutrientGoal(ceiling: 300))
+        #expect(nutrition.plan(on: today)?.goal(for: .choline, on: today) == NutrientGoal(floor: 550))
+        #expect(nutrition.plan(on: today)?.goal(for: .alcohol, on: today) == nil && Nutrient.alcohol.unit == .grams)
+        try nutrition.setGoal(NutrientGoal(ceiling: 14), for: .alcohol, timeZone: utc)
+        try nutrition.setGoal(NutrientGoal(floor: 2000, ceiling: 4000), for: .water, timeZone: utc)
+        try nutrition.setGoal(NutrientGoal(ceiling: 200), for: .caffeine, timeZone: utc)
+        let drink = Food(name: "Synthetic stout", per100g: NutrientAmounts([.energy: 40, .alcohol: 4, .water: 90, .caffeine: 0]))
+        let eggs = Food(name: "Synthetic eggs", per100g: NutrientAmounts([.energy: 143, .cholesterol: 372, .choline: 294]))
+        let coffee = Food(name: "Synthetic coffee", per100g: NutrientAmounts([.energy: 1, .caffeine: 40, .water: 99]))
+        try nutrition.log(drink, grams: 500, on: today, meal: "Dinner")
+        try nutrition.log(eggs, grams: 100, on: today, meal: "Breakfast")
+        try nutrition.log(coffee, grams: 600, on: today, meal: "Breakfast")
+        let days = Dictionary(uniqueKeysWithValues: nutrition.nutrientDays([.alcohol, .caffeine, .cholesterol, .choline, .water], on: today)
+            .map { ($0.nutrient, $0) })
+        #expect(days[.alcohol]?.amount == 20 && days[.alcohol]?.standing == .over(6))
+        #expect(days[.caffeine]?.amount == 240 && days[.caffeine]?.standing == .over(40) && days[.caffeine]?.reporting == 2)
+        #expect(days[.cholesterol]?.standing == .over(72))
+        #expect(days[.choline]?.standing == .short(256))
+        #expect(days[.water]?.amount == 1044 && days[.water]?.standing == .short(956))
+        // Monday keeps the reference goals it had.
+        #expect(nutrition.nutrientDays([.caffeine], on: monday).first?.goal == NutrientGoal(ceiling: 400))
+    }
+
+    /// PARITY N27: two litres of water logged as drinks meet a 2 L goal on
+    /// Today's water card, and should meet a water nutrient goal too.
+    @Test func drinksCountTowardAWaterNutrientGoal() throws {
+        let nutrition = try store()
+        let today = monday.adding(days: 2)
+        try nutrition.setGoal(NutrientGoal(floor: 2000), for: .water, timeZone: utc)
+        try nutrition.log(Food(name: "Synthetic cucumber", per100g: NutrientAmounts([.energy: 15, .water: 95])), grams: 100,
+                          on: today, meal: "Lunch")
+        let card = nutrition.water(on: today, drinks: 2000, goal: 2000)
+        #expect(card.remaining == 0 && card.fraction == 1, "The water card counts the drinks")
+        let goal = try #require(nutrition.nutrientDays([.water], on: today).first)
+        withKnownIssue("NutrientGoals.swift:111-118 totals only water in foods; drinks never reach it, so this reads short") {
+            #expect(goal.standing == .met(left: nil))
+        }
+    }
+
     @Test func aGoalEditKeepsTheWeeksCheckInDue() throws {
         // Monday is the check-in day of a plan from two weeks before.
         let nutrition = try store(days: 0, start: monday.adding(days: -14))

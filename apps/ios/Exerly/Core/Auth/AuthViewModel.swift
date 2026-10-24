@@ -10,8 +10,17 @@ enum AuthState: Equatable {
 enum AccountDeletionOutcome: Equatable {
     case deleted
     /// The account uses Sign in with Apple: ask Apple for a fresh authorization
-    /// code and call `deleteAccount` again with it. Nothing was deleted.
+    /// and call `deleteAccount` again with it. Nothing was deleted.
     case appleReauthorizationRequired
+}
+
+/// What sign-in screens say when the server refuses a password. A 401 there
+/// is a wrong email or password, not an expired session.
+private func signInFailure(_ error: Error) -> String {
+    if case APIError.unauthorized = error {
+        return "That email and password don’t match. Try again, or reset your password."
+    }
+    return error.localizedDescription
 }
 
 @MainActor
@@ -94,6 +103,24 @@ final class AuthViewModel: ObservableObject {
         defaults.set(accountsAwaitingLocalCleanup, forKey: Self.cleanupKey)
     }
 
+    /// The account saved on this device, shown at once while launch waits for
+    /// nothing: RootView opens Today from it in the first frame (PARITY B03),
+    /// and `checkAuth` confirms it with the server after.
+    func restoreCachedSession() {
+        guard authState == .loading, let token = keychain.getToken() else { return }
+        restore(token)
+    }
+
+    private func restore(_ token: String) {
+        guard let data = defaults.data(forKey: cacheKey(token)),
+              let cached = try? JSONDecoder().decode(UserDTO.self, from: data),
+              cached.id != nil, APIClient.accountID(in: token).map({ $0 == cached.id }) ?? true else { return }
+        currentUser = cached
+        let completeKey = cacheKey(token) + ".complete"
+        let complete = defaults.object(forKey: completeKey) == nil ? cached.onboardingCompleted == true : defaults.bool(forKey: completeKey)
+        authState = complete ? .authenticated : .onboarding
+    }
+
     private func cacheKey(_ token: String) -> String {
         APIClient.accountCacheKey(token)
     }
@@ -140,14 +167,7 @@ final class AuthViewModel: ObservableObject {
             return
         }
         let generation = sessionGeneration
-        if useCached, let data = defaults.data(forKey: cacheKey(token)),
-           let cached = try? JSONDecoder().decode(UserDTO.self, from: data),
-           cached.id != nil, APIClient.accountID(in: token).map({ $0 == cached.id }) ?? true {
-            currentUser = cached
-            let completeKey = cacheKey(token) + ".complete"
-            let complete = defaults.object(forKey: completeKey) == nil ? cached.onboardingCompleted == true : defaults.bool(forKey: completeKey)
-            authState = complete ? .authenticated : .onboarding
-        }
+        if useCached { restore(token) }
         do {
             let bootstrap: BootstrapResponse = try await api.get("/api/bootstrap")
             guard generation == sessionGeneration else { return }
@@ -188,7 +208,20 @@ final class AuthViewModel: ObservableObject {
             guard generation == sessionGeneration else { return }
             try finalizeAuthenticatedSession(response)
             await checkAuth(useCached: false)
-        } catch { if generation == sessionGeneration { self.error = error.localizedDescription } }
+        } catch { if generation == sessionGeneration { self.error = signInFailure(error) } }
+    }
+
+    /// Emails a reset code. Returns the server's answer, which is the same
+    /// whether or not an account uses `email`. Touches no session.
+    func requestPasswordReset(email: String) async throws -> String {
+        let response = try await api.requestPasswordReset(email: email)
+        return response.message ?? "If an Exerly account uses that email, we sent it a code."
+    }
+
+    /// Sets a new password with a mailed code. Every session ends on the
+    /// server, so the person signs in again afterwards.
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        try await api.resetPassword(email: email, code: code, newPassword: newPassword)
     }
 
     func signup(email: String, password: String, name: String) async {
@@ -222,6 +255,8 @@ final class AuthViewModel: ObservableObject {
             guard generation == sessionGeneration else { return }
             try finalizeAuthenticatedSession(response)
             await checkAuth(useCached: false)
+        } catch APIError.unauthorized {
+            if generation == sessionGeneration { self.error = "Apple couldn’t confirm this sign-in. Try again." }
         } catch { if generation == sessionGeneration { self.error = error.localizedDescription } }
     }
 
@@ -240,19 +275,21 @@ final class AuthViewModel: ObservableObject {
         return account
     }
 
-    /// Connects Sign in with Apple. Throws `ExerlyCore.APIError.linkConflict` when
-    /// the Apple ID belongs to another account.
-    func linkApple(identityToken: String, rawNonce: String) async throws {
+    /// Connects Sign in with Apple once `confirmation` shows it's the owner.
+    /// Throws `ExerlyCore.APIError.linkConflict` when the Apple ID belongs to
+    /// another account, or `wrongPassword` for a wrong password.
+    func linkApple(identityToken: String, rawNonce: String, confirmation: AccountConfirmation) async throws {
         let account = try signedInAccount()
-        try await account.connectApple(identityToken: identityToken, rawNonce: rawNonce)
+        try await account.connectApple(identityToken: identityToken, rawNonce: rawNonce, confirmation: confirmation)
         if currentUser?.id == account.accountID { signInMethods?.apple = true }
     }
 
-    /// Disconnects Sign in with Apple. The server refuses when the account has no
-    /// password; `signInMethods` says so in advance.
-    func unlinkApple() async throws {
+    /// Disconnects Sign in with Apple, given the account's password. The server
+    /// refuses when the account has no password; `signInMethods` says so in
+    /// advance.
+    func unlinkApple(password: String) async throws {
         let account = try signedInAccount()
-        try await account.disconnectApple()
+        try await account.disconnectApple(password: password)
         if currentUser?.id == account.accountID { signInMethods?.apple = false }
     }
 
@@ -273,10 +310,10 @@ final class AuthViewModel: ObservableObject {
     /// awaiting cleanup, the app deletes the training database with
     /// `SQLiteTrainingPersistence.deleteDatabase(accountID:)`, calls
     /// `SyncEngine.shared.purge(accountID:)`, then `finishLocalCleanup(for:)`.
-    func deleteAccount(appleAuthorizationCode: String?) async throws -> AccountDeletionOutcome {
+    func deleteAccount(confirmation: AccountConfirmation) async throws -> AccountDeletionOutcome {
         let account = try signedInAccount()
         do {
-            try await account.deleteAccount(appleAuthorizationCode: appleAuthorizationCode)
+            try await account.deleteAccount(confirmation: confirmation)
         } catch ExerlyCore.APIError.appleReauthorizationRequired {
             return .appleReauthorizationRequired
         } catch ExerlyCore.APIError.accountDeleted {

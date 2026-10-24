@@ -176,5 +176,7 @@ module.exports = function versionedLogs({ collection, kind, label, read }) {
       res.json(await change(req, row));
     })
   );
+  // Restoring an export checks rows as a write here would.
+  router.read = read;
   return router;
 };

@@ -68,7 +68,7 @@ private let offersAutofill: Bool = {
 }()
 
 struct AuthField<Field: Hashable>: View {
-    enum Kind { case name, email, password, newPassword }
+    enum Kind { case name, email, code, password, newPassword }
 
     let title: String
     let kind: Kind
@@ -79,20 +79,25 @@ struct AuthField<Field: Hashable>: View {
     var onSubmit: () -> Void = {}
     @State private var revealed = false
     @Environment(\.authReveal) private var reveal
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var icon: String {
         switch kind {
         case .name: "person"
         case .email: "envelope"
+        case .code: "number"
         case .password, .newPassword: "lock"
         }
     }
 
     var body: some View {
         HStack(spacing: ExSpacing.item) {
-            Image(systemName: icon).font(.body.weight(.medium))
-                .foregroundStyle(focus.wrappedValue == field ? Color.exPrimaryText : Color.exTextSecondary)
-                .frame(width: 22).accessibilityHidden(true)
+            // At accessibility sizes the text needs the room more than the symbol does.
+            if !typeSize.isAccessibilitySize {
+                Image(systemName: icon).font(.body.weight(.medium))
+                    .foregroundStyle(focus.wrappedValue == field ? Color.exPrimaryText : Color.exTextSecondary)
+                    .frame(width: 22).accessibilityHidden(true)
+            }
             input
                 .font(.exBody).foregroundStyle(Color.exTextPrimary)
                 .focused(focus, equals: field)
@@ -135,6 +140,13 @@ struct AuthField<Field: Hashable>: View {
             TextField(title, text: $text, prompt: prompt)
                 .textContentType(offersAutofill ? .username : nil).keyboardType(.emailAddress)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+        case .code:
+            TextField(title, text: $text, prompt: Text("ABCD-EFGH").foregroundColor(.exTextMuted))
+                .textContentType(.oneTimeCode).keyboardType(.asciiCapable)
+                .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                .monospaced()
+                // The prompt shows the code's shape; the label says what it is.
+                .accessibilityLabel(title)
         case .password, .newPassword:
             Group {
                 if revealed { TextField(title, text: $text, prompt: prompt) }

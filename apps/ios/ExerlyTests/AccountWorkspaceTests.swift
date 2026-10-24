@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 import ExerlyCore
 @testable import Exerly
@@ -37,9 +38,156 @@ final class AccountWorkspaceTests: XCTestCase {
     private func workspace(pending: @escaping @MainActor (String) throws -> [AccountExport.PendingRow] = { _ in [] },
                            purge: @escaping @MainActor (String) throws -> Void = { _ in }) -> AppAccountWorkspace {
         let directory = root!
-        return AppAccountWorkspace(open: { try TrainingWorkspace(accountID: $0.accountID, root: directory, api: $0) },
+        return AppAccountWorkspace(open: { try await TrainingWorkspace.open(accountID: $0.accountID, root: directory, api: $0) },
             deleteTraining: { try TrainingWorkspace.deleteStorage(accountID: $0, root: directory) },
             purgeLegacy: purge, pendingLegacy: pending)
+    }
+
+    /// An account's data that can't be opened isn't opened again by every
+    /// later request for it, only when someone asks to try again.
+    func testAFailedOpenIsKeptUntilRetried() async throws {
+        struct Unreadable: Error {}
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { _ in attempts += 1; throw Unreadable() },
+            deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await owner.configure(auth.accountAPI)
+        await owner.configure(auth.accountAPI)
+        XCTAssertEqual(attempts, 1, "The failure stands; the work isn't repeated")
+        XCTAssertNotNil(owner.openingError)
+        XCTAssertNil(owner.training)
+        await owner.configure(auth.accountAPI, retrying: true)
+        XCTAssertEqual(attempts, 2, "Try again opens it again")
+    }
+
+    /// Signing out while an account opens and back in before that read
+    /// returns opens the account again, instead of waiting for a request
+    /// that no longer counts.
+    func testReopeningWhileAnInterruptedOpenIsStillReadingOpensTheAccount() async throws {
+        struct Abandoned: Error {}
+        let directory = root!
+        var held: CheckedContinuation<Void, Never>?
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { api in
+            attempts += 1
+            if attempts == 1 {
+                await withCheckedContinuation { held = $0 }
+                throw Abandoned()
+            }
+            return try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+        }, deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        let first = Task { @MainActor in await owner.configure(self.auth.accountAPI) }
+        while held == nil { await Task.yield() }
+        await owner.configure(nil)
+        await owner.configure(auth.accountAPI)
+        held?.resume()
+        await first.value
+        XCTAssertEqual(attempts, 2, "Signing back in opens the account again")
+        XCTAssertEqual(owner.training?.accountID, "account-a")
+        XCTAssertNil(owner.openingError)
+    }
+
+    /// An abandoned open that still succeeds closes only what it opened: the
+    /// replacement opened meanwhile stays open and keeps saving.
+    func testAnAbandonedOpenThatSucceedsClosesOnlyItsOwnStore() async throws {
+        let directory = root!
+        var held: CheckedContinuation<Void, Never>?
+        var abandoned: TrainingWorkspace?
+        var attempts = 0
+        let owner = AppAccountWorkspace(open: { api in
+            attempts += 1
+            if attempts == 1 {
+                await withCheckedContinuation { held = $0 }
+                let late = try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+                abandoned = late
+                return late
+            }
+            return try await TrainingWorkspace.open(accountID: api.accountID, root: directory, api: api)
+        }, deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        let first = Task { @MainActor in await owner.configure(self.auth.accountAPI) }
+        while held == nil { await Task.yield() }
+        await owner.configure(nil)
+        await owner.configure(auth.accountAPI)
+        let replacement = try XCTUnwrap(owner.training)
+        held?.resume()
+        await first.value
+        let late = try XCTUnwrap(abandoned)
+        XCTAssertTrue(owner.training === replacement, "The replacement stays the account's workspace")
+        XCTAssertThrowsError(try late.store.startSession(name: "From the abandoned open", bodyweight: nil), "Its own store is closed")
+        try replacement.store.startSession(name: "Saved after the late open closed", bodyweight: nil)
+        try replacement.store.updateActiveSession { $0.notes = "Still saving" }
+        XCTAssertEqual(try TrainingWorkspace(accountID: "account-a", root: root).store.activeSession?.notes, "Still saving")
+    }
+
+    /// An account's history is read off the main thread, so a long one
+    /// never holds up the screen while it opens.
+    func testHistoryIsReadOffTheMainThread() async throws {
+        struct Read: Error { let onMain: Bool }
+        do {
+            _ = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil,
+                                                 read: { _ in throw Read(onMain: Thread.isMainThread) })
+            XCTFail("The history was read")
+        } catch let read as Read {
+            XCTAssertFalse(read.onMain, "Read off the main thread")
+        }
+    }
+
+    /// Review round 4, merge-only: opened as the app opens an account, with
+    /// its history read off the main actor, a workout this build can't read is
+    /// known to persistence (counted once), and entry links are loaded. Core's
+    /// `aRowThisBuildCantReadIsNeverPushedAsADeletion(loaded:)` and
+    /// `aRelaunchFromTheBackgroundReadKeepsEntryLinks` sync through the same path.
+    func testOpeningFromTheBackgroundReadKeepsUnreadableRowsAndEntryLinks() async throws {
+        let session = WorkoutSession(name: "Synthetic newer kind", startedAt: Date().addingTimeInterval(-3_600),
+                                     endedAt: Date().addingTimeInterval(-1_800),
+                                     exercises: [PerformedExercise(exerciseID: "barbell-bench-press",
+                                                                   sets: [PerformedSet(efforts: [Effort(reps: 5, load: .kg(100))],
+                                                                                       completedAt: Date())])])
+        let first = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil)
+        _ = try first.store.importSessions([session])
+        let code = try XCTUnwrap(GTIN("0012345678905"))
+        let food = Food(id: "synthetic-scan-food", name: "Synthetic bar", per100g: NutrientAmounts([.energy: 400]), servings: [],
+                        createdAt: Date())
+        let today = LocalDate(Date(), in: .current)
+        _ = await first.barcodes.resolve(code, meal: "Lunch", date: today) { _ in .unavailable }
+        await first.barcodes.resolveWaiting { _ in .found(food, attribution: "OFF") }
+        let scan = try XCTUnwrap(first.barcodes.ready.first)
+        let plate = [NutritionStore.PlateItem(food, grams: 40)]
+        let logged = try first.barcodes.log(plate, consuming: [[scan.id]], to: first.nutrition, on: today, meal: "Lunch")
+        try first.barcodes.undo(Set(logged.map(\.id)), from: first.nutrition)
+        let again = try first.barcodes.log(plate, consuming: [[scan.id]], to: first.nutrition, on: today, meal: "Lunch")
+        let url = first.url
+        await first.close()
+        // A newer app's set kind, which this build can't decode.
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let sql = "UPDATE sessions SET payload = CAST(replace(CAST(payload AS TEXT), '\"standard\"', '\"cluster\"') AS BLOB) WHERE id = '\(session.id.uuidString)'"
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_changes(database), 1)
+
+        let reopened = try await TrainingWorkspace.open(accountID: "account-a", root: root, api: nil)
+        XCTAssertEqual(reopened.unreadableCount, 1, "Known once, as persistence now holds it")
+        XCTAssertNil(reopened.store.history.session(session.id))
+        XCTAssertEqual(reopened.nutrition.links[again[0].id]?.replaces, logged.map(\.id))
+        await reopened.close()
+    }
+
+    /// Review round 3, compatibility: data a newer Exerly saved opens nowhere
+    /// here, and the screens say it's safe and to update, offering nothing destructive.
+    func testDataFromANewerVersionSaysItsSafeAndToUpdate() async throws {
+        let directory = root!
+        let newer = AppAccountWorkspace(open: { _ in
+            throw SQLiteTrainingPersistence.PersistenceError.newerSchema(found: 7, supported: 6)
+        }, deleteTraining: { try TrainingWorkspace.deleteStorage(accountID: $0, root: directory) },
+            purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await newer.configure(auth.accountAPI)
+        XCTAssertNil(newer.training)
+        XCTAssertEqual(newer.openingError,
+                       "Your data is safe on this device. A newer version of Exerly saved it, so update Exerly to open it.")
+        let broken = AppAccountWorkspace(open: { _ in throw CocoaError(.fileReadCorruptFile) },
+                                         deleteTraining: { _ in }, purgeLegacy: { _ in }, pendingLegacy: { _ in [] })
+        await broken.configure(auth.accountAPI)
+        XCTAssertEqual(broken.openingError, "Your saved data is still on this device. Keep Exerly installed and try again.")
     }
 
     func testSignOutQuiescesSyncAndKeepsTrainingForTheSameAccount() async throws {
@@ -122,7 +270,7 @@ final class AccountWorkspaceTests: XCTestCase {
         let oldEngine = try XCTUnwrap(training.sync)
         try training.store.startSession(name: "Keep me", bodyweight: nil)
         StubURLProtocol.handler = { _ in throw URLError(.cannotConnectToHost) }
-        do { try await owner.deleteAccount(auth: auth, authorizationCode: nil); XCTFail("Expected offline error") }
+        do { try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password")); XCTFail("Expected offline error") }
         catch { XCTAssertNotNil(error as? URLError) }
         XCTAssertEqual(auth.authState, .authenticated)
         XCTAssertEqual(owner.training?.store.activeSession?.name, "Keep me")
@@ -148,7 +296,7 @@ final class AccountWorkspaceTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/api/account")
             return (200, Data(#"{"ok":true}"#.utf8))
         }
-        try await owner.deleteAccount(auth: auth, authorizationCode: nil)
+        try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password"))
         XCTAssertEqual(auth.authState, .unauthenticated)
         XCTAssertNil(owner.training)
         XCTAssertFalse(FileManager.default.fileExists(atPath: original.url.path))
@@ -173,7 +321,7 @@ final class AccountWorkspaceTests: XCTestCase {
         StubURLProtocol.handler = { _ in
             (400, Data(#"{"message":"Confirm with Apple","details":{"code":"apple_reauthorization_required"}}"#.utf8))
         }
-        do { try await owner.deleteAccount(auth: auth, authorizationCode: nil); XCTFail("Expected Apple authorization") }
+        do { try await owner.deleteAccount(auth: auth, confirmation: .password("synthetic-password")); XCTFail("Expected Apple authorization") }
         catch ExerlyCore.APIError.appleReauthorizationRequired { }
         XCTAssertEqual(auth.authState, .authenticated)
         XCTAssertFalse(training.sync === oldEngine)

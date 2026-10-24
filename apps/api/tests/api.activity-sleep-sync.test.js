@@ -280,3 +280,30 @@ test('an administrator reset sends tombstones to the target account and replays 
   }
   assert.equal((await api.get('/api/sync', { token: admin.token })).body.changes.length, 0);
 });
+
+// The iPhone recognises an activity imported from Apple Health as unchanged by
+// these fields (HealthImport.fingerprint(activity:)), so the server must hand
+// each back as the app sent it, in the list a sync reads and after a write.
+test('an imported activity comes back with the fields its fingerprint covers unchanged', async () => {
+  const user = await signUp(api);
+  const token = user.token;
+  const day = dates.addDays(dates.today(user.timezone), -2);
+  const sent = {
+    activity: 'Running',
+    duration_min: 30,
+    calories: 320,
+    type: 'health',
+    entry_date: day,
+  };
+  const saved = await api.post('/api/activities', { ...sent, client_id: randomUUID() }, { token });
+  assert.equal(saved.status, 201, JSON.stringify(saved.body));
+  const listed = await api.get(
+    `/api/activities?from=${day}&to=${day}&include_deleted=true&limit=500&page=1`,
+    { token }
+  );
+  assert.equal(listed.status, 200);
+  for (const row of [saved.body, listed.body[0]]) {
+    for (const [field, value] of Object.entries(sent)) assert.equal(row[field], value, field);
+    assert.equal(row.intensity, null);
+  }
+});

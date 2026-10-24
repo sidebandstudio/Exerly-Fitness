@@ -341,7 +341,7 @@ test('import needs the app’s session, a link, and stays under the hourly limit
   assert.equal((await api.post('/v1/recipes/import', { url: `${base}/recipe` })).status, 401);
   const token = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read', 'propose', 'write'] },
+    { name: 'Synthetic agent', scopes: ['read', 'propose', 'write'], password: user.password },
     { token: user.token, headers: { 'Idempotency-Key': randomUUID() } }
   );
   const byToken = await api.post(
@@ -395,6 +395,9 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
   try {
     const queries = [
       'black beans',
+      'black beans canned',
+      'coconut milk canned',
+      'quinoa',
       'egg',
       'butter',
       'potatoes',
@@ -411,7 +414,12 @@ test('ingredient names match generic foods strictly, without Open Food Facts sea
     assert.deepEqual(
       res.body.foods.map((food) => food?.name ?? null),
       [
-        'Black beans, NFS',
+        // A recipe lists its own fat: not "Black beans, NFS", which has the fat-added values.
+        'Black beans, from dried, no added fat',
+        // A can's line asks for canned, and falls back to the plain name without one.
+        'Black beans, from canned, no added fat',
+        'Coconut milk',
+        'Quinoa, no added fat',
         'Egg, whole, raw',
         'Butter, NFS',
         'Potato, NFS',

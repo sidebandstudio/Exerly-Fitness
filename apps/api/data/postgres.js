@@ -234,6 +234,46 @@ async function insert(collection, doc) {
   return fromRow(collection, rows[0]);
 }
 
+/**
+ * Inserts rows a few hundred at a time, one statement each, and returns them
+ * in the order given. A field a row leaves out gets the column's default.
+ */
+async function insertMany(collection, docs) {
+  const out = [];
+  let start = 0;
+  while (start < docs.length) {
+    const fields = [];
+    let end = start;
+    // Postgres takes at most 65,535 parameters per statement.
+    while (end < docs.length) {
+      const next = [...new Set([...fields, ...knownFields(collection, docs[end])])];
+      if (end > start && next.length * (end - start + 1) > 30000) break;
+      fields.splice(0, fields.length, ...next);
+      end += 1;
+    }
+    if (fields.length === 0) throw new Error(`insertMany(${collection}) had no known fields`);
+    const params = [];
+    const values = docs.slice(start, end).map(
+      (doc) =>
+        `(${fields
+          .map((f) => {
+            if (doc[f] === undefined) return 'DEFAULT';
+            params.push(toColumn(collection, f, doc[f]));
+            return `$${params.length}`;
+          })
+          .join(', ')})`
+    );
+    const { rows } = await query(
+      `INSERT INTO ${collection} (${fields.map(q).join(', ')}) VALUES ${values.join(', ')} RETURNING *`,
+      params
+    );
+    rows.sort((a, b) => Number(a.seq) - Number(b.seq));
+    out.push(...rows.map((row) => fromRow(collection, row)));
+    start = end;
+  }
+  return out;
+}
+
 async function findById(collection, id) {
   assertCollection(collection);
   if (!UUID_RE.test(String(id))) return null;
@@ -375,6 +415,7 @@ module.exports = {
   connectionConfig,
   query,
   insert,
+  insertMany,
   find,
   findOne,
   findById,

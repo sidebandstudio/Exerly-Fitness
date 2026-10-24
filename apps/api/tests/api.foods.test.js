@@ -50,7 +50,7 @@ test('search returns Foods ExerlyCore can save, with attribution, to sessions an
 
   const created = await api.post(
     '/v1/tokens',
-    { name: 'Synthetic agent', scopes: ['read'] },
+    { name: 'Synthetic agent', scopes: ['read'], password: user.password },
     { token: user.token, headers: { 'Idempotency-Key': randomUUID() } }
   );
   const byToken = await api.get('/v1/foods/search?q=oat', { token: created.body.token });

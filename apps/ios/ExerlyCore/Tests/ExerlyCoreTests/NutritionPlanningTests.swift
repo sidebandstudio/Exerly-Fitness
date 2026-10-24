@@ -10,11 +10,11 @@ import Testing
         // 0.5 % of 80 kg is 0.4 kg, or 0.88 lb, a week.
         #expect(abs(NutritionRate.weekly(0.005, trend: 80, in: .kilograms) - 0.4) < 1e-9)
         #expect(abs(NutritionRate.weekly(0.005, trend: 80, in: .pounds) - 0.8818) < 1e-4)
-        // From 0.88 lb, one step up lands on 0.9 lb and the next on 1.0 lb.
+        // 0.88 lb shows as 0.9 lb: one step up lands on 1.0 lb and the next on 1.1 lb.
         let up = NutritionRate.nudged(0.005, by: 1, direction: .lose, trend: 80, unit: .pounds)
-        #expect(abs(NutritionRate.weekly(up, trend: 80, in: .pounds) - 0.9) < 1e-5)
+        #expect(abs(NutritionRate.weekly(up, trend: 80, in: .pounds) - 1.0) < 1e-5)
         let twice = NutritionRate.nudged(up, by: 1, direction: .lose, trend: 80, unit: .pounds)
-        #expect(abs(NutritionRate.weekly(twice, trend: 80, in: .pounds) - 1.0) < 1e-5)
+        #expect(abs(NutritionRate.weekly(twice, trend: 80, in: .pounds) - 1.1) < 1e-5)
         // Down from 0.88 lb lands on 0.8 lb; in kilograms the step is 0.05 kg.
         let down = NutritionRate.nudged(0.005, by: -1, direction: .lose, trend: 80, unit: .pounds)
         #expect(abs(NutritionRate.weekly(down, trend: 80, in: .pounds) - 0.8) < 1e-5)
@@ -33,6 +33,85 @@ import Testing
         #expect(NutritionRate.presets(for: .lose).allSatisfy { $0 <= NutritionTargets.maximumLoss })
         #expect(NutritionRate.presets(for: .gain).allSatisfy { $0 <= NutritionTargets.maximumGain })
         #expect(NutritionRate.presets(for: .maintain).isEmpty)
+    }
+
+    @Test func everyStepChangesTheAmountShown() {
+        // A trend of 72.57 kg (160.0 lb) made 0.5 % read 0.8 lb, and Faster kept it at 0.8 lb.
+        func shown(_ share: Double, _ trend: Double, _ unit: MassUnit) -> String {
+            NutritionRate.weekly(share, trend: trend, in: unit).formatted(.number.precision(.fractionLength(unit == .pounds ? 1 : 2)))
+        }
+        for trend in [72.57, 72.6, 80, 95.31] {
+            for unit in MassUnit.allCases {
+                for direction in [NutritionGoal.Direction.lose, .gain] {
+                    var share = NutritionRate.presets(for: direction)[0]
+                    for steps in [1, 1, 1, -1, -1] {
+                        let next = NutritionRate.nudged(share, by: steps, direction: direction, trend: trend, unit: unit)
+                        if next < NutritionRate.maximum(for: direction) {
+                            #expect(shown(next, trend, unit) != shown(share, trend, unit), "\(trend) kg, \(unit), \(direction)")
+                        }
+                        share = next
+                    }
+                }
+            }
+        }
+        #expect(shown(NutritionRate.nudged(0.005, by: 1, direction: .lose, trend: 72.57, unit: .pounds), 72.57, .pounds) == "0.9")
+    }
+
+    @Test func presetsAreRoundAmountsInThePersonsUnit() {
+        func amounts(_ direction: NutritionGoal.Direction, _ trend: Double, _ unit: MassUnit) -> [Double] {
+            NutritionRate.presets(for: direction, trend: trend, unit: unit).map {
+                (NutritionRate.weekly($0, trend: trend, in: unit) * 100).rounded() / 100
+            }
+        }
+        // 160 lb may lose up to 1.6 lb a week, so 2 lb isn't offered; 220 lb gets all four.
+        #expect(amounts(.lose, Mass.lb(160).kilograms, .pounds) == [0.5, 1, 1.5])
+        #expect(amounts(.lose, Mass.lb(220).kilograms, .pounds) == [0.5, 1, 1.5, 2])
+        #expect(amounts(.gain, Mass.lb(170).kilograms, .pounds) == [0.2, 0.4, 0.6, 0.8])
+        #expect(amounts(.lose, 80, .kilograms) == [0.25, 0.5, 0.75])
+        #expect(amounts(.gain, 80, .kilograms) == [0.1, 0.2, 0.3, 0.4])
+        #expect(NutritionRate.presets(for: .lose, trend: nil, unit: .pounds) == NutritionRate.presets(for: .lose))
+        #expect(NutritionRate.presets(for: .maintain, trend: 80, unit: .pounds).isEmpty)
+        // A direction starts on the preset nearest 0.5 % (or 0.25 % to gain): 0.8 lb → 1 lb.
+        let start = NutritionRate.standard(for: .lose, trend: Mass.lb(160).kilograms, unit: .pounds)
+        #expect(NutritionRate.presets(for: .lose, trend: Mass.lb(160).kilograms, unit: .pounds)[1] == start)
+        #expect(NutritionRate.standard(for: .lose, trend: nil, unit: .pounds) == 0.005)
+    }
+
+    @Test func aGoalWeightAlreadyPassedNeverCutsOrAddsCalories() throws {
+        let trend = Mass.lb(160).kilograms
+        let basis = PlanBasis(expenditure: 2400, expenditureError: 100, trendWeight: trend)
+        // Losing toward 165 lb from a trend of 160 lb: the tester's goal.
+        let wrongWay = NutritionGoal(.lose, weeklyRate: 0.00625, goalWeight: .lb(165))
+        #expect(wrongWay.isReached(trend: trend))
+        #expect(wrongWay.redirection(trend: trend) == .gain)
+        #expect(NutritionGoal(.gain, weeklyRate: 0.0025, goalWeight: .lb(150)).redirection(trend: trend) == .lose)
+        #expect(NutritionGoal(.lose, weeklyRate: 0.005, goalWeight: .lb(160)).redirection(trend: trend) == .maintain)
+        #expect(NutritionGoal(.lose, weeklyRate: 0.005, goalWeight: .lb(150)).redirection(trend: trend) == nil)
+        #expect(NutritionGoal(.gain, weeklyRate: 0.0025, goalWeight: .lb(165)).redirection(trend: trend) == nil)
+        #expect(!NutritionGoal(.maintain, goalWeight: .lb(165)).isReached(trend: trend))
+        #expect(!NutritionGoal(.lose, weeklyRate: 0.005).isReached(trend: trend))
+
+        // The editor's draft refuses it and says what to do instead.
+        var draft = NutritionPlanDraft(nil, goal: wrongWay)
+        let refused = draft.preview(startingOn: monday, basis: basis)
+        #expect(refused.plan == nil)
+        #expect(refused.problems == ["Your trend weight is already under this goal weight, so losing can't reach it. Switch to Gain, or Maintain."])
+        // Switching to gain makes a surplus toward it; maintaining holds expenditure.
+        draft.goal.direction = .gain
+        draft.goal.weeklyRate = 0.0025
+        let gain = try #require(draft.preview(startingOn: monday, basis: basis).plan)
+        #expect(gain.goal.goalWeight == .lb(165))
+        #expect(try #require(gain.averageDay).energy > basis.expenditure)
+        draft.goal.direction = .maintain
+        let maintain = try #require(draft.preview(startingOn: monday, basis: basis).plan)
+        #expect(maintain.goal == NutritionGoal(.maintain))
+        #expect(try #require(maintain.averageDay).energy == basis.expenditure)
+
+        // A version already made toward a goal the trend has since reached (a
+        // check-in's) holds the trend instead of cutting further.
+        let reached = NutritionPlan(startDate: monday, goal: NutritionGoal(.lose, weeklyRate: 0.005, goalWeight: .lb(162)))
+        let held = try reached.computed(from: basis)
+        #expect(held.averageDay?.energy == basis.expenditure)
     }
 
     @Test func weekdayStepsMoveOneDayAndStayInRange() {
@@ -156,8 +235,6 @@ import Testing
         #expect(lose.projection(from: 75, on: monday) == .reached)
         #expect(NutritionGoal(.lose, weeklyRate: 0.005).projection(from: 80, on: monday) == .noGoalWeight)
         #expect(NutritionGoal(.maintain, goalWeight: .kg(80)).projection(from: 80, on: monday) == .maintaining)
-        #expect(lose.suggestedGoalWeight(trend: 80, unit: .kilograms) == .kg(72))
-        #expect(NutritionGoal(.gain, weeklyRate: 0.0025).suggestedGoalWeight(trend: 80, unit: .pounds) == .lb(185))
     }
 }
 
