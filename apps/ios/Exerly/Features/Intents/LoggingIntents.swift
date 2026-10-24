@@ -55,11 +55,13 @@ struct FoodEntityQuery: EntityStringQuery {
         }
     }
 
+    /// None when no account is open, as after sign-out, rather than an error
+    /// that could leave the system the last account's foods.
     @MainActor
     func suggestedEntities() async throws -> [FoodEntity] {
-        try await IntentAccess().perform(changing: false) { account in
+        (try? await IntentAccess().perform(changing: false) { account in
             LoggingActions.usualFoods(in: account).map { FoodEntity($0, unit: account.unit) }
-        }
+        }) ?? []
     }
 
     @MainActor

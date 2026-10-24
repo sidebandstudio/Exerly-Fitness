@@ -2889,3 +2889,10 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - The confirmation cut off at the largest text stays as it is here: the
   coordinator is moving confirmations at those sizes into an inline row
   at the top of Today in the design wave.
+- Signing out now also refreshes the App Shortcut parameters, and Log a
+  food's suggested foods are none when no account is open instead of an
+  error. Sign-out already cleared the foods indexed in Spotlight, but the
+  Log a food shortcut's own top hit ("Food, Greek yogurt, plain") could
+  still name the last account's food. The full NotificationActionsUITests
+  run caught it, where earlier tests had signed in other accounts with the
+  same foods.

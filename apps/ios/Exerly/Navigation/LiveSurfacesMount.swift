@@ -46,6 +46,8 @@ private struct LiveSurfacesMount: ViewModifier {
                 WidgetSnapshotWriter.clear()
                 WatchCoordinator.shared.signOut()
                 await FoodSpotlight.clear()
+                // Log a food's phrases and Spotlight top hits name no food of theirs once they're out.
+                ExerlyShortcuts.updateAppShortcutParameters()
                 UNUserNotificationCenter.current().removeAllDeliveredNotifications()
             }
             #if DEBUG
