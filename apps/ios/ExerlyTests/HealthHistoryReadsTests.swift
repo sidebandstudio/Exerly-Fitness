@@ -461,6 +461,39 @@ final class HealthHistoryReadsTests: XCTestCase {
         XCTAssertEqual(workspace.healthImports.records[run.id]?.state, .removed)
     }
 
+    /// A workout half saved before a crash is finished as the account opens
+    /// again, its work read with the history off the main actor, without the
+    /// Health screen opening.
+    func testACrashedWorkoutImportIsFinishedAsTheAccountOpens() async throws {
+        let run = workout()
+        client.workouts = [run]
+        let history = model()
+        await history.begin(.workouts)
+        activities.crashAfterNextWrite = true
+        await history.confirm()
+        XCTAssertNil(workspace.healthImports.records[run.id], "The crash came before its record")
+        await workspace.close()
+
+        let root = try XCTUnwrap(root), read = WorkRead()
+        let account = AppAccountWorkspace(open: { api in
+            try await TrainingWorkspace.open(accountID: api.accountID, root: root, api: nil) { try read.read($0) }
+        }, finishHealthWork: { workspace in
+            try? HealthWorkoutWork.recover(workspace, activities: self.activities, defaults: self.defaults)
+        })
+        await account.configure(AccountAPI(accountID: "history", transport: MemoryDocumentServer()))
+        let opened = try XCTUnwrap(account.training)
+        XCTAssertNotNil(read.work, "The work was read with the account's history")
+        let record = try XCTUnwrap(opened.healthImports.records[run.id])
+        XCTAssertEqual(record.state, .imported)
+        XCTAssertEqual(record.target, HealthHistory.activityID(for: run.id, accountID: "history"))
+        XCTAssertNil(try opened.healthImports.pendingWork())
+        XCTAssertEqual(activities.saved.count, 1, "Never saved twice")
+        XCTAssertNotNil(defaults.data(forKey: "healthHistory.test.history.anchor.workouts"), "Health's anchor moved on")
+        workspace = opened
+        XCTAssertTrue(model().enabled.contains(.workouts), "Reading workouts is on, as confirming turned it on")
+        await opened.close()
+    }
+
     /// Item 4: an entry changed while its day's preview is open holds the day
     /// as it is: confirming adds nothing beside it and shows the preview again.
     func testAnEntryChangedWhileItsPreviewIsOpenHoldsItsDay() async throws {
@@ -738,5 +771,16 @@ final class MemoryDocumentServer: SessionTransport, @unchecked Sendable {
             feed.append(document(base + 1, payload, sequence: feed.count + 1))
             return (200, try JSONSerialization.data(withJSONObject: ["revision": base + 1]))
         }
+    }
+}
+
+/// What an account's opening read, to check the work came with its history.
+private final class WorkRead: @unchecked Sendable {
+    private(set) var work: Data?
+
+    func read(_ url: URL) throws -> StoredAccount? {
+        let stored = try StoredAccount.read(url: url)
+        work = stored?.healthImportWork
+        return stored
     }
 }

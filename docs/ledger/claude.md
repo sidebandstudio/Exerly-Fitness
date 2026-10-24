@@ -9,27 +9,23 @@ Rewrite this file each iteration and keep it under 80 lines. See `docs/AGENT_BRI
 - 2610110306: typed amounts, package sizes, multi-select copy/move, hidden suggestions,
   Duplicate food. 2610111702: recipe import from a link and as a file; runs 5–6 fixes.
 - This landing, uploaded next:
-  - Body (PARITY S06, S07, S09, S10): weight goal with ETA, weekly checkpoints and on-track
-    standing, goal line and planned path on the chart; edit and undo-delete readings, gaps drawn
-    dashed, the trend's readings and ± explained; 18 measurement sites plus a visual body-fat
-    estimate with history; front, side and back photos per date with a compare slider, stored per
-    account on device.
-  - Diary (PARITY N06, N18, N19, N20, N33): lead with "left" or "eaten"; water with quick adds,
-    Undo, a daily goal and a Log water shortcut; By time view; habits calendar from the date; day
-    status and note from a menu; hide or reorder Today's cards.
+  - Body (S06, S07, S09, S10): weight goal with ETA, checkpoints, goal line and path; edit and
+    undo-delete readings, dashed gaps, the trend explained; 18 measurement sites, visual body fat;
+    front, side and back photos per date with a compare slider, on device.
+  - Diary (N06, N18–N20, N33): lead with "left" or "eaten"; water with quick adds, Undo, a goal and
+    a shortcut; By time; habits calendar; day status and note; hide or reorder Today's cards.
   - iOS 26's clear keyboard Done bar no longer takes taps meant for fields; a preference
     changed while its screen refreshed is no longer dropped; By time keeps every hour.
-  - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly exports and
-    measurements; preview, Undo, full export. Reviews 2–5 fixed: restores (validated, exact
-    tombstones, replayable Undo, 3 years in 5 s), moves, measurement edits; on barcode. Synthetic.
-- claude/apple (not landed, I04–I06, I08, I17–I19): Shortcuts for every logging action and Log by
-  JSON; Spotlight logs a usual food in one tap; Health reads recovery, other apps' food and workouts.
+  - Import & export (I12–I14): MacroFactor, MF Workouts, Hevy, Strong, Exerly; preview, Undo, full
+    export. Reviews 2–5 fixed restores (3 years in 5 s), moves, measurement edits, barcode. Synthetic.
+- claude/apple (not landed; I04–06, I08, I17–19): Shortcuts, Log by JSON; Spotlight and Siri log with Undo;
+  Health food, workouts, recovery. Review 3: owner generations, workout journal (finished as the
+  account opens), plans rechecked as applied, tombstones, exported. Rebased on sync (fd55982b).
 - claude/ready (not landed): password reset, export-first delete, refresh reuse, privacy; review rounds
   1-5 fixed; do-connecting-ip trust stays off until Ali verifies the ingress. Needs deploy, app update.
 - claude/polish6 (in claude/next 48f64e6d, not on TestFlight): run 7, reviews. Gain or Maintain past
-  a goal weight; liquids by density, drained cans; Customize Today and water goal kept offline, sent
-  alone, one writer per session, replays reconciled (QuickPreferences); Next in each form's order;
-  weigh-ins read with time, fat, source; water's Undo in a row under its chips, which never move.
+  a goal; liquids by density; Customize Today and water goal kept offline (QuickPreferences); Next in
+  each form's order; weigh-ins with time, fat, source; water's Undo in a row under its chips.
 - claude/taps (landed): tap budgets in CI; reviews 1-6 fixed; launch gated at 1.10x an empty
   account's in the same run and 3.25 s p50; 3 years in 3.7 s, not 30 s (B03).
 
@@ -59,10 +55,10 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 
 ## Merge status
 
-| Branch      | Unlanded                                       | Last landed |
-| ----------- | ---------------------------------------------- | ----------- |
-| claude/next | nothing                                        | this commit |
-| sync        | conflict review, rounds 1-5 fixed, on 2f7b53b5 | not yet     |
+| Branch      | Unlanded                                            | Last landed     |
+| ----------- | --------------------------------------------------- | --------------- |
+| claude/next | nothing                                             | fd55982b (sync) |
+| apple       | 27 commits on fd55982b, for Sol's confirming review | not yet         |
 
 ## Risks
 
@@ -77,5 +73,7 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 - Flaky: BarcodeScanSessionTests' row Undo. TodayDiary's eaten-and-back: fixed in the test (DECISIONS).
 - B03: 3 years miss the 3.5 s gate: p50 4.50 s (p95 4.68) vs 5.08 s on claude/next; sync encodes nothing.
 - Sync: ship the API (`food_entry_link`) with the app; bump `syncEncodingVersion` on encoding changes.
+- Health imports: the API's `health_import` kind must deploy (a `main` merge) before the app ships;
+  real HealthKit time on years of history is unmeasured.
 - Intents open a workspace synchronously (LoggingActions.swift:66): an older file's migration lock can
   hold the main actor up to 5 s. Left for the nutrition builder's change to that workspace.

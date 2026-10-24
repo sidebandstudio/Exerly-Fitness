@@ -14,6 +14,7 @@ final class AppAccountWorkspace: ObservableObject {
     private let deleteTraining: @MainActor (String) throws -> Void
     private let purgeLegacy: @MainActor (String) throws -> Void
     private let pendingLegacy: @MainActor (String) throws -> [AccountExport.PendingRow]
+    private let finishHealthWork: @MainActor (TrainingWorkspace) -> Void
     private var generation = UUID()
     private var closing: (id: UUID, task: Task<Void, Never>)?
     private var isCleaning = false
@@ -37,11 +38,17 @@ final class AppAccountWorkspace: ObservableObject {
          pendingLegacy: @escaping @MainActor (String) throws -> [AccountExport.PendingRow] = { accountID in
              guard SyncEngine.shared.isConfigured(for: accountID) else { throw ExerlyCore.APIError.accountChanged }
              return try SyncEngine.shared.pendingExportRows()
+         },
+         finishHealthWork: @escaping @MainActor (TrainingWorkspace) -> Void = { workspace in
+             // A failure leaves the work written down, for the Health screen to finish and report.
+             guard SyncEngine.shared.isConfigured(for: workspace.accountID) else { return }
+             try? HealthWorkoutWork.recover(workspace, activities: SyncEngine.shared, defaults: .standard)
          }) {
         self.open = open
         self.deleteTraining = deleteTraining
         self.purgeLegacy = purgeLegacy
         self.pendingLegacy = pendingLegacy
+        self.finishHealthWork = finishHealthWork
     }
 
     /// Opens the account's data, reading its history off the main actor. A
@@ -74,6 +81,8 @@ final class AppAccountWorkspace: ObservableObject {
             }
             training = opened
             failedAccountID = nil
+            // Workouts from Health a crash left half saved are finished as the account opens.
+            finishHealthWork(opened)
         } catch {
             guard generation == request else { return }
             failedAccountID = account.accountID

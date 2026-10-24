@@ -2559,6 +2559,7 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   them at launch took quadratic time, and so did every sync lookup. Persistence now keeps a
   set beside the ordered list, notes every row (its own reads' too) through one path in
   canonical form, and answers `isUnreadable` from the set.
+
 ## 2026-10-21: Shortcuts and Siri for every logging action
 
 - New actions: Log a food by name, Log a barcode, Repeat a day, Log by JSON,
@@ -2860,3 +2861,31 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - Release: the API's `health_import` document kind, and the tombstone and
   generation rules, must be deployed before an app with Health imports
   ships. Only a merge to `main` deploys the API.
+
+## 2026-10-23: Apple integration rebased on sync; Health work finished as the account opens
+
+- Rebased onto claude/next fd55982b (sync). `health_import` is a host of
+  the sync engine beside sync's conflicts and links, and of
+  `documentHosts` for export and restore. It isn't a host of
+  `SyncConflictStore`, as `import_provenance` isn't: its merge is decided
+  by generation and time, with nothing for a person to choose. The API
+  keeps all three new kinds: `health_import`, `sync_conflict` and
+  `food_entry_link`.
+- Health records are saved and deleted through the persistence's document
+  calls, which record each in `sync_changes` in the same transaction, so
+  sync pushes them as changed. The workout journal is a row of the
+  existing `settings` table, which isn't synced or tracked: no new table,
+  and the schema stays at sync's 6. Two opens at once only read it; it's
+  written with one upsert and cleared in the records' own transaction.
+- An unfinished workout journal is finished as the account opens, not
+  only when the Health screen opens. `StoredAccount.read` reads it with
+  the account's history off the main actor; once `AppAccountWorkspace`
+  has the account open, and the activity log is set up for the same
+  account, the journal's changes are made on the main actor, where both
+  stores are written. The journal now carries the defaults key of its
+  account's Health switches, so its anchor moves on and reading workouts
+  turns on without the Health screen. A failure there leaves the journal
+  for the Health screen to finish and report.
+- The confirmation cut off at the largest text stays as it is here: the
+  coordinator is moving confirmations at those sizes into an inline row
+  at the top of Today in the design wave.

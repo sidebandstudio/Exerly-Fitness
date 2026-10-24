@@ -28,6 +28,8 @@ public struct StoredAccount: Sendable {
     public let training: Training
     /// The account's Health import records (`HealthImportStore(persistence:loaded:)`).
     public let healthImports: [HealthImport]
+    /// Health import work a crash left unfinished (`HealthImportStore.recordWork`), if any.
+    public let healthImportWork: Data?
     /// Rows that couldn't be decoded, as `table/id`; left in the file as they are.
     public let unreadableRows: [String]
 
@@ -83,6 +85,11 @@ public struct StoredAccount: Sendable {
         let customExercises = try rows(Exercise.self, table: "custom_exercises", order: "id")
         let training = Training(sessions: sessions, customExercises: customExercises, unreadable: unreadable)
         let healthImports = try documents(HealthImportStore.kind).map { try decoder.decode(HealthImport.self, from: $0) }
-        return StoredAccount(nutrition: nutrition, training: training, healthImports: healthImports, unreadableRows: unreadable)
+        var work: Data?
+        if case .blob(let value) = try database.query("SELECT value FROM settings WHERE key = ?", HealthImportStore.workKey).first?.first {
+            work = value
+        }
+        return StoredAccount(nutrition: nutrition, training: training, healthImports: healthImports, healthImportWork: work,
+                             unreadableRows: unreadable)
     }
 }

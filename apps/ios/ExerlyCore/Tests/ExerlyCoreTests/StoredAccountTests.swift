@@ -51,6 +51,18 @@ import Testing
         let loaded = HealthImportStore(persistence: persistence, loaded: stored.healthImports)
         #expect(loaded.records == (try HealthImportStore(persistence: persistence)).records)
         #expect(loaded.records[toast.id]?.state == .removed && loaded.records[toast.id]?.target == "")
+        #expect(stored.healthImportWork == nil)
+        #expect(try loaded.pendingWork() == nil, "no work left unfinished")
+
+        // Work a crash left unfinished is read with them, and is gone once finished.
+        try imports.recordWork(Data("planned".utf8))
+        let reopened = try #require(try await Task.detached { try StoredAccount.read(url: url) }.value)
+        #expect(reopened.healthImportWork == Data("planned".utf8))
+        let opening = HealthImportStore(persistence: persistence, loaded: reopened.healthImports, work: reopened.healthImportWork)
+        #expect(try opening.pendingWork() == Data("planned".utf8))
+        try opening.save([], finishingWork: true)
+        #expect(try opening.pendingWork() == nil)
+        #expect(try imports.pendingWork() == nil)
     }
 
     /// A file an older version wrote is brought up to date and read off the

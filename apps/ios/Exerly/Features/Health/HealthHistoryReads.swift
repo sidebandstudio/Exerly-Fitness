@@ -247,6 +247,59 @@ struct HealthWorkoutWork: Codable {
     var anchor: Data?
     /// Turns reading workouts on, as confirming a preview does.
     var turnOn: Bool
+    /// Where the account's Health switches and anchors are kept in defaults
+    /// (`HealthHistoryModel`), so the work can be finished without it.
+    var key: String
+
+    /// Finishes work a crash or a failure left written down, as the account
+    /// opens (`AppAccountWorkspace`) or the Health screen reads. The work was
+    /// read with the account's history, off the main actor; its changes are
+    /// made here, on the main actor, where both stores are written.
+    @MainActor
+    static func recover(_ workspace: TrainingWorkspace, activities: HealthActivityStore, defaults: UserDefaults) throws {
+        guard let data = try workspace.healthImports.pendingWork() else { return }
+        try ExerlyJSON.decoder.decode(Self.self, from: data).finish(imports: workspace.healthImports, activities: activities, defaults: defaults)
+    }
+
+    /// Makes each change to the activity log that isn't made yet, so running
+    /// it again after a crash repeats nothing; then saves the records and
+    /// clears the work in one transaction, and moves Health's anchor on.
+    @MainActor
+    func finish(imports: HealthImportStore, activities store: HealthActivityStore, defaults: UserDefaults) throws {
+        var records: [HealthImport] = []
+        for item in items {
+            var record = item.record
+            let deleted = store.activityStates([record.target])[record.target]
+            switch item.step {
+            case .save(let activity):
+                if deleted == nil {
+                    try store.saveImportedActivity(ActivityRequest(type: activity.type, duration: activity.minutes, calories: activity.calories,
+                                                                   intensity: nil, entryDate: activity.day, category: "health"),
+                                                   clientID: record.target)
+                }
+                guard let print = store.activityFingerprint(record.target) else { continue }
+                record.fingerprint = print
+            case .delete(let expecting):
+                // Changed since it was planned, as by a sync before a crash was finished: theirs now, its record as it was.
+                if deleted == false {
+                    guard store.activityFingerprint(record.target) == expecting else { continue }
+                    try store.deleteImportedActivity(clientID: record.target)
+                }
+            case .restore:
+                if deleted == true { try store.restoreImportedActivity(clientID: record.target) }
+                record.fingerprint = store.activityFingerprint(record.target) ?? record.fingerprint
+            case .none:
+                break
+            }
+            records.append(record)
+        }
+        try imports.save(records, finishingWork: true)
+        defaults.set(anchor, forKey: key + ".anchor." + HealthHistoryKind.workouts.rawValue)
+        if turnOn {
+            let on = Set(defaults.stringArray(forKey: key + ".enabled") ?? []).union([HealthHistoryKind.workouts.rawValue])
+            defaults.set(HealthHistoryKind.allCases.map(\.rawValue).filter(on.contains), forKey: key + ".enabled")
+        }
+    }
 }
 
 /// The history switches and their preview for the open account. Kept per
@@ -719,7 +772,7 @@ final class HealthHistoryModel: ObservableObject {
                 }
             }
         }
-        return HealthWorkoutWork(items: items, anchor: pending.anchor, turnOn: turningOn)
+        return HealthWorkoutWork(items: items, anchor: pending.anchor, turnOn: turningOn, key: key)
     }
 
     /// Writes the work down in the account's store before anything else, so
@@ -735,44 +788,9 @@ final class HealthHistoryModel: ObservableObject {
         try finish(ExerlyJSON.decoder.decode(HealthWorkoutWork.self, from: data), imports: workspace.healthImports)
     }
 
-    /// Makes each change to the activity log that isn't made yet, so running
-    /// it again after a crash repeats nothing; then saves the records and
-    /// clears the work in one transaction, and moves Health's anchor on.
     private func finish(_ work: HealthWorkoutWork, imports: HealthImportStore) throws {
-        let store = activities()
-        var records: [HealthImport] = []
-        for item in work.items {
-            var record = item.record
-            let deleted = store.activityStates([record.target])[record.target]
-            switch item.step {
-            case .save(let activity):
-                if deleted == nil {
-                    try store.saveImportedActivity(ActivityRequest(type: activity.type, duration: activity.minutes, calories: activity.calories,
-                                                                   intensity: nil, entryDate: activity.day, category: "health"),
-                                                   clientID: record.target)
-                }
-                guard let print = store.activityFingerprint(record.target) else { continue }
-                record.fingerprint = print
-            case .delete(let expecting):
-                // Changed since it was planned, as by a sync before a crash was finished: theirs now, its record as it was.
-                if deleted == false {
-                    guard store.activityFingerprint(record.target) == expecting else { continue }
-                    try store.deleteImportedActivity(clientID: record.target)
-                }
-            case .restore:
-                if deleted == true { try store.restoreImportedActivity(clientID: record.target) }
-                record.fingerprint = store.activityFingerprint(record.target) ?? record.fingerprint
-            case .none:
-                break
-            }
-            records.append(record)
-        }
-        try imports.save(records, finishingWork: true)
-        defaults.set(work.anchor, forKey: key + ".anchor." + HealthHistoryKind.workouts.rawValue)
-        if work.turnOn {
-            enabled.insert(.workouts)
-            saveEnabled()
-        }
+        try work.finish(imports: imports, activities: activities(), defaults: defaults)
+        if work.turnOn { enabled.insert(.workouts) }
     }
 
     /// "Added 3 foods. Took out 1 food." from a confirmed preview.

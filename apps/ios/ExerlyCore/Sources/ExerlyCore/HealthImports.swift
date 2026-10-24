@@ -161,10 +161,11 @@ public final class HealthImportStore {
         }
     }
 
-    /// Starts from records read off the main actor (`StoredAccount`).
-    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: [HealthImport]) {
+    /// Starts from records, and any unfinished work, read off the main actor (`StoredAccount`).
+    public init(persistence: TrainingPersistence & DocumentPersistence, loaded: [HealthImport], work: Data? = nil) {
         self.persistence = persistence
         records = Dictionary(loaded.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        openingWork = .some(work)
     }
 
     public func records(_ kind: HealthImport.Kind) -> [HealthImport] { records.values.filter { $0.kind == kind } }
@@ -175,20 +176,34 @@ public final class HealthImportStore {
     public func save(_ changed: [HealthImport], finishingWork: Bool = false) throws {
         guard !changed.isEmpty || finishingWork else { return }
         try persistence.performAtomically {
-            if finishingWork { try persistence.saveValue(nil, forKey: Self.workKey) }
+            if finishingWork {
+                try persistence.saveValue(nil, forKey: Self.workKey)
+                openingWork = nil
+            }
             persistence.afterCommit(try prepare(changed))
         }
     }
 
-    static let workKey = "health_import.work"
+    nonisolated static let workKey = "health_import.work"
 
     /// Changes that span this store and another, as an imported workout's
     /// activity and its record, written down before either is made so a
     /// crash between them can be finished. Kept on this device only.
-    public func recordWork(_ work: Data) throws { try persistence.saveValue(work, forKey: Self.workKey) }
+    public func recordWork(_ work: Data) throws {
+        try persistence.saveValue(work, forKey: Self.workKey)
+        openingWork = nil
+    }
 
-    /// Work written down and not yet finished, if any.
-    public func pendingWork() throws -> Data? { try persistence.loadValue(forKey: Self.workKey) }
+    /// Work written down and not yet finished, if any: as the account was
+    /// read off the main actor while it opened, until anything here changes it.
+    public func pendingWork() throws -> Data? {
+        if let openingWork { return openingWork }
+        return try persistence.loadValue(forKey: Self.workKey)
+    }
+
+    /// The work `StoredAccount` read with the records, `.some(nil)` when there
+    /// was none, so finishing it as the account opens reads nothing here.
+    @ObservationIgnored private var openingWork: Data??
 
     /// Persists records inside the caller's transaction; publish after it commits.
     func prepare(_ changed: [HealthImport]) throws -> () -> Void {
