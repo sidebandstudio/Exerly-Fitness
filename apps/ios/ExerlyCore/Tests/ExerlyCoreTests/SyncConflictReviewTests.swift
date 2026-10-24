@@ -205,6 +205,21 @@ final class TrainingDevice {
         #expect(later.conflicts.conflict(conflict.id) == nil, "Removed 30 days after the server took the new resolution")
     }
 
+    /// Review round 5: conflicts never shipped, so acknowledgements have one
+    /// format from the start, under one plain key.
+    @Test func acknowledgementsAreKeptUnderOneKey() async throws {
+        let (phone, tablet) = try devices()
+        let logged = try phone.nutrition.log(Foods.oats, grams: 40, on: monday, meal: "Breakfast")
+        for device in [phone, tablet] { try await device.sync.sync() }
+        try await clash(phone, tablet, logged.id, phone: 60, tablet: 90)
+        let conflict = try #require(phone.conflicts.unresolved.first)
+        try phone.conflicts.resolve(conflict.id, .local)
+        try await phone.sync.sync()
+        let keys = phone.disk.values.keys.filter { $0.hasPrefix("sync.conflicts.acknowledged") }
+        #expect(keys == ["sync.conflicts.acknowledged"], "Stored under \(keys)")
+        #expect(try phone.disk.conflictAcknowledgements()[conflict.id.uuidString]?.version == phone.conflicts.conflict(conflict.id)?.changedAt)
+    }
+
     /// Review round 2: a clash about an entry later deleted everywhere is
     /// settled by sync, which the review says, on both devices.
     @Test func aConflictAboutARecordDeletedEverywhereSettlesItself() async throws {

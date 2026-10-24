@@ -2551,3 +2551,7 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   next time" without recording anything: the comparison then marked the records trusted,
   so after the API deploy those documents were never sent. That fallback now records the
   document as changed again, so the next sync sends it without an edit or a new build.
+- Sync conflicts have never shipped (not on `main`, in no TestFlight build), so no installed
+  app holds an earlier acknowledgement format. Round 4's "new key" is dropped: acknowledgements
+  are stored under the one key `sync.conflicts.acknowledged`, in the
+  `ConflictAcknowledgement` format, which starts here, with no migration or legacy reading.

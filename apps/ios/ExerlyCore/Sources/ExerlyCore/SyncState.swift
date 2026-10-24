@@ -100,7 +100,7 @@ let changesTokenKey = "sync.changes.token"
 private let cursorKey = "sync.cursor"
 private let rejectedKey = "sync.rejected"
 private let deviceKey = "sync.device"
-private let acknowledgementsKey = "sync.conflicts.acknowledged.v2"
+private let acknowledgementsKey = "sync.conflicts.acknowledged"
 
 /// The settled version of a conflict the server took, by its `changedAt`, and when this device learned it.
 public struct ConflictAcknowledgement: Codable, Hashable, Sendable {
