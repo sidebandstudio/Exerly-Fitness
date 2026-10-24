@@ -2792,3 +2792,71 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
 - At the accessibility sizes Today's confirmation wraps in full instead of
   stopping at four lines, so "Logged Greek yogurt, plain to Breakfast"
   keeps its meal.
+
+## 2026-10-23: Apple integration, review round 3
+
+- Rebased onto claude/next 2f7b53b5 (taps). Taps' Today confirmation
+  stands: it's the navigation bar's subtitle, with Undo in the bar's
+  leading corner. Round 2's "wraps in full" commit became empty and was
+  dropped. At the accessibility sizes that subtitle is one line, so on an
+  SE "Logged Greek yogurt, plain to Breakfast" shows as "Logged Greek
+  yog…"; VoiceOver still hears the whole sentence, announced and as
+  Undo's label. A `.largeSubtitle` toolbar item with two lines was tried
+  and drawn small and centred under the title, so it was left out; how
+  the meal shows at those sizes is open.
+- Coordinator's clarification of decision 1: absence never removes
+  anything automatically, but a removal the person chooses in a full
+  read's preview is allowed. The choice reads "Remove these from Exerly",
+  off until chosen, and the text says it deletes them from Exerly, not
+  from Health.
+- An activity's fingerprint hashes the fields it's saved and synced with:
+  `activity`, `duration_min`, `calories`, `intensity`, `entry_date` and
+  `type` (`ActivityRequest`, routes/activities.js). It read `duration` and
+  `category`, which are never saved, so an edit to the minutes or the
+  type didn't lock the activity. An API test checks the real server hands
+  each field back unchanged, and an app test that the server's copy keeps
+  the fingerprint.
+- Ownership has a generation. Each adoption, and each claim of an entry
+  with no record, is one generation on; `merge` keeps the higher
+  generation whatever its time, and only within one generation does the
+  later change stand. Before anything is taken out or set aside, the
+  account is synced; if it can't be reached, nothing in that read is
+  changed and the anchor stays, so Health's deletions are read again
+  later. Records written before generations read as generation 0.
+- Workout imports are journalled. The activity log (SwiftData) and the
+  records (SQLite) are separate stores, so the planned changes, each
+  activity's save, deletion or restore with the record it leaves, are
+  written to the account's SQLite settings first. Then each change to the
+  log is made only if it isn't already, and the records are saved and the
+  journal cleared in one transaction; Health's anchor moves on only
+  after. A journal left by a crash or a failure is finished the next time
+  the Health screen opens or imports, before anything is read. A
+  deletion is made only if the activity still has the fingerprint it was
+  planned with. Failures are reported, never dropped. Foods need no
+  journal: entries and records already share one transaction.
+- The whole plan is checked again as it's applied: it's made again from
+  what was read against the account as it is then, after the ownership
+  sync and any Health read, with no suspension before the write. If
+  anything differs, nothing is applied and the preview opens again with
+  "Exerly changed while this was open"; a background refresh
+  applies the new plan once instead.
+- One outcome per record: an explicit or Health's removal wins over
+  setting the same record aside in one confirmation. A record already set
+  aside can still be removed when Health deletes it, so it never comes
+  back and never outranks a lower-ranked source's food.
+- Exports include `health_import` documents (owner, generation,
+  fingerprint, state), and restoring an Exerly export brings them back.
+  A restored record keeps its old owner, so the restoring iPhone adopts
+  it only by choice.
+- Retention: a removed record is a tombstone of its ID, kind, owner,
+  generation, state and time, enough to stop its sample being imported
+  again and to merge; target, source, times, day and fingerprint are
+  dropped. Incremental plans always include tombstones. The API accepts
+  a record without its target only when it's removed.
+- The records are read with the rest of an account's history off the
+  main actor (`StoredAccount`). On the SE simulator, opening an account
+  with 4,927 records (1,460 removed): 0.208 s in all and 0.113 s on the
+  main actor before, 0.195 s and 0.006 s after.
+- Release: the API's `health_import` document kind, and the tombstone and
+  generation rules, must be deployed before an app with Health imports
+  ships. Only a merge to `main` deploys the API.

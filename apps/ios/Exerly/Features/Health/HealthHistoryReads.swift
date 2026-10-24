@@ -391,7 +391,7 @@ final class HealthHistoryModel: ObservableObject {
                 messages[pending.kind] = note
                 return
             case .revised(var revised):
-                revised.note = "Something in Exerly changed since this opened. This is what importing would do now."
+                revised.note = "Exerly changed while this was open. Here's what importing does now."
                 self.pending = revised
                 return
             }

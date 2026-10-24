@@ -48,8 +48,8 @@ struct HealthImportPreviewSheet: View {
                 }
                 if preview.missing > 0 {
                     choice("No longer in Health",
-                           "\(pending.kind.count(preview.missing)) imported on this iPhone aren't in Health now. Health hides what Exerly can't read, so they stay unless you remove them.",
-                           toggle: "Remove these", isOn: $removeMissing, identifier: "health.preview.removeMissing")
+                           "\(pending.kind.count(preview.missing)) imported on this iPhone aren't in Health now, perhaps only hidden from Exerly. They stay unless you remove them. Removing deletes them from Exerly, not from Health.",
+                           toggle: "Remove these from Exerly", isOn: $removeMissing, identifier: "health.preview.removeMissing")
                 }
                 if preview.adoptable > 0 {
                     choice("Imported on another iPhone",
