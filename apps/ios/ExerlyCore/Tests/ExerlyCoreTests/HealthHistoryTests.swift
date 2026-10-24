@@ -251,6 +251,34 @@ import Testing
         #expect(b.2.records[soup.id] == adopted)
     }
 
+    /// Review 4, item 5: a food put back keeps its record's generation, so
+    /// an older version arriving later doesn't undo the restoration.
+    @Test func aRestoredFoodKeepsItsGenerationAgainstAStaleVersion() throws {
+        let persistence = InMemoryTrainingPersistence()
+        let store = try NutritionStore(persistence: persistence), imports = try HealthImportStore(persistence: persistence)
+        let soup = food(5, 12, tracker, kcal: 250)
+        var changes = HealthFoodChanges()
+        changes.adding = [soup]
+        try imports.apply(changes, to: store, install: "phone-a", timeZone: newYork, now: at(5, 13))
+        let stale = try #require(imports.records[soup.id])
+        changes = HealthFoodChanges()
+        changes.adopting = [soup.id]
+        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 9))
+        changes = HealthFoodChanges()
+        changes.displacing = [soup.id]
+        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 10))
+        changes = HealthFoodChanges()
+        changes.restoring = [soup]
+        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 11))
+        let restored = try #require(imports.records[soup.id])
+        #expect(restored.state == .imported && restored.generation >= 1)
+        var older = stale
+        older.state = .displaced
+        older.updatedAt = at(7, 9)
+        let merged = try imports.merge(kind: "health_import", base: nil, local: ExerlyJSON.canonical(restored), remote: ExerlyJSON.canonical(older))
+        #expect(try ExerlyJSON.decoder.decode(HealthImport.self, from: merged) == restored, "the restoration stands")
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))

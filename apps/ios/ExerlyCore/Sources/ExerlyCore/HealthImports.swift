@@ -321,10 +321,12 @@ extension HealthImportStore {
                 added += 1
             }
             for reading in changes.restoring where current[reading.id] == nil {
-                guard let record = records[reading.id], record.owner == install, record.state == .displaced else { continue }
+                guard var record = records[reading.id], record.owner == install, record.state == .displaced else { continue }
                 let entry = NutritionStore.entry(for: reading, timeZone: timeZone)
                 entries.append(DocumentWrite(kind: NutritionStore.entryKind, id: entry.id.uuidString, payload: try ExerlyJSON.canonical(entry)))
-                changed.append(HealthImport(food: reading, entry: entry, owner: install, now: now))
+                // The same record, at its generation, so an older version arriving later doesn't undo this.
+                (record.state, record.target, record.fingerprint, record.updatedAt) = (.imported, entry.id.uuidString, HealthImport.fingerprint(entry), now)
+                changed.append(record)
                 added += 1
             }
             for id in changes.adopting {
