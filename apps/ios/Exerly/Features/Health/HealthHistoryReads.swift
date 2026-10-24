@@ -197,8 +197,6 @@ protocol HealthActivityStore: AnyObject {
     func readActivities(_ days: ClosedRange<LocalDate>) async -> Bool
     func saveImportedActivity(_ request: ActivityRequest, clientID: String) throws
     func deleteImportedActivity(clientID: String) throws
-    /// Takes back Exerly's own deletion of an activity it imported.
-    func restoreImportedActivity(clientID: String) throws
 }
 
 /// This install of Exerly, as Health imports name their owner. Kept in the
@@ -232,7 +230,6 @@ struct HealthWorkoutWork: Codable {
         case save(Activity)
         /// Only while the activity's fingerprint is still this one.
         case delete(expecting: String)
-        case restore
         case none
     }
 
@@ -241,16 +238,9 @@ struct HealthWorkoutWork: Codable {
         /// The activity the step changes, kept apart from the record, as a
         /// removed record is kept without it.
         var target: String
-        /// The record as the step leaves it; a save's or a restore's
-        /// fingerprint is the activity's once it's made.
+        /// The record as the step leaves it; a save's fingerprint is the
+        /// activity's once it's made.
         var record: HealthImport
-        /// The day or time it counts toward: a group's changes are made
-        /// together, or not at all.
-        var group: Int?
-
-        init(step: Step, target: String, record: HealthImport, group: Int? = nil) {
-            (self.step, self.target, self.record, self.group) = (step, target, record, group)
-        }
     }
 
     var items: [Item]
@@ -260,10 +250,11 @@ struct HealthWorkoutWork: Codable {
     /// Where the account's Health switches and anchors are kept in defaults
     /// (`HealthHistoryModel`), so the work can be finished without it.
     var key: String
-    /// Changes from Health found by the read, added to those waiting.
-    var queued = HealthChangeQueue()
-    /// The waiting workout changes are what's applied, and go.
-    var clearsQueue = false
+    /// Removals the read listed for the person, added to those waiting.
+    var queued: [HealthChangeQueue.Entry] = []
+    var cap = HealthChangeQueue.cap
+    /// The waiting changes applied, which leave the list made or dropped.
+    var processed: [UUID] = []
 
     /// Finishes work a crash or a failure left written down, as the account
     /// opens (`AppAccountWorkspace`) or the Health screen reads. The work was
@@ -276,20 +267,13 @@ struct HealthWorkoutWork: Codable {
     }
 
     /// Makes each change to the activity log that isn't made yet, so running
-    /// it again after a crash repeats nothing; then saves the records and
-    /// clears the work in one transaction, and moves Health's anchor on.
+    /// it again after a crash repeats nothing; then saves the records and the
+    /// list of changes and clears the work in one transaction, and moves
+    /// Health's anchor on, unless the read's removals didn't all fit.
     @MainActor
     func finish(imports: HealthImportStore, activities store: HealthActivityStore, defaults: UserDefaults) throws {
-        // A day or time whose set-aside member changed since it was planned,
-        // by them or by a sync before a crash was finished, stays as it is:
-        // nothing in it is taken out, and its replacement isn't added.
-        let held = Set(items.compactMap { item -> Int? in
-            guard let group = item.group, case .delete(let expecting) = item.step,
-                  store.activityStates([item.target])[item.target] == false else { return nil }
-            return store.activityFingerprint(item.target) == expecting ? nil : group
-        })
         var records: [HealthImport] = []
-        for item in items where !(item.group.map(held.contains) ?? false) {
+        for item in items {
             var record = item.record
             let deleted = store.activityStates([item.target])[item.target]
             switch item.step {
@@ -302,28 +286,55 @@ struct HealthWorkoutWork: Codable {
                 guard let print = store.activityFingerprint(item.target) else { continue }
                 record.fingerprint = print
             case .delete(let expecting):
-                // Changed since it was planned: theirs now, its record as it was.
+                // Changed since it was listed: theirs, and its record stays as it was.
                 if deleted == false {
                     guard store.activityFingerprint(item.target) == expecting else { continue }
                     try store.deleteImportedActivity(clientID: item.target)
                 }
-            case .restore:
-                if deleted == true { try store.restoreImportedActivity(clientID: item.target) }
-                record.fingerprint = store.activityFingerprint(item.target) ?? record.fingerprint
             case .none:
                 break
             }
             records.append(record)
         }
-        let queue = clearsQueue ? imports.queue.clearing(.workout, records: imports.records)
-            : queued.isEmpty ? nil : imports.queue.merging(queued)
-        try imports.save(records, finishingWork: true, queue: queue)
-        // Applying changes from Health reads nothing, and leaves where reading stopped as it was.
-        if let anchor { defaults.set(anchor, forKey: key + ".anchor." + HealthHistoryKind.workouts.rawValue) }
+        var (queue, full) = (imports.queue.removing(Set(processed)), false)
+        if !queued.isEmpty { (queue, full) = queue.adding(queued, cap: cap) }
+        try imports.save(records, finishingWork: true, queue: queue == imports.queue ? nil : queue)
+        // Applying changes reads nothing, and a read whose removals didn't all
+        // fit reads them again from where it was: either leaves the anchor.
+        if let anchor, !full { defaults.set(anchor, forKey: key + ".anchor." + HealthHistoryKind.workouts.rawValue) }
         if turnOn {
             let on = Set(defaults.stringArray(forKey: key + ".enabled") ?? []).union([HealthHistoryKind.workouts.rawValue])
             defaults.set(HealthHistoryKind.allCases.map(\.rawValue).filter(on.contains), forKey: key + ".enabled")
         }
+    }
+}
+
+/// The changes from Health that would still do something: their record
+/// still imported, and its entry or activity still there as it was listed.
+/// Today's row and the card both show these, so neither shows what's been
+/// applied on another phone or changed since.
+@MainActor
+enum HealthChangeList {
+    static func actionable(_ workspace: TrainingWorkspace, activities: HealthActivityStore) -> [HealthChangeQueue.Entry] {
+        let imports = workspace.healthImports, listed = imports.queue.entries
+        guard !listed.isEmpty else { return [] }
+        let entries = listed.contains { $0.kind == .food }
+            ? Dictionary(workspace.nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) : [:]
+        return listed.filter { change in
+            guard let record = imports.records[change.id], record.state == .imported, record.fingerprint == change.fingerprint else { return false }
+            switch change.kind {
+            case .food:
+                return UUID(uuidString: change.target).flatMap { entries[$0] }.map { HealthImport.fingerprint($0) == change.fingerprint } ?? false
+            case .workout:
+                return activities.activityStates([change.target])[change.target] == false && activities.activityFingerprint(change.target) == change.fingerprint
+            }
+        }
+    }
+
+    /// Leaves only those still to do in the account's list.
+    static func prune(_ workspace: TrainingWorkspace, activities: HealthActivityStore) throws {
+        guard !workspace.healthImports.queue.isEmpty else { return }
+        try workspace.healthImports.prune(keeping: actionable(workspace, activities: activities))
     }
 }
 
@@ -379,6 +390,8 @@ final class HealthHistoryModel: ObservableObject {
     private let isCurrent: @MainActor (String) -> Bool
     private let enableWeights: @MainActor (Set<UUID>) async -> Bool
     private let activities: @MainActor () -> HealthActivityStore
+    /// At most this many changes wait (`HealthChangeQueue.cap`).
+    private let queueCap: Int
     /// Bumped as a switch turns off, so a read already under way saves nothing.
     private var generation: [HealthHistoryKind: Int] = [:]
 
@@ -389,7 +402,7 @@ final class HealthHistoryModel: ObservableObject {
          workspace: @escaping @MainActor () -> TrainingWorkspace? = { HealthSync.shared.workspace },
          isCurrent: @escaping @MainActor (String) -> Bool = { SyncEngine.shared.isConfigured(for: $0) },
          enableWeights: @escaping @MainActor (Set<UUID>) async -> Bool = { await HealthSync.shared.enableReadingWeights(reviewed: $0) },
-         activities: @escaping @MainActor () -> HealthActivityStore = { SyncEngine.shared }) {
+         activities: @escaping @MainActor () -> HealthActivityStore = { SyncEngine.shared }, queueCap: Int = HealthChangeQueue.cap) {
         self.accountID = accountID
         self.install = install ?? HealthImportInstall.id(defaults)
         key = "healthHistory.\(namespace).\(accountID)"
@@ -400,6 +413,7 @@ final class HealthHistoryModel: ObservableObject {
         self.isCurrent = isCurrent
         self.enableWeights = enableWeights
         self.activities = activities
+        self.queueCap = queueCap
         let saved = accountID.isEmpty ? [] : defaults.stringArray(forKey: key + ".enabled") ?? []
         enabled = Set(saved.compactMap(HealthHistoryKind.init(rawValue:)))
     }
@@ -463,21 +477,21 @@ final class HealthHistoryModel: ObservableObject {
         }
         guard generation[pending.kind, default: 0] == pending.generation else { return }
         do {
-            switch try await apply(pending, in: workspace, turningOn: true) {
-            case .applied: break
-            case .stale: return
-            case .revised(var revised):
-                revised.note = "Exerly changed while this was open. Here's what importing does now."
-                self.pending = revised
-                return
+            try await workspace.healthImports.serially { [self] in
+                switch try await apply(pending, in: workspace, turningOn: true) {
+                case .applied:
+                    lastImport[pending.kind] = Self.summary(pending)
+                    enabled.insert(pending.kind)
+                    saveEnabled()
+                case .stale: break
+                case .revised(var revised):
+                    revised.note = "Exerly changed while this was open. Here's what importing does now."
+                    self.pending = revised
+                }
             }
         } catch {
             messages[pending.kind] = "Nothing was imported. Try again."
-            return
         }
-        lastImport[pending.kind] = Self.summary(pending)
-        enabled.insert(pending.kind)
-        saveEnabled()
     }
 
     func cancel() { pending = nil }
@@ -496,6 +510,7 @@ final class HealthHistoryModel: ObservableObject {
         if let workspace = open() {
             do {
                 try recover(workspace)
+                try HealthChangeList.prune(workspace, activities: activities())
             } catch {
                 messages[.workouts] = "Workouts from Health couldn't be saved. Exerly will try again."
                 return
@@ -506,13 +521,13 @@ final class HealthHistoryModel: ObservableObject {
             guard let workspace = open() else { return }
             let started = generation[kind, default: 0]
             do {
-                guard let pending = try await read(kind, full: false, in: workspace, generation: started) else { continue }
-                // Changed since it was read: what Health's changes mean now, once.
-                var outcome = try await apply(pending, in: workspace)
-                if case .revised(let revised) = outcome { outcome = try await apply(revised, in: workspace) }
-                switch outcome {
-                case .applied: messages[kind] = pending.note
-                case .stale, .revised: continue
+                // One at a time with Apply changes: a deletion read meanwhile is listed after it, never lost.
+                try await workspace.healthImports.serially { [self] in
+                    guard let pending = try await read(kind, full: false, in: workspace, generation: started) else { return }
+                    // Changed since it was read: what Health's changes mean now, once.
+                    var outcome = try await apply(pending, in: workspace)
+                    if case .revised(let revised) = outcome { outcome = try await apply(revised, in: workspace) }
+                    if case .applied = outcome { messages[kind] = pending.note }
                 }
             } catch {
                 guard owns(workspace) else { return }
@@ -555,14 +570,14 @@ final class HealthHistoryModel: ObservableObject {
         case .foods:
             let changes = try await client.foods(after: full ? nil : anchor(kind))
             guard current(kind, workspace, since: started) else { return nil }
-            let plan = foodPlan(changes, full: full, in: workspace, deferring: true)
+            let plan = foodPlan(changes, full: full, in: workspace)
             (pending.preview, pending.foods, pending.anchor) = (plan.preview, plan, changes.anchor)
             pending.readings = Dictionary(changes.added.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             (pending.deleted, pending.full) = (changes.deleted, full)
         case .workouts:
             let changes = try await client.workouts(after: full ? nil : anchor(kind))
             guard current(kind, workspace, since: started) else { return nil }
-            var plan = workoutPlan(changes, full: full, in: workspace, deferring: true)
+            var plan = workoutPlan(changes, full: full, in: workspace)
             var keepAnchor = false
             // Before adding any, the account's own on those days, which a phone just installed may not
             // have yet; and the days of imports whose activity this phone hasn't read.
@@ -572,7 +587,7 @@ final class HealthHistoryModel: ObservableObject {
             if let first = days.min(), let last = days.max() {
                 let reached = await activities().readActivities(first...last)
                 guard current(kind, workspace, since: started) else { return nil }
-                plan = workoutPlan(changes, full: full, in: workspace, deferring: true)
+                plan = workoutPlan(changes, full: full, in: workspace)
                 if !reached {
                     // Unsure what the account has, add none, nor set aside anything for them:
                     // the next read, from the same anchor and online, will.
@@ -590,7 +605,7 @@ final class HealthHistoryModel: ObservableObject {
     }
 
     private static func holdAdditions(_ plan: inout HealthImportPlan<HealthWorkoutReading>) {
-        (plan.preview.adding, plan.adding, plan.preview.displacing, plan.displacing) = (0, [], 0, [])
+        (plan.preview.adding, plan.adding) = (0, [])
     }
 
     /// The plan made again from what was read, against the account as it is
@@ -601,12 +616,12 @@ final class HealthHistoryModel: ObservableObject {
         var revised = pending
         if pending.foods != nil {
             let changes = HealthChanges(added: Array(pending.readings.values), deleted: pending.deleted, anchor: pending.anchor)
-            let plan = foodPlan(changes, full: pending.full, in: workspace, deferring: true)
+            let plan = foodPlan(changes, full: pending.full, in: workspace)
             (revised.preview, revised.foods) = (plan.preview, plan)
         }
         if pending.workouts != nil {
             let changes = HealthChanges(added: Array(pending.workoutReadings.values), deleted: pending.deleted, anchor: pending.anchor)
-            var plan = workoutPlan(changes, full: pending.full, in: workspace, deferring: true)
+            var plan = workoutPlan(changes, full: pending.full, in: workspace)
             if pending.unreached { Self.holdAdditions(&plan) }
             (revised.preview, revised.workouts) = (plan.preview, plan)
         }
@@ -617,13 +632,11 @@ final class HealthHistoryModel: ObservableObject {
     /// Whether two plans make the same changes.
     private static func same<T>(_ a: HealthImportPlan<T>?, _ b: HealthImportPlan<T>?, id: (T) -> UUID) -> Bool {
         guard let a, let b else { return a == nil && b == nil }
-        return Set(a.adding.map(id)) == Set(b.adding.map(id)) && a.removing == b.removing && a.displacing == b.displacing
-            && a.restoring == b.restoring && a.missing == b.missing && a.adoptable == b.adoptable
-            && Set(a.deferred.map(id)) == Set(b.deferred.map(id))
+        return Set(a.adding.map(id)) == Set(b.adding.map(id)) && a.removing == b.removing
+            && a.missing == b.missing && a.adoptable == b.adoptable
     }
 
-    private func foodPlan(_ changes: HealthChanges<HealthFoodReading>, full: Bool, in workspace: TrainingWorkspace,
-                          deferring: Bool) -> HealthImportPlan<HealthFoodReading> {
+    private func foodPlan(_ changes: HealthChanges<HealthFoodReading>, full: Bool, in workspace: TrainingWorkspace) -> HealthImportPlan<HealthFoodReading> {
         var records = workspace.healthImports.records(.food)
         if !full {
             // Only the days Health's changes touch: a screen opening with nothing new does no work.
@@ -642,13 +655,13 @@ final class HealthHistoryModel: ObservableObject {
         let known = Set(records.map(\.id))
         let untracked = Set(changes.added.map(\.id).filter { entries[$0] != nil && !known.contains($0) })
         return HealthHistory.plan(added: changes.added, deleted: Set(changes.deleted), full: full, records: records, install: install,
-                                  live: live, changed: changed, untracked: untracked, grouping: .day, deferring: deferring) {
+                                  live: live, changed: changed, untracked: untracked, grouping: .day) {
             HealthHistory.item($0, timeZone: timeZone)
         }
     }
 
-    private func workoutPlan(_ changes: HealthChanges<HealthWorkoutReading>, full: Bool, in workspace: TrainingWorkspace,
-                             deferring: Bool) -> HealthImportPlan<HealthWorkoutReading> {
+    private func workoutPlan(_ changes: HealthChanges<HealthWorkoutReading>, full: Bool,
+                             in workspace: TrainingWorkspace) -> HealthImportPlan<HealthWorkoutReading> {
         let store = activities()
         var records = workspace.healthImports.records(.workout)
         if !full {
@@ -675,8 +688,7 @@ final class HealthHistoryModel: ObservableObject {
         // An activity already in the account with no record: synced before its record, or deleted there. Never added again.
         let untracked = Set(derived.filter { states[$0.key] != nil && !known.contains($0.value) }.values)
         return HealthHistory.plan(added: changes.added, deleted: Set(changes.deleted), full: full, records: records, install: install,
-                                  live: live, changed: changed, untracked: untracked, grouping: .overlap, within: store.days,
-                                  deferring: deferring) {
+                                  live: live, changed: changed, untracked: untracked, grouping: .overlap, within: store.days) {
             HealthHistory.item($0, timeZone: timeZone)
         }
     }
@@ -689,181 +701,139 @@ final class HealthHistoryModel: ObservableObject {
         case revised(Pending)
     }
 
-    /// Adds what a read found, and lists in Changes from Health what would
-    /// take out, set aside or replace anything: Health's deletions, a better
-    /// source over what's in Exerly, and what a full read no longer finds.
-    /// The plan is made again first, against the account as it is now.
+    /// Adds what a read found, notes sources set aside on what was imported
+    /// first, and lists in Changes from Health what Health deleted, or a full
+    /// read no longer finds, of this install's imports. Nothing is taken out
+    /// here. Removals that don't fit under the cap keep the read's anchor, so
+    /// they're read again once there's room. Run `serially`.
     private func apply(_ pending: Pending, in workspace: TrainingWorkspace, turningOn: Bool = false) async throws -> Outcome {
         let kind = pending.kind
         guard current(kind, workspace, since: pending.generation) else { return .stale }
         try recover(workspace)
         let imports = workspace.healthImports
+        func listed<T>(_ plan: HealthImportPlan<T>) -> [HealthChangeQueue.Entry] {
+            plan.removing.compactMap { imports.records[$0].map { HealthChangeQueue.Entry($0, reason: .deleted) } }
+                + plan.missing.compactMap { imports.records[$0].map { HealthChangeQueue.Entry($0, reason: .missing) } }
+        }
         if let plan = pending.foods {
             let now = planAgain(pending, in: workspace)
             guard Self.same(now.foods, plan, id: \.id) else { return .revised(now) }
             var changes = HealthFoodChanges()
-            changes.adding = plan.adding
+            (changes.adding, changes.alsoIn) = (plan.adding, plan.alsoIn)
             if pending.adopt {
                 changes.adopting = plan.adoptable.filter { imports.records[$0] != nil }
                 changes.claiming = plan.adoptable.compactMap { imports.records[$0] == nil ? pending.readings[$0] : nil }
             }
-            var queue = HealthChangeQueue()
-            queue.add(deleted: plan.removing, missing: plan.missing, foods: plan.deferred)
-            if !queue.isEmpty { changes.queue = imports.queue.merging(queue) }
+            var anchor = pending.anchor
+            let removals = listed(plan)
+            if !removals.isEmpty {
+                let (queue, full) = imports.queue.adding(removals, cap: queueCap)
+                changes.queue = queue
+                if full { anchor = self.anchor(kind) }
+            }
             try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
-            defaults.set(pending.anchor, forKey: key + ".anchor." + kind.rawValue)
+            defaults.set(anchor, forKey: key + ".anchor." + kind.rawValue)
         }
         if let plan = pending.workouts {
             let now = planAgain(pending, in: workspace)
             guard Self.same(now.workouts, plan, id: \.id) else { return .revised(now) }
-            var queue = HealthChangeQueue()
-            queue.add(deleted: plan.removing, missing: plan.missing, workouts: plan.deferred)
-            try perform(workoutWork(plan, imports: imports, adopting: pending.adopt ? pending.workoutReadings : nil, choosing: false,
-                                    queued: queue, anchor: pending.anchor, turningOn: turningOn), imports: imports)
+            try perform(workoutWork(plan, imports: imports, adopting: pending.adopt ? pending.workoutReadings : nil, queued: listed(plan),
+                                    anchor: pending.anchor, turningOn: turningOn), imports: imports)
         }
         return .applied
     }
 
-    /// Applies the account's changes from Health on this device, planned
-    /// again against Exerly as it is now: what they changed stays, and holds
-    /// its day or time, and nothing replaces it. Each record changed becomes
-    /// this install's, a generation on, whichever install imported it.
+    /// What Changes from Health shows now: those still to do.
+    func changeEntries() -> [HealthChangeQueue.Entry] {
+        guard let workspace = open() else { return [] }
+        return HealthChangeList.actionable(workspace, activities: activities())
+    }
+
+    /// Applies exactly the changes shown, on this device, one at a time with
+    /// reading Health. Each is checked again as it's made: still imported,
+    /// and its entry or activity still as it was listed. Those that pass are
+    /// taken out and become this install's, a generation on; the rest are
+    /// dropped. Exactly these leave the list.
     func applyChanges() async {
         guard let workspace = open(), !applying else { return }
         applying = true
         defer { applying = false }
         changesMessage = nil
-        let imports = workspace.healthImports
+        let shown = changeEntries()
+        guard !shown.isEmpty else { return }
         do {
-            try recover(workspace)
-            let queue = imports.queue
-            guard !queue.isEmpty else { return }
-            let gone = queue.deleted.union(queue.missing)
-            let ids = { (kind: HealthImport.Kind) in Array(gone.filter { imports.records[$0]?.kind == kind }) }
-            var foods = foodPlan(HealthChanges(added: queue.foods, deleted: ids(.food)), full: false, in: workspace, deferring: false)
-            var restoring: [HealthFoodReading] = []
-            if !foods.restoring.isEmpty, client.isAvailable {
-                // Set aside for one now going: read from Health again to put back.
-                restoring = (try? await client.foods(Set(foods.restoring))) ?? []
+            try await workspace.healthImports.serially { [self] in
                 guard owns(workspace) else { return }
                 try recover(workspace)
-                foods = foodPlan(HealthChanges(added: queue.foods, deleted: ids(.food)), full: false, in: workspace, deferring: false)
+                let imports = workspace.healthImports
+                try imports.applyRemovals(shown, to: workspace.nutrition, install: install)
+                let workouts = shown.filter { $0.kind == .workout }
+                if !workouts.isEmpty { try perform(removalWork(workouts, imports: imports), imports: imports) }
+                try HealthChangeList.prune(workspace, activities: activities())
             }
-            var changes = HealthFoodChanges()
-            (changes.adding, changes.removing, changes.displacing) = (foods.adding, foods.removing, foods.displacing)
-            changes.restoring = restoring.filter { foods.restoring.contains($0.id) }
-            changes.queue = imports.queue.clearing(.food, records: imports.records)
-            let result = try imports.apply(changes, to: workspace.nutrition, install: install, timeZone: timeZone)
-            let workouts = workoutPlan(HealthChanges(added: queue.workouts, deleted: ids(.workout)), full: false, in: workspace, deferring: false)
-            try perform(workoutWork(workouts, imports: imports, adopting: nil, choosing: true, queued: HealthChangeQueue(), anchor: nil,
-                                    turningOn: false), imports: imports)
-            let out = result.removed + workouts.removing.count + workouts.displacing.count
-            let added = result.added + workouts.adding.count + workouts.restoring.count
-            changesMessage = out + added == 0 ? "Nothing needed changing." : "Changes applied."
         } catch {
             guard owns(workspace) else { return }
             changesMessage = "The changes couldn't all be applied. Try again."
         }
     }
 
-    /// Keeps everything as it is in Exerly and dismisses the waiting changes.
+    /// Keeps everything in Exerly as it is: exactly the changes shown are dismissed.
     func keepEverything() {
         guard let workspace = open() else { return }
         do {
-            try workspace.healthImports.keepEverything()
+            try workspace.healthImports.keep(Set(changeEntries().map(\.id)))
             changesMessage = nil
         } catch {
             changesMessage = "That couldn't be saved. Try again."
         }
     }
 
-    /// What each waiting change from Health does, in words, oldest day first.
+    /// What each change shown does, in words, oldest day first.
     func changeRows() -> [HealthChangeRow] {
         guard let workspace = open() else { return [] }
-        let imports = workspace.healthImports, queue = imports.queue
-        guard !queue.isEmpty else { return [] }
+        let imports = workspace.healthImports
+        let shown = HealthChangeList.actionable(workspace, activities: activities())
+        guard !shown.isEmpty else { return [] }
         let entries = Dictionary(workspace.nutrition.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let records = queue.deleted.union(queue.missing).compactMap { imports.records[$0] }.filter { $0.state != .removed }
-        let states = activities().activityStates(Set(records.filter { $0.kind == .workout }.map(\.target)))
-        var rows: [(day: LocalDate, row: HealthChangeRow)] = []
-        for record in records {
-            let why = queue.deleted.contains(record.id) ? "Deleted in Health" : "No longer in Health"
-            let title: String, what: String
-            switch record.kind {
-            case .food:
-                let entry = UUID(uuidString: record.target).flatMap { entries[$0] }
-                title = entry?.food.name ?? "Food from \(record.sourceName)"
-                what = record.state == .displaced ? "it was set aside for another app's, and is forgotten"
-                    : entry == nil ? "it's already out of your diary" : "takes it out of your diary"
-            case .workout:
-                title = "Workout from \(record.sourceName)"
-                what = record.state == .displaced ? "it was set aside for another app's, and is forgotten"
-                    : states[record.target] == false ? "takes it out of your activity" : "it's already out of your activity"
-            }
-            rows.append((record.day, HealthChangeRow(id: record.id, title: "\(title), \(Self.day(record.day))", detail: "\(why): \(what).")))
+        let rows = shown.compactMap { change -> (LocalDate, HealthChangeRow)? in
+            guard let record = imports.records[change.id] else { return nil }
+            let why = change.reason == .deleted ? "Deleted in Health" : "No longer in Health"
+            let title = change.kind == .food
+                ? UUID(uuidString: change.target).flatMap { entries[$0] }?.food.name ?? "Food from \(record.sourceName)"
+                : "Workout from \(record.sourceName)"
+            let what = change.kind == .food ? "takes it out of your diary" : "takes it out of your activity"
+            return (record.day, HealthChangeRow(id: change.id, title: "\(title), \(Self.day(record.day))", detail: "\(why): \(what)."))
         }
-        for food in queue.foods where imports.records[food.id] == nil {
-            let day = HealthHistory.item(food, timeZone: timeZone).day
-            rows.append((day, HealthChangeRow(id: food.id, title: "\(food.name ?? "Food") from \(food.sourceName), \(Self.day(day))",
-                                              detail: "A better source for this day: counts in place of another app's.")))
-        }
-        for workout in queue.workouts where imports.records[workout.id] == nil {
-            let day = HealthHistory.item(workout, timeZone: timeZone).day
-            rows.append((day, HealthChangeRow(id: workout.id, title: "\(workout.activity) from \(workout.sourceName), \(Self.day(day))",
-                                              detail: "A better source for this time: counts in place of another app's workout.")))
-        }
-        return rows.sorted { ($0.day, $0.row.title) < ($1.day, $1.row.title) }.map(\.row)
+        return rows.sorted { ($0.0, $0.1.title) < ($1.0, $1.1.title) }.map(\.1)
     }
 
     private static func day(_ day: LocalDate) -> String {
         NutritionFormat.pickerDate(day, timeZone: .current).formatted(.dateTime.day().month(.abbreviated))
     }
 
-    /// Workouts' changes, each checked again as it's planned: only activities
-    /// still as they were imported. Read automatically, only additions are
-    /// made, and the rest (`queued`) waits for them; `choosing`, as they apply
-    /// their changes, everything, each record becoming this install's.
-    /// Nothing is changed yet: `perform` writes it down, then makes it.
+    /// Workouts read from Health: new ones, adoptions, and sources set aside
+    /// noted on what was imported first. Nothing is taken out. Nothing is
+    /// changed yet: `perform` writes it down, then makes it.
     private func workoutWork(_ plan: HealthImportPlan<HealthWorkoutReading>, imports: HealthImportStore,
-                             adopting readings: [UUID: HealthWorkoutReading]?, choosing: Bool, queued: HealthChangeQueue, anchor: Data?,
+                             adopting readings: [UUID: HealthWorkoutReading]?, queued: [HealthChangeQueue.Entry], anchor: Data?,
                              turningOn: Bool) -> HealthWorkoutWork {
         let store = activities()
         let now = Date()
         var items: [HealthWorkoutWork.Item] = []
-        if choosing {
-            for (id, state) in HealthImport.outcomes(removing: plan.removing, displacing: plan.displacing) {
-                guard var record = imports.records[id], record.allows(state) else { continue }
-                var step = HealthWorkoutWork.Step.none
-                if record.state == .imported, store.activityStates([record.target])[record.target] == false {
-                    // Changed since it was imported: theirs now.
-                    guard store.activityFingerprint(record.target) == record.fingerprint else { continue }
-                    step = .delete(expecting: record.fingerprint)
-                }
-                let target = record.target
-                record.adopt(by: install, at: now)
-                record.state = state
-                items.append(.init(step: step, target: target, record: record, group: plan.groups[id]))
-            }
-            for id in plan.restoring {
-                guard var record = imports.records[id], record.state == .displaced else { continue }
-                record.adopt(by: install, at: now)
-                record.state = .imported
-                items.append(.init(step: .restore, target: record.target, record: record, group: plan.groups[id]))
-            }
-        }
         for workout in plan.adding where imports.records[workout.id] == nil {
             let clientID = HealthHistory.activityID(for: workout.id, accountID: accountID)
             let activity = HealthWorkoutWork.Activity(type: workout.activity, minutes: min(1440, max(0.1, (workout.minutes * 10).rounded() / 10)),
                                                       calories: workout.kilocalories.map { min(20000, max(0, $0.rounded())) },
                                                       day: LocalDate(workout.start, in: workout.timeZone ?? timeZone).description)
             items.append(.init(step: .save(activity), target: clientID,
-                               record: HealthImport(workout: workout, clientID: clientID, fingerprint: "", owner: install, timeZone: timeZone, now: now),
-                               group: plan.groups[workout.id]))
+                               record: HealthImport(workout: workout, clientID: clientID, fingerprint: "", owner: install, timeZone: timeZone, now: now)))
         }
+        var adopted = Set<UUID>()
         if let readings {
             for id in plan.adoptable {
                 if var record = imports.records[id] {
                     record.adopt(by: install, at: now)
+                    adopted.insert(id)
                     items.append(.init(step: .none, target: record.target, record: record))
                 } else if let workout = readings[id] {
                     let clientID = HealthHistory.activityID(for: id, accountID: accountID)
@@ -873,7 +843,27 @@ final class HealthHistoryModel: ObservableObject {
                 }
             }
         }
-        return HealthWorkoutWork(items: items, anchor: anchor, turnOn: turningOn, key: key, queued: queued, clearsQueue: choosing)
+        for record in imports.noting(plan.alsoIn, except: adopted, now: now) {
+            items.append(.init(step: .none, target: record.target, record: record))
+        }
+        return HealthWorkoutWork(items: items, anchor: anchor, turnOn: turningOn, key: key, queued: queued, cap: queueCap)
+    }
+
+    /// Takes out the workouts of the changes they apply: each, if its record
+    /// is still imported as listed, becomes this install's, a generation on,
+    /// and its activity goes if it's still as it was listed.
+    private func removalWork(_ changes: [HealthChangeQueue.Entry], imports: HealthImportStore) -> HealthWorkoutWork {
+        let now = Date()
+        var items: [HealthWorkoutWork.Item] = []
+        for change in changes {
+            guard var record = imports.records[change.id], record.kind == .workout, record.state == .imported,
+                  record.fingerprint == change.fingerprint else { continue }
+            let target = record.target
+            record.adopt(by: install, at: now)
+            record.state = .removed
+            items.append(.init(step: .delete(expecting: change.fingerprint), target: target, record: record))
+        }
+        return HealthWorkoutWork(items: items, anchor: nil, turnOn: false, key: key, processed: changes.map(\.id))
     }
 
     /// Writes the work down in the account's store before anything else, so
@@ -894,11 +884,12 @@ final class HealthHistoryModel: ObservableObject {
         if work.turnOn { enabled.insert(.workouts) }
     }
 
-    /// "Added 3 foods. 1 change waits in Changes from Health." from a confirmed preview.
+    /// "Added 3 foods. 1 set aside, as its day was already imported." from a confirmed preview.
     private static func summary(_ pending: Pending) -> String {
         let preview = pending.preview
         var parts = ["Added \(pending.kind.count(preview.adding))."]
-        let waiting = preview.removing + preview.deferred + preview.missing
+        if preview.leftOut > 0 { parts.append("\(pending.kind.count(preview.leftOut)) from other sources set aside.") }
+        let waiting = preview.removing + preview.missing
         if waiting > 0 { parts.append(waiting == 1 ? "1 change waits in Changes from Health." : "\(waiting) changes wait in Changes from Health.") }
         return parts.joined(separator: " ")
     }
@@ -920,5 +911,4 @@ extension SyncEngine: HealthActivityStore {
 
     func deleteImportedActivity(clientID: String) throws { try deleteActivity(clientID: clientID) }
 
-    func restoreImportedActivity(clientID: String) throws { try undoActivityDeletion(entityID: clientID) }
 }

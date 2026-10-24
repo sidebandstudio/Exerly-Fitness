@@ -2942,3 +2942,37 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   reports nothing deleted, even straight after a donation, so the hosted
   test checks the calls the system accepts; that a donation is gone can
   only be seen on a device.
+
+## 2026-10-24: Health imports never replace one source with another
+
+- Coordinator's decision, final, after round 5's review found every
+  remaining issue in better-source replacement. A day's food, or a
+  workout's time, comes from its best source when it's first imported.
+  A source arriving later for what's imported is never swapped in: it's
+  set aside, and the record notes it (`alsoIn`, "Also in Health from
+  Tracker, not imported"). More from the source already imported still
+  comes in. Deleted with it: the `displaced` state (the API refuses it
+  now), restoring by reading Health again, the plan's displacement,
+  restoration, deferral and groups, frozen groups, and the journal's
+  group dependencies and restore step. A day whose import was taken out
+  has no record left to hold it, so a source read after that can fill it.
+- Changes from Health only ever holds removals: Health's deletions of
+  this install's imports, unchanged since, and what a full read no longer
+  finds of them. Each is a small reference (kind, the sample's UUID, which
+  is also its record's ID, its entry or activity, and the fingerprint
+  when it was listed), not a payload.
+- Apply runs one at a time with reading Health, per account
+  (`HealthImportStore.serially`), so a deletion read while changes are
+  applied is listed after them. It applies exactly the changes shown,
+  each checked again as it's made: still imported, and its entry or
+  activity still as listed. Those that pass are taken out and become this
+  install's a generation on; the rest are dropped. Exactly those leave the
+  list. Keep everything dismisses exactly the changes shown.
+- The card and Today's row both show only the changes that would still do
+  something, so neither shows a change applied on another phone or edited
+  since, and the row never opens an empty card. The stored list is pruned
+  to those as Health is read, as changes are applied, and after each sync.
+  The card itself only reads, never writes, while it's drawn.
+- At most 2,000 changes wait. A read whose removals don't all fit adds
+  those that do and keeps its anchor, so the rest are read again once
+  there's room; nothing is lost.

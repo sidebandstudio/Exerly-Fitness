@@ -96,6 +96,8 @@ final class TrainingWorkspace: ObservableObject {
         do {
             try await sync?.sync()
             guard !persistence.isClosed, !Task.isCancelled else { return }
+            // Changes from Health applied on another phone, or changed since, leave the list.
+            if SyncEngine.shared.isConfigured(for: accountID) { try? HealthChangeList.prune(self, activities: SyncEngine.shared) }
             if !checkedLegacyTargets, !adoptingLegacyTargets, let accountAPI {
                 adoptingLegacyTargets = true
                 defer { adoptingLegacyTargets = false }

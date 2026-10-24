@@ -827,6 +827,19 @@ test('a Health import record syncs with its owner and state, and needs them', as
     { token, headers: key() }
   );
   assert.equal(targetless.status, 400, 'only a record taken out goes without its target');
+  const noted = await api.put(
+    `/v1/documents/health_import/${otherID}`,
+    { payload: { ...record, id: otherID, alsoIn: ['Tracker'] }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(noted.status, 201, JSON.stringify(noted.body));
+  const asideID = randomUUID().toUpperCase();
+  const setAside = await api.put(
+    `/v1/documents/health_import/${asideID}`,
+    { payload: { ...record, id: asideID, state: 'displaced' }, base_revision: 0 },
+    { token, headers: key() }
+  );
+  assert.equal(setAside.status, 400, 'nothing is set aside for a better source any more');
 });
 
 test('legacy food logs and saved foods stay in their own feeds', async () => {

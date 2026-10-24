@@ -55,14 +55,14 @@ final class HealthHistoryPerformanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let workspace = try TrainingWorkspace(accountID: "opening", root: root)
         let now = Date()
-        var foods = HealthFoodChanges(), removing = HealthFoodChanges(), workouts: [HealthImport] = []
+        var foods = HealthFoodChanges(), removing: [UUID] = [], workouts: [HealthImport] = []
         for day in 1...1095 {
             for hour in [8, 12, 16, 19] {
                 let at = now.addingTimeInterval(Double(-day) * 86400 + Double(hour - 12) * 3600)
                 let reading = HealthFoodReading(id: UUID(), at: at, name: "Synthetic meal \(hour)", nutrients: NutrientAmounts([.energy: 500]),
                                                 source: "com.example.tracker", sourceName: "Tracker")
                 foods.adding.append(reading)
-                if hour == 16 || (hour == 19 && day % 3 == 0) { removing.removing.append(reading.id) }
+                if hour == 16 || (hour == 19 && day % 3 == 0) { removing.append(reading.id) }
             }
             if day % 2 == 0 {
                 let start = now.addingTimeInterval(Double(-day) * 86400)
@@ -73,7 +73,9 @@ final class HealthHistoryPerformanceTests: XCTestCase {
             }
         }
         try workspace.healthImports.apply(foods, to: workspace.nutrition, install: "phone", timeZone: zone)
-        try workspace.healthImports.apply(removing, to: workspace.nutrition, install: "phone", timeZone: zone)
+        let imports = workspace.healthImports
+        try imports.applyRemovals(removing.compactMap { imports.records[$0].map { HealthChangeQueue.Entry($0, reason: .deleted) } },
+                                  to: workspace.nutrition, install: "phone")
         try workspace.healthImports.save(workouts)
         await workspace.close()
         let read = StoredRead()
@@ -88,7 +90,7 @@ final class HealthHistoryPerformanceTests: XCTestCase {
         let mainActor = try clock.measure { again = try TrainingWorkspace(accountID: "opening", root: root, stored: read.stored) }
         XCTAssertEqual(again?.healthImports.records.count, 4380 + 547)
         await again?.close()
-        print("HEALTH-OPEN \(4380 + 547) records, \(removing.removing.count) taken out: open \(total), main actor \(mainActor)")
+        print("HEALTH-OPEN \(4380 + 547) records, \(removing.count) taken out: open \(total), main actor \(mainActor)")
     }
 }
 

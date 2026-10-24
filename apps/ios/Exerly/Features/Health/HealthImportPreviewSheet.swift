@@ -81,17 +81,16 @@ struct HealthImportPreviewSheet: View {
     private var notes: [String] {
         var notes: [String] = []
         if preview.alreadyIn > 0 { notes.append("\(pending.kind.count(preview.alreadyIn)) already in Exerly.") }
-        if preview.leftOut > 0 { notes.append("\(pending.kind.count(preview.leftOut)) set aside for a better source.") }
-        if preview.removing > 0 { notes.append("\(pending.kind.count(preview.removing)) deleted in Health: listed in Changes from Health.") }
-        if preview.deferred > 0 {
-            notes.append("\(pending.kind.count(preview.deferred)) from a better source: listed in Changes from Health, to replace what's here if you choose.")
+        if preview.leftOut > 0 {
+            notes.append("\(pending.kind.count(preview.leftOut)) set aside: another source, or a day or time already imported.")
         }
+        if preview.removing > 0 { notes.append("\(pending.kind.count(preview.removing)) deleted in Health: listed in Changes from Health.") }
         if preview.outside > 0 { notes.append("\(pending.kind.count(preview.outside)) left in Health: Exerly keeps the last ten years.") }
         return notes
     }
 
     /// What waits in Changes from Health once this is imported.
-    private var waiting: Int { preview.removing + preview.deferred + preview.missing }
+    private var waiting: Int { preview.removing + preview.missing }
 
     /// A choice off until they turn it on.
     private func choice(_ title: String, _ text: String, toggle: String, isOn: Binding<Bool>, identifier: String) -> some View {

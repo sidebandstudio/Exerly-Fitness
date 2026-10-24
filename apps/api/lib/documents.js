@@ -81,15 +81,17 @@ const KINDS = {
       ? []
       : ['a hidden suggestion needs the food name and when it was hidden'],
   // One record imported from Apple Health: the install that owns it and how
-  // many times it changed hands, its entry or activity, and whether it's in,
-  // set aside or taken out. One taken out is kept as a tombstone, without
-  // its entry or activity.
+  // many times it changed hands, its entry or activity, other sources noted
+  // as set aside, and whether it's in or taken out. One taken out is kept as
+  // a tombstone, without its entry or activity.
   health_import: (p) =>
     ['food', 'workout'].includes(p.kind) &&
     (typeof p.target === 'string' || p.state === 'removed') &&
     typeof p.owner === 'string' &&
     (p.generation === undefined || (Number.isInteger(p.generation) && p.generation >= 0)) &&
-    ['imported', 'displaced', 'removed'].includes(p.state)
+    (p.alsoIn === undefined ||
+      (Array.isArray(p.alsoIn) && p.alsoIn.every((name) => typeof name === 'string'))) &&
+    ['imported', 'removed'].includes(p.state)
       ? []
       : ['a Health import needs a kind, a target, an owner, a whole generation and a state'],
   // Where imported records came from: written with them, never changed.

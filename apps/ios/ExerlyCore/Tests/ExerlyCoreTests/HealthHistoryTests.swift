@@ -29,11 +29,9 @@ import Testing
     }
 
     func plan(_ added: [HealthFoodReading], deleted: Set<UUID> = [], full: Bool = false, records: [HealthImport] = [],
-              live: Set<UUID>? = nil, changed: Set<UUID> = [], preferred: [String] = [],
-              deferring: Bool = false) -> HealthImportPlan<HealthFoodReading> {
+              live: Set<UUID>? = nil, changed: Set<UUID> = [], preferred: [String] = []) -> HealthImportPlan<HealthFoodReading> {
         HealthHistory.plan(added: added, deleted: deleted, full: full, records: records, install: install,
-                           live: live ?? Set(records.map(\.id)), changed: changed, grouping: .day, preferred: preferred,
-                           deferring: deferring, item: item)
+                           live: live ?? Set(records.map(\.id)), changed: changed, grouping: .day, preferred: preferred, item: item)
     }
 
     @Test func eachDaysFoodComesFromItsBestSourceAndIsPreviewedFirst() {
@@ -49,15 +47,36 @@ import Testing
                 "the person's order wins")
     }
 
-    @Test func aBetterSourceLaterDisplacesTheDayAndItComesBackWhenThatGoes() {
-        let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310)
-        let displaced = plan([better], records: [record(breakfast)], preferred: [tracker])
-        #expect(displaced.adding.map(\.id) == [better.id] && displaced.displacing == [breakfast.id] && displaced.removing.isEmpty)
-        // The tracker's is deleted in Health: it goes, and the diary's comes back.
-        let back = plan([], deleted: [better.id], records: [record(breakfast, state: .displaced), record(better)], preferred: [tracker])
-        #expect(back.removing == [better.id] && back.restoring == [breakfast.id])
-        // A worse source adds nothing to a day already held.
-        #expect(plan([food(5, 9, diary, kcal: 1)], records: [record(better)], preferred: [tracker]).adding.isEmpty)
+    /// Review 5: a day already imported keeps its source. A better source
+    /// arriving later is set aside and noted on what's there, never swapped
+    /// in; more from the day's own source still comes in.
+    @Test func aLaterSourceForAnImportedDayOrTimeIsSetAsideAndNoted() {
+        let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310), lunch = food(5, 13, diary, kcal: 500)
+        let later = plan([better, lunch], records: [record(breakfast)], preferred: [tracker])
+        #expect(later.adding.map(\.id) == [lunch.id], "the day's own source still adds")
+        #expect(later.preview.leftOut == 1 && later.alsoIn == [breakfast.id: [better.sourceName]])
+        let gone = plan([], deleted: [breakfast.id], records: [record(breakfast)], preferred: [tracker])
+        #expect(gone.removing == [breakfast.id] && gone.adding.isEmpty, "Health's deletion is listed, and nothing comes in its place")
+        func workout(_ start: Date, _ source: String) -> HealthWorkoutReading {
+            HealthWorkoutReading(id: UUID(), start: start, end: start.addingTimeInterval(2400), activity: "Running", kilocalories: 300,
+                                 source: source, sourceName: source)
+        }
+        let run = workout(at(5, 7), tracker), watched = workout(at(5, 7, 2), watch)
+        let ran = HealthImport(workout: run, clientID: "run", fingerprint: "f", owner: install, timeZone: newYork)
+        let overlap = HealthHistory.plan(added: [watched], full: false, records: [ran], install: install, live: [ran.id], changed: [],
+                                         grouping: .overlap) { HealthHistory.item($0, timeZone: newYork) }
+        #expect(overlap.adding.isEmpty && overlap.alsoIn == [run.id: [watch]], "the watch, Health's own, is noted, not swapped in")
+    }
+
+    /// Review 5: the queue holds small removal references, each once, up to its cap.
+    @Test func theQueueHoldsSmallRemovalsOnceUpToItsCap() throws {
+        let ids = (0..<3).map { _ in UUID() }
+        let entries = ids.map { HealthChangeQueue.Entry(kind: .food, id: $0, target: $0.uuidString, fingerprint: "f", reason: .deleted) }
+        let (two, full) = HealthChangeQueue().adding(entries, cap: 2)
+        #expect(two.entries.map(\.id) == Array(ids.prefix(2)) && full)
+        #expect(two.adding([entries[0]], cap: 2) == (two, false), "listed once")
+        #expect(two.removing([ids[0]]).entries.map(\.id) == [ids[1]])
+        #expect(try ExerlyJSON.canonical(two).count < 500, "references, not payloads")
     }
 
     @Test func nothingIsTakenOutForBeingMissingOnlyForHealthsDeletions() {
@@ -65,25 +84,20 @@ import Testing
         let records = [record(soup), record(toast)]
         // A read that comes back empty, as a revoked one does.
         let empty = plan([], full: true, records: records)
-        #expect(empty.removing.isEmpty && empty.displacing.isEmpty && empty.missing == [soup.id, toast.id].sorted { $0.uuidString < $1.uuidString })
+        #expect(empty.removing.isEmpty && empty.missing == [soup.id, toast.id].sorted { $0.uuidString < $1.uuidString })
         #expect(empty.preview.missing == 2)
         #expect(plan([], records: records).missing.isEmpty, "an anchored read lists nothing as missing")
         #expect(plan([], deleted: [soup.id], records: records).removing == [soup.id])
     }
 
-    /// What they changed is never taken out or replaced. Another install's
-    /// import isn't either as Health is read; applied by choice on this
-    /// device, it is, as this install's.
-    @Test func whatTheyChangedIsNeverTakenOutAndAnotherInstallsOnlyByChoice() {
+    /// Only this install's imports, unchanged since, are listed for removal.
+    @Test func onlyThisInstallsUnchangedImportsAreListedForRemoval() {
         let breakfast = food(5, 8, diary, kcal: 300), better = food(5, 8, tracker, kcal: 310)
         let changed = plan([better], deleted: [breakfast.id], records: [record(breakfast)], changed: [breakfast.id], preferred: [tracker])
-        #expect(changed.removing.isEmpty && changed.displacing.isEmpty && changed.adding.isEmpty, "theirs now, and it holds its day")
+        #expect(changed.removing.isEmpty && changed.adding.isEmpty, "theirs now, and it holds its day")
         let theirs = [record(breakfast, owner: "phone-b")]
-        let read = plan([better], deleted: [breakfast.id], full: true, records: theirs, preferred: [tracker], deferring: true)
-        #expect(read.displacing.isEmpty && read.adding.isEmpty && read.deferred == [better], "the better source waits")
-        #expect(read.removing == [breakfast.id] && read.preview.deferred == 1, "Health's deletion is listed, not made")
-        let chosen = plan([better], deleted: [breakfast.id], records: theirs, preferred: [tracker])
-        #expect(chosen.removing == [breakfast.id] && chosen.adding == [better])
+        let other = plan([better], deleted: [breakfast.id], full: true, records: theirs, preferred: [tracker])
+        #expect(other.removing.isEmpty && other.adding.isEmpty && other.missing.isEmpty)
         #expect(plan([breakfast], full: true, records: theirs).adoptable == [breakfast.id], "a full read offers it to keep as this phone's")
         #expect(plan([breakfast], records: theirs).adoptable.isEmpty, "never implicitly")
     }
@@ -110,16 +124,17 @@ import Testing
         let soup = food(5, 12, tracker, kcal: 250), toast = food(5, 8, tracker, kcal: 120)
         var changes = HealthFoodChanges()
         changes.adding = [soup, toast]
-        #expect(try imports.apply(changes, to: store, install: install, timeZone: newYork).added == 2)
+        #expect(try imports.apply(changes, to: store, install: install, timeZone: newYork) == 2)
         #expect(imports.records.count == 2 && imports.records[soup.id]?.owner == install)
-        // Changed after the plan was made: removal is checked again as it's saved.
+        let listed = try [soup, toast].map { HealthChangeQueue.Entry(try #require(imports.records[$0.id]), reason: .deleted) }
+        try imports.save([], queue: HealthChangeQueue(entries: listed))
+        // Changed after it was listed: checked again as it's applied, and dropped.
         let entry = try #require(store.entries.first { $0.id == soup.id })
         try store.saveEntry(entry.editingNutrients(NutrientAmounts([.energy: 320])))
-        var removing = HealthFoodChanges()
-        removing.removing = [soup.id, toast.id]
-        #expect(try imports.apply(removing, to: store, install: install, timeZone: newYork).removed == 1)
+        #expect(try imports.applyRemovals(listed, to: store, install: "phone-b") == 1)
         #expect(store.entries.map(\.id) == [soup.id] && imports.records[toast.id]?.state == .removed)
-        #expect(try imports.apply(removing, to: store, install: "phone-b", timeZone: newYork).removed == 0, "never another install")
+        #expect(imports.records[toast.id]?.owner == "phone-b" && imports.records[toast.id]?.generation == 1, "applied here, a generation on")
+        #expect(imports.queue.isEmpty, "exactly what was applied leaves, the dropped one too")
         // Both kinds reach the documents sync tracks.
         #expect(try persistence.loadDocuments(kind: "health_import").count == 2)
         #expect(try persistence.loadDocuments(kind: "food_entry").count == 1)
@@ -137,9 +152,7 @@ import Testing
         try imports.apply(adding, to: store, install: install, timeZone: newYork)
         try await sync.sync()
         #expect(server.revision("food_entry", soup.id.uuidString) != nil && server.revision("health_import", soup.id.uuidString) != nil)
-        var removing = HealthFoodChanges()
-        removing.removing = [soup.id]
-        try imports.apply(removing, to: store, install: install, timeZone: newYork)
+        try imports.applyRemovals([HealthChangeQueue.Entry(try #require(imports.records[soup.id]), reason: .deleted)], to: store, install: install)
         try await sync.sync()
         let other = InMemoryTrainingPersistence()
         let otherStore = try NutritionStore(persistence: other), otherImports = try HealthImportStore(persistence: other)
@@ -257,34 +270,6 @@ import Testing
         try await b.3.sync()
         #expect(a.2.records[soup.id] == adopted, "the removal from before the adoption doesn't stand")
         #expect(b.2.records[soup.id] == adopted)
-    }
-
-    /// Review 4, item 5: a food put back keeps its record's generation, so
-    /// an older version arriving later doesn't undo the restoration.
-    @Test func aRestoredFoodKeepsItsGenerationAgainstAStaleVersion() throws {
-        let persistence = InMemoryTrainingPersistence()
-        let store = try NutritionStore(persistence: persistence), imports = try HealthImportStore(persistence: persistence)
-        let soup = food(5, 12, tracker, kcal: 250)
-        var changes = HealthFoodChanges()
-        changes.adding = [soup]
-        try imports.apply(changes, to: store, install: "phone-a", timeZone: newYork, now: at(5, 13))
-        let stale = try #require(imports.records[soup.id])
-        changes = HealthFoodChanges()
-        changes.adopting = [soup.id]
-        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 9))
-        changes = HealthFoodChanges()
-        changes.displacing = [soup.id]
-        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 10))
-        changes = HealthFoodChanges()
-        changes.restoring = [soup]
-        try imports.apply(changes, to: store, install: "phone-b", timeZone: newYork, now: at(6, 11))
-        let restored = try #require(imports.records[soup.id])
-        #expect(restored.state == .imported && restored.generation >= 1)
-        var older = stale
-        older.state = .displaced
-        older.updatedAt = at(7, 9)
-        let merged = try imports.merge(kind: "health_import", base: nil, local: ExerlyJSON.canonical(restored), remote: ExerlyJSON.canonical(older))
-        #expect(try ExerlyJSON.decoder.decode(HealthImport.self, from: merged) == restored, "the restoration stands")
     }
 
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {

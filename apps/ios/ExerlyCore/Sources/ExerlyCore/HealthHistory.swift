@@ -68,19 +68,13 @@ public struct HealthHistoryPreview: Sendable, Hashable {
     public var adding = 0
     /// Records already in Exerly from an earlier import.
     public var alreadyIn = 0
-    /// Records set aside by source priority.
+    /// Records set aside: a lower-ranked source, or a source arriving later
+    /// for a day or time already imported.
     public var leftOut = 0
-    /// Imports Health deleted, taken out.
+    /// Imports Health deleted: listed in Changes from Health.
     public var removing = 0
-    /// Imports a better source now covers, taken out until it goes.
-    public var displacing = 0
-    /// Imports put back because the better source's record went.
-    public var restoring = 0
     /// Imports no longer in Health, with no deletion: kept unless they choose.
     public var missing = 0
-    /// Better sources' records held back, as adding them would set aside
-    /// what's in Exerly: they wait in Changes from Health.
-    public var deferred = 0
     /// Imports another install made, or that have no record, of samples this
     /// phone's Health has: theirs to keep as this iPhone's.
     public var adoptable = 0
@@ -94,32 +88,26 @@ public struct HealthHistoryPreview: Sendable, Hashable {
 
     public init() {}
 
-    public var isEmpty: Bool { adding + removing + displacing + restoring == 0 }
+    public var isEmpty: Bool { adding + removing == 0 }
 }
 
-/// What reading Health would change. Read automatically (`deferring`),
-/// only additions: Health's deletions, a better source over what's in
-/// Exerly, and what a full read no longer finds wait for the person in
-/// Changes from Health, and applying those plans everything again.
+/// What reading Health would change. Only additions are made as it's read:
+/// a day's food, or a workout's time, comes from its best source when it's
+/// first imported, and a source arriving later for it is set aside and
+/// noted on what's there (`alsoIn`), never swapped in. Health's deletions of
+/// this install's imports, and what a full read no longer finds, wait for
+/// the person in Changes from Health.
 public struct HealthImportPlan<Reading> {
     public var preview: HealthHistoryPreview
     public var adding: [Reading]
-    /// Unchanged imports Health deleted, and set-aside ones.
+    /// This install's imports Health deleted, unchanged since: listed for them.
     public var removing: [UUID]
-    /// Unchanged imports a better source now covers.
-    public var displacing: [UUID]
-    /// Displaced imports whose better source went.
-    public var restoring: [UUID]
     /// This install's imports a full read no longer finds, with no deletion.
     public var missing: [UUID]
     /// Imports this install could adopt: another's, or entries with no record.
     public var adoptable: [UUID]
-    /// Better sources' readings held back while `deferring`, as adding them
-    /// would set aside what's in Exerly.
-    public var deferred: [Reading] = []
-    /// The day or time each added, set aside or restored record counts
-    /// toward, so their changes are made, or dropped, together.
-    public var groups: [UUID: Int] = [:]
+    /// Imported records a later source also has, with that source's names.
+    public var alsoIn: [UUID: Set<String>] = [:]
 }
 
 /// What a reading is, for grouping and priority.
@@ -154,34 +142,26 @@ public enum HealthHistory {
     /// is everything when `full`. `live` holds the records whose entry or
     /// activity is still in Exerly, `changed` those they've changed since
     /// import, and `untracked` the readings already in Exerly with no record.
-    /// `deferring`, as Health is read with no one choosing, nothing is taken
-    /// out, set aside or put back: Health's deletions are only listed, and a
-    /// day or time where a new record would set aside one in Exerly holds
-    /// that record back (`deferred`). Applied by choice, everything is, by
-    /// whichever install owned it, except what they've changed.
     public static func plan<T>(added: [T], deleted: Set<UUID> = [], full: Bool, records: [HealthImport], install: String,
                                live: Set<UUID>, changed: Set<UUID>, untracked: Set<UUID> = [], grouping: Grouping,
-                               within: ClosedRange<LocalDate>? = nil, preferred: [String] = [], deferring: Bool = false,
+                               within: ClosedRange<LocalDate>? = nil, preferred: [String] = [],
                                item: (T) -> HealthItem) -> HealthImportPlan<T> {
         let known = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let mine = { (record: HealthImport) in record.owner == install }
-        // Health's deletions of imports as imported, or set aside.
+        // Health's deletions of this install's imports, still as imported: listed, never made by themselves.
         var removing: [UUID] = []
         for id in deleted.sorted(by: { $0.uuidString < $1.uuidString }) {
-            guard let record = known[id] else { continue }
-            if record.state == .displaced || (record.state == .imported && (!live.contains(id) || !changed.contains(id))) { removing.append(id) }
+            guard let record = known[id], mine(record), record.state == .imported, live.contains(id), !changed.contains(id) else { continue }
+            removing.append(id)
         }
-        let gone = deferring ? [] : Set(removing)
         let present = Set(added.map { item($0).id })
         var outside = 0
         var fresh: [T] = []
         for reading in added where known[item(reading).id] == nil && !untracked.contains(item(reading).id) {
             if let within, !within.contains(item(reading).day) { outside += 1 } else { fresh.append(reading) }
         }
-        // What counts for a day or time: what's in Exerly, what's set aside to come back, and what's new.
-        let held = records.filter { record in
-            !gone.contains(record.id) && (record.state == .displaced || (record.state == .imported && live.contains(record.id)))
-        }
+        // What's imported holds its day or time, whichever source it came from.
+        let held = records.filter { $0.state == .imported }
         var members = held.map { (item: HealthItem($0), record: Optional($0), reading: T?.none) }
             + fresh.map { (item: item($0), record: HealthImport?.none, reading: Optional($0)) }
         members.sort { ($0.item.start, $0.item.id.uuidString) < ($1.item.start, $1.item.id.uuidString) }
@@ -203,56 +183,41 @@ public enum HealthHistory {
         }
         let order = HealthSourcePriority.order(Dictionary(members.map { ($0.item.source, 1) }, uniquingKeysWith: +), preferred: preferred)
         let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: min)
-        var adding: [T] = [], displacing: [UUID] = [], restoring: [UUID] = [], leftOut: [T] = [], deferred: [T] = []
-        var groups: [UUID: Int] = [:]
-        for (index, those) in Dictionary(grouping: members, by: { group[$0.item.id] ?? 0 }) {
-            let best = those.map(\.item.source).min { rank[$0, default: .max] < rank[$1, default: .max] }
-            let worse = those.filter { $0.item.source != best }
-            // A day or time held by one they changed stays as it is.
-            let frozen = worse.contains { member in
-                guard let record = member.record, record.state == .imported else { return false }
-                return changed.contains(record.id)
-            }
-            var adds: [T] = [], aside: [UUID] = [], back: [UUID] = []
+        var adding: [T] = [], leftOut: [T] = [], alsoIn: [UUID: Set<String>] = [:]
+        for (_, those) in Dictionary(grouping: members, by: { group[$0.item.id] ?? 0 }) {
+            let imported = those.compactMap(\.record)
+            // Already imported: more from the same source joins it, and another source is set aside and noted.
+            // Not yet: the best source's come in.
+            let sources = imported.isEmpty
+                ? Set(those.map(\.item.source).min { rank[$0, default: .max] < rank[$1, default: .max] }.map { [$0] } ?? [])
+                : Set(imported.map(\.source))
             for member in those {
-                switch (member.record, member.reading) {
-                case (nil, let reading?):
-                    if !frozen, member.item.source == best { adds.append(reading) } else { leftOut.append(reading) }
-                case (let record?, _) where !frozen:
-                    if record.state == .imported, member.item.source != best { aside.append(record.id) }
-                    if record.state == .displaced, member.item.source == best { back.append(record.id) }
-                default: break
+                guard let reading = member.reading else { continue }
+                if sources.contains(member.item.source) {
+                    adding.append(reading)
+                } else {
+                    leftOut.append(reading)
+                    for record in imported { alsoIn[record.id, default: []].insert(member.item.sourceName) }
                 }
-            }
-            if deferring, !aside.isEmpty || !back.isEmpty {
-                // Adding these would set aside or bring back what's in Exerly: that waits for them to choose.
-                deferred += adds
-            } else {
-                (adding, displacing, restoring) = (adding + adds, displacing + aside, restoring + back)
-                for id in adds.map({ item($0).id }) + aside + back { groups[id] = index }
             }
         }
         adding.sort { (item($0).start, item($0).id.uuidString) < (item($1).start, item($1).id.uuidString) }
         var missing: [UUID] = [], adoptable: [UUID] = []
         if full {
-            for record in records where record.state == .imported && live.contains(record.id) && !gone.contains(record.id) {
-                if mine(record) { if !present.contains(record.id) { missing.append(record.id) } } else if present.contains(record.id) {
-                    adoptable.append(record.id)
-                }
+            for record in records where record.state == .imported && live.contains(record.id) {
+                if mine(record) { if !present.contains(record.id) && !changed.contains(record.id) { missing.append(record.id) } }
+                else if present.contains(record.id) { adoptable.append(record.id) }
             }
             adoptable += untracked.intersection(present)
         }
         let sorted = { (ids: [UUID]) in ids.sorted { $0.uuidString < $1.uuidString } }
         var preview = HealthHistoryPreview()
         preview.adding = adding.count
-        preview.alreadyIn = held.filter { $0.state == .imported && (!full || present.contains($0.id)) }.count
+        preview.alreadyIn = held.filter { live.contains($0.id) && (!full || present.contains($0.id)) }.count
             + untracked.intersection(present).count
         preview.leftOut = leftOut.count
         preview.removing = removing.count
-        preview.displacing = displacing.count
-        preview.restoring = restoring.count
         preview.missing = missing.count
-        preview.deferred = deferred.count
         preview.adoptable = adoptable.count
         preview.outside = outside
         let days = adding.map { item($0).day }
@@ -266,10 +231,8 @@ public enum HealthHistory {
             return .init(name: names[key] ?? key, adding: theirs.filter { addingIDs.contains($0.id) }.count,
                          leftOut: theirs.filter { leftOutIDs.contains($0.id) }.count)
         }
-        deferred.sort { (item($0).start, item($0).id.uuidString) < (item($1).start, item($1).id.uuidString) }
-        return HealthImportPlan(preview: preview, adding: adding, removing: removing, displacing: sorted(displacing),
-                                restoring: sorted(restoring), missing: sorted(missing), adoptable: sorted(adoptable),
-                                deferred: deferred, groups: groups)
+        return HealthImportPlan(preview: preview, adding: adding, removing: removing, missing: sorted(missing),
+                                adoptable: sorted(adoptable), alsoIn: alsoIn)
     }
 
     public static func item(_ food: HealthFoodReading, timeZone: TimeZone) -> HealthItem {

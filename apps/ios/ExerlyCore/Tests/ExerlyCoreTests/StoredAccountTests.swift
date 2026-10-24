@@ -42,11 +42,11 @@ import Testing
                                      source: "com.example.tracker", sourceName: "Tracker")
         let toast = HealthFoodReading(id: UUID(), at: Fixture.instant().addingTimeInterval(-3600), name: "Synthetic toast",
                                       nutrients: NutrientAmounts([.energy: 120]), source: "com.example.tracker", sourceName: "Tracker")
-        var adding = HealthFoodChanges(), removing = HealthFoodChanges()
+        var adding = HealthFoodChanges()
         adding.adding = [soup, toast]
-        removing.removing = [toast.id]
         try imports.apply(adding, to: nutrition, install: "phone", timeZone: zone)
-        try imports.apply(removing, to: nutrition, install: "phone", timeZone: zone)
+        try imports.applyRemovals([HealthChangeQueue.Entry(try #require(imports.records[toast.id]), reason: .deleted)], to: nutrition,
+                                  install: "phone")
         let stored = try #require(try await Task.detached { try StoredAccount.read(url: url) }.value)
         let loaded = try HealthImportStore(persistence: persistence, loaded: stored.healthImports)
         #expect(loaded.records == (try HealthImportStore(persistence: persistence)).records)

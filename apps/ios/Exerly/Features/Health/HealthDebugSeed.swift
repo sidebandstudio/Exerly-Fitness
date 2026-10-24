@@ -34,8 +34,8 @@ enum HealthDebugSeed {
 
     /// A UI test's synthetic changes from Health waiting for the person
     /// (EXERLY_HEALTH_CHANGES_SEED=1): a soup imported yesterday that Health
-    /// then deleted, a better source's breakfast and a watch's run. Once per
-    /// account, saved as a read would save them.
+    /// then deleted, and oats a full read no longer found. Once per account,
+    /// saved as reads would save them.
     @MainActor
     static func seedChanges(_ workspace: TrainingWorkspace, timeZone: TimeZone) throws {
         guard ProcessInfo.processInfo.environment["EXERLY_HEALTH_CHANGES_SEED"] == "1",
@@ -45,14 +45,14 @@ enum HealthDebugSeed {
                                      nutrients: NutrientAmounts([.energy: 320, .protein: 18]), source: "com.example.diary", sourceName: "Diary")
         let oats = HealthFoodReading(id: UUID(), at: now.addingTimeInterval(-50 * 3600), name: "Synthetic oats",
                                      nutrients: NutrientAmounts([.energy: 380, .protein: 13]), source: "com.example.tracker", sourceName: "Tracker")
-        let start = now.addingTimeInterval(-74 * 3600)
-        let run = HealthWorkoutReading(id: UUID(), start: start, end: start.addingTimeInterval(35 * 60), activity: "Running", kilocalories: 310,
-                                       source: "com.apple.health.debug", sourceName: "Apple Watch")
-        var changes = HealthFoodChanges(), queue = HealthChangeQueue()
-        changes.adding = [soup]
-        queue.add(deleted: [soup.id], foods: [oats], workouts: [run])
-        changes.queue = queue
-        try workspace.healthImports.apply(changes, to: workspace.nutrition, install: HealthImportInstall.id(), timeZone: timeZone)
+        var changes = HealthFoodChanges()
+        changes.adding = [soup, oats]
+        let imports = workspace.healthImports
+        try imports.apply(changes, to: workspace.nutrition, install: HealthImportInstall.id(), timeZone: timeZone)
+        let listed = [(soup.id, HealthChangeQueue.Entry.Reason.deleted), (oats.id, .missing)].compactMap { id, reason in
+            imports.records[id].map { HealthChangeQueue.Entry($0, reason: reason) }
+        }
+        try imports.save([], queue: HealthChangeQueue(entries: listed))
     }
 
     static func seedIfRequested(_ client: HealthStoreClient, timeZone: TimeZone) async {
