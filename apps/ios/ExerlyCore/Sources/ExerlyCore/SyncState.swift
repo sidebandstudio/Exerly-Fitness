@@ -196,7 +196,7 @@ extension SQLiteTrainingPersistence: SyncStateStore {
         case TrainingStore.exerciseKind: "custom_exercises"
         default: kind
         }
-        return unreadableRows.contains("\(table)/\(DocumentWrite.canonicalID(id))")
+        return isUnreadableRow("\(table)/\(DocumentWrite.canonicalID(id))")
     }
 
     public func syncBases() throws -> [SyncBase] {

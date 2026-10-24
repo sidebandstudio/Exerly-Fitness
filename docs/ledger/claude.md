@@ -60,7 +60,7 @@ Xcode 26.2, or pre-push SwiftLint crashes. In T3, never end a turn without backg
 | Branch      | Unlanded                                       | Last landed |
 | ----------- | ---------------------------------------------- | ----------- |
 | claude/next | nothing                                        | this commit |
-| sync        | conflict review, rounds 1-4 fixed, on 2f7b53b5 | not yet     |
+| sync        | conflict review, rounds 1-5 fixed, on 2f7b53b5 | not yet     |
 
 ## Risks
 

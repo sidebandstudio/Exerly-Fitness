@@ -20,14 +20,22 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
     /// Rows that could not be decoded, as `table/id`. They stay in the file
     /// untouched so a later version can read them.
     public private(set) var unreadableRows: [String] = []
+    /// The same rows, to look one up, or skip one noted already, at once: a
+    /// long history read in the background can note thousands at launch.
+    private var unreadableSet: Set<String> = []
 
     public func noteUnreadable(_ rows: [String]) {
-        for row in rows {
-            let parts = row.split(separator: "/", maxSplits: 1).map(String.init)
-            let canonical = parts.count == 2 ? "\(parts[0])/\(DocumentWrite.canonicalID(parts[1]))" : row
-            if !unreadableRows.contains(canonical) { unreadableRows.append(canonical) }
-        }
+        for row in rows { note(row) }
     }
+
+    /// Notes `table/id` once, with the ID in canonical form.
+    private func note(_ row: String) {
+        let parts = row.split(separator: "/", maxSplits: 1).map(String.init)
+        let canonical = parts.count == 2 ? "\(parts[0])/\(DocumentWrite.canonicalID(parts[1]))" : row
+        if unreadableSet.insert(canonical).inserted { unreadableRows.append(canonical) }
+    }
+
+    func isUnreadableRow(_ row: String) -> Bool { unreadableSet.contains(row) }
 
     let database: SQLiteDatabase
     private let path: String
@@ -283,8 +291,8 @@ public final class SQLiteTrainingPersistence: TrainingPersistence {
             guard case .text(let id) = row[0] else { continue }
             if case .blob(let payload) = row[1], let value = try? decoder.decode(T.self, from: payload) {
                 values.append(value)
-            } else if !unreadableRows.contains("\(table)/\(id)") {
-                unreadableRows.append("\(table)/\(id)")
+            } else {
+                note("\(table)/\(id)")
             }
         }
         return values

@@ -2555,3 +2555,7 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   app holds an earlier acknowledgement format. Round 4's "new key" is dropped: acknowledgements
   are stored under the one key `sync.conflicts.acknowledged`, in the
   `ConflictAcknowledgement` format, which starts here, with no migration or legacy reading.
+- Noting a background read's unreadable rows checked each against an array, so thousands of
+  them at launch took quadratic time, and so did every sync lookup. Persistence now keeps a
+  set beside the ordered list, notes every row (its own reads' too) through one path in
+  canonical form, and answers `isUnreadable` from the set.

@@ -254,3 +254,33 @@ import Testing
         var all: [String] { lock.withLock { errors } }
     }
 }
+
+/// Review round 5: noting a background read's unreadable rows is linear,
+/// and each row is noted once whatever the letter case of its ID.
+@MainActor
+@Suite struct NotedUnreadableRowTests {
+    @Test func manyUnreadableRowsAreNotedOnceAndQuickly() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk = try SQLiteTrainingPersistence(url: directory.appendingPathComponent("exerly.sqlite"))
+        let id = UUID().uuidString
+        disk.noteUnreadable(["sessions/\(id.lowercased())", "sessions/\(id)"])
+        #expect(disk.unreadableRows == ["sessions/\(id)"])
+        // Four times the rows take about four times as long, not sixteen.
+        func timed(_ count: Int) throws -> TimeInterval {
+            let fresh = try SQLiteTrainingPersistence(url: directory.appendingPathComponent("\(count).sqlite"))
+            let rows = (0..<count).map { _ in "sessions/\(UUID().uuidString)" }
+            let started = Date()
+            fresh.noteUnreadable(rows + rows)
+            let took = Date().timeIntervalSince(started)
+            #expect(fresh.unreadableRows.count == count)
+            return took
+        }
+        let small = try timed(5_000), large = try timed(20_000)
+        #expect(large / small < 8, "5,000 rows took \(small) s and 20,000 took \(large) s")
+        let rows = (0..<3).map { _ in "sessions/\(UUID().uuidString)" }
+        disk.noteUnreadable(rows)
+        #expect(disk.isUnreadable(kind: TrainingStore.sessionKind, id: rows[0].replacingOccurrences(of: "sessions/", with: "")))
+    }
+}
