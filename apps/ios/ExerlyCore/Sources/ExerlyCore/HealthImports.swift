@@ -50,14 +50,27 @@ public struct HealthImport: Sendable, Codable, Hashable, Identifiable {
         public var name: String
 
         public static let limit = 5
+        /// In Unicode scalars, as the API counts them (documents.js).
         public static let nameLimit = 60
 
         public init(source: String, name: String) {
             self.source = source
-            self.name = String(name.prefix(Self.nameLimit))
+            self.name = Self.clipped(name)
         }
 
-        /// One per source, the first kept, at most `limit`, each name at most `nameLimit` characters.
+        /// At most `nameLimit` Unicode scalars, ending on a whole character: a
+        /// character that would go past the limit is left out whole, never split.
+        public static func clipped(_ name: String) -> String {
+            var kept = "", scalars = 0
+            for character in name {
+                scalars += character.unicodeScalars.count
+                guard scalars <= nameLimit else { break }
+                kept.append(character)
+            }
+            return kept
+        }
+
+        /// One per source, the first kept, at most `limit`, each name at most `nameLimit` scalars.
         public static func limited(_ sources: [AlsoIn]) -> [AlsoIn] {
             var seen = Set<String>()
             return Array(sources.filter { seen.insert($0.source).inserted }.prefix(limit)).map { AlsoIn(source: $0.source, name: $0.name) }

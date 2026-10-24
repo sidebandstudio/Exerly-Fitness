@@ -842,7 +842,25 @@ test('a Health import record syncs with its owner and state, and needs them', as
   assert.equal(noted.status, 201, JSON.stringify(noted.body));
   const sources = (count, name = 'App') =>
     Array.from({ length: count }, (_, i) => ({ source: `com.example.app${i}`, name }));
+  // The names HealthHistoryTests.aSourceNameIsCutTo60ScalarsOnAWholeCharacter
+  // keeps are accepted: the API counts code points, as the app does.
+  const accent = 'e\u0301';
+  const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}';
+  for (const name of ['a'.repeat(60), accent.repeat(30), family.repeat(8)]) {
+    const keptID = randomUUID().toUpperCase();
+    const kept = await api.put(
+      `/v1/documents/health_import/${keptID}`,
+      {
+        payload: { ...record, id: keptID, alsoIn: [{ source: 'com.example.app', name }] },
+        base_revision: 0,
+      },
+      { token, headers: key() }
+    );
+    assert.equal(kept.status, 201, `${[...name].length} code points`);
+  }
   for (const alsoIn of [
+    sources(1, accent.repeat(31)),
+    sources(1, family.repeat(9)),
     sources(6),
     sources(1, 'N'.repeat(61)),
     [...sources(1), ...sources(1)],

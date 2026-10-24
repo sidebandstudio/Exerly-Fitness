@@ -12,7 +12,7 @@ const { proposalProblems, auditEventProblems } = require('./documentSchemas');
 // ExerlyCore decodes, because a device can't apply what it can't read.
 // Token writes of training documents are checked in full (routes/documents.js).
 // Sources set aside for a Health import: one per source, at most five,
-// each name at most 60 characters, as the app keeps them.
+// each name at most 60 code points (Unicode scalars), as the app keeps them.
 function healthAlsoIn(list) {
   return (
     Array.isArray(list) &&

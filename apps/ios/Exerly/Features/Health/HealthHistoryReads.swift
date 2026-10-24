@@ -261,7 +261,7 @@ struct HealthWorkoutWork: Codable {
     /// Makes each change to the activity log that isn't made yet, so running
     /// it again after a crash repeats nothing; then saves the records and the
     /// list of changes and clears the work in one transaction, and moves
-    /// Health's anchor on, unless the read's removals didn't all fit.
+    /// Health's anchor on.
     @MainActor
     func finish(imports: HealthImportStore, activities store: HealthActivityStore, defaults: UserDefaults) throws {
         var records: [HealthImport] = []

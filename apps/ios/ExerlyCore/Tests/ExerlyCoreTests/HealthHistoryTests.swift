@@ -315,6 +315,25 @@ import Testing
         #expect(b.2.records[soup.id] == adopted)
     }
 
+    /// Review 7: a name is kept to 60 Unicode scalars, as the API counts
+    /// them, without splitting a character. The same names are in
+    /// api.documents.test.js, which accepts what's kept here.
+    @Test func aSourceNameIsCutTo60ScalarsOnAWholeCharacter() {
+        let clip = HealthImport.AlsoIn.clipped
+        let ascii = String(repeating: "a", count: 60)
+        #expect(clip(ascii) == ascii && clip(ascii + "a") == ascii, "exactly 60 ASCII stays")
+        let accent = "e\u{301}", family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"
+        let accents = String(repeating: accent, count: 31)
+        #expect(accents.count == 31 && accents.unicodeScalars.count == 62)
+        #expect(clip(accents) == String(repeating: accent, count: 30), "the 31st accented letter would go past 60, so it's left out whole")
+        let families = String(repeating: family, count: 9)
+        #expect(clip(families) == String(repeating: family, count: 8), "eight families are 56 scalars; a ninth would be 63")
+        for name in [ascii + "b", accents, families, "Tracker"] {
+            let kept = HealthImport.AlsoIn(source: "s", name: name).name
+            #expect(kept.unicodeScalars.count <= 60 && name.hasPrefix(kept))
+        }
+    }
+
     @Test func aWorkoutsActivityIDIsTheSameOnEveryInstallAndDiffersByAccount() {
         let id = UUID()
         #expect(HealthHistory.activityID(for: id, accountID: "a") == HealthHistory.activityID(for: id, accountID: "a"))
