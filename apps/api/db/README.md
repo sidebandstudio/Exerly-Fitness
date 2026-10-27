@@ -2,6 +2,32 @@
 
 The API uses PostgreSQL 16 or later through `DATABASE_URL`.
 
+## Supabase
+
+Production's database is a Supabase project. The API runs on DigitalOcean and treats
+Supabase as an ordinary PostgreSQL server. It doesn't use Supabase Auth, the client
+libraries or the Data API.
+
+- **Connection string.** Use the shared pooler in session mode, copied from the
+  project's Connect dialog:
+  `postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-[N]-[REGION].pooler.supabase.com:5432/postgres`.
+  The direct connection (`db.[PROJECT-REF].supabase.co`) answers only over IPv6 unless
+  the project pays for the IPv4 add-on. Don't use the transaction pooler on port 6543.
+  The migrator holds a session-level advisory lock across several transactions, and
+  that pooler can run each transaction on a different server connection.
+- **TLS.** Supabase's certificates chain to its own root CA, which Node doesn't ship.
+  For `*.supabase.com` and `*.supabase.co` hosts the API also trusts
+  `data/supabase-prod-ca-2021.crt`, and it still verifies every certificate. That root
+  expires on 2031-04-26. Leave `DATABASE_SSL` unset.
+- **Data API off.** Supabase's Data API serves the tables in `public` to anyone with
+  the project's anon or publishable key, unless row-level security stops them. These
+  tables don't use row-level security, so turn the Data API off under Integrations,
+  Data API, Enable Data API. Once it's off, the generated REST endpoints stop
+  answering.
+- **Connections.** Each API instance opens at most `PG_POOL_MAX` connections (default
+  5). During a deploy the old and new instances overlap, so keep twice that under the
+  pool size in the project's database settings.
+
 ## Migrations
 
 `migrations/` holds numbered pairs: `NNNN_name.up.sql` and `NNNN_name.down.sql`.
@@ -26,8 +52,10 @@ for the data in place.
 
 ## Backups
 
-Production (Neon) keeps point-in-time history within its retention window. For a
-portable copy, or before a risky migration:
+Supabase backs up a Pro project once a day and keeps the last 7 days. Point-in-time
+recovery is a paid add-on that needs at least the Small compute size. For a portable
+copy, or before a risky migration, use a `pg_dump` at least as new as the project's
+PostgreSQL:
 
 ```sh
 pg_dump --dbname "$DATABASE_URL" --format custom --file exerly-$(date +%F).dump
