@@ -2,7 +2,7 @@
 
 These questions do not block local implementation.
 
-- Create the Neon project when ready and set the production `DATABASE_URL` in
+- Create the Supabase project when ready and set the production `DATABASE_URL` in
   DigitalOcean. The PostgreSQL change will be tested locally first. Do not post
   credentials in this file or chat.
 - Before public release, review the privacy policy, terms and App Store legal
@@ -107,7 +107,7 @@ doesn't work** until the new API is live. The landing pages are fine.
 
 When you're ready:
 
-1. Create the Neon database and set `DATABASE_URL` in DigitalOcean (also
+1. Create the Supabase database and set `DATABASE_URL` in DigitalOcean (also
    `JWT_SECRET`, if it isn't set). Then redeploy from `main`, or tell me and I'll
    push the next merge.
 2. I'll check that `/api/health` reports version 2.0.0 with PostgreSQL.

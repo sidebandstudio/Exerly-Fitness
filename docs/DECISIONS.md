@@ -2998,3 +2998,35 @@ An independent review of the 2026-10-21 slice found five ways an edit could stil
   where its source was shown before, with "Also in Health from <sources>,
   not imported" under it; an imported workout's editor shows the same two
   lines under its date.
+
+## 2026-10-27: Production database on Supabase
+
+Production PostgreSQL goes on Supabase instead of the Neon project planned on
+2026-10-06, because Ali already pays for Supabase Pro. Supabase only hosts the
+database. The API stays on DigitalOcean and reaches it through `DATABASE_URL`, so
+migrations, tests and self-hosting are unchanged.
+
+The rest of Supabase is left alone:
+
+- **Auth.** Sessions, refresh rotation, Sign in with Apple, the `account_deleted`
+  response and personal access tokens are built and tested here, and the iOS app
+  depends on them. Moving to Supabase Auth would rewrite both sides.
+- **Data API.** Clients reading the database directly would need row-level security,
+  which was ruled out on 2026-10-06 because the tables mix email and account-ID
+  owners. Sync also depends on server transactions that commit a change, its receipt
+  and the cursor together.
+- **Edge Functions.** They run on Deno, so moving the Express API there is a rewrite,
+  and Gemini, FatSecret, webhooks and MCP need a server either way.
+
+What the move takes:
+
+- The API trusts Supabase's root CA for Supabase hosts
+  (`apps/api/data/supabase-prod-ca-2021.crt`). Verification stays on.
+- `DATABASE_URL` is the session pooler on port 5432. The direct connection is IPv6
+  only without a paid add-on, and the transaction pooler on 6543 would split the
+  migrator's session advisory lock from its transactions.
+- The project's Data API is turned off, because no table uses row-level security.
+- Pro backs up daily and keeps 7 days. Point-in-time recovery is a paid add-on, so
+  the `pg_dump` procedure stays for portable copies and risky migrations.
+
+Setup is in `apps/api/db/README.md`.
