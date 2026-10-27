@@ -11,6 +11,9 @@
 
 const { Pool } = require('pg');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const fs = require('node:fs');
+const path = require('node:path');
+const tls = require('node:tls');
 const { collections, JSON_FIELDS, assertCollection, types } = require('./schema');
 const { normalizeFilter, normalizeOptions, normalizePatch } = require('./query');
 const { migrateUp } = require('../db/migrate');
@@ -20,12 +23,19 @@ const MAX_ATTEMPTS = 6;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCHEMA_RE = /^[a-z_][a-z0-9_]{0,62}$/;
 
+// Supabase signs its database certificates with its own root CA, which Node
+// doesn't ship. This is the prod-ca-2021.crt that every Supabase project's
+// database settings link to. It expires on 2031-04-26.
+const SUPABASE_CA = fs.readFileSync(path.join(__dirname, 'supabase-prod-ca-2021.crt'), 'utf8');
+const SUPABASE_HOST_RE = /\.supabase\.(co|com)$/i;
+
 let pool = null;
 const scope = new AsyncLocalStorage();
 
 /**
  * pg settings for a connection string. Remote hosts require verified TLS
  * unless DATABASE_SSL=disable (a private Compose network, for example).
+ * Supabase hosts also trust Supabase's root CA.
  */
 function connectionConfig(connectionString, { schema } = {}) {
   if (!connectionString) throw new Error('A PostgreSQL connection string is required');
@@ -39,6 +49,9 @@ function connectionConfig(connectionString, { schema } = {}) {
     max: Number(process.env.PG_POOL_MAX) || 5,
     idleTimeoutMillis: 30_000,
   };
+  if (config.ssl && SUPABASE_HOST_RE.test(host)) {
+    config.ssl.ca = [...tls.rootCertificates, SUPABASE_CA];
+  }
   if (schema) {
     if (!SCHEMA_RE.test(schema)) throw new Error('Invalid schema name');
     config.options = `-c search_path=${schema}`;
