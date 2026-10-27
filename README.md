@@ -100,7 +100,7 @@ behind the current design.
 | iOS       | SwiftUI, HealthKit, AVFoundation, SwiftData             |
 | Web       | React 19, TypeScript, Vite, Tailwind CSS, Framer Motion |
 | API       | Node.js, Express 5, node-postgres, JWT, bcrypt          |
-| Database  | PostgreSQL 16 (Neon in production, Docker self-hosted)  |
+| Database  | PostgreSQL 16 (Supabase in prod, Docker self-hosted)    |
 | AI        | Google Gemini 2.0 Flash                                 |
 | Food Data | FatSecret API (primary), Open Food Facts (fallback)     |
 | Hosting   | DigitalOcean App Platform (API), GitHub Pages (web)     |
@@ -169,6 +169,8 @@ from `apps/api/Dockerfile`.
 Environment variables (`DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAILS`,
 `GEMINI_API_KEY`, and optionally the FatSecret pair) are configured in the DO
 dashboard. See [apps/api/.env.example](apps/api/.env.example) for the full list.
+The database is a Supabase project, and `DATABASE_URL` is its session pooler URL; see
+[apps/api/db/README.md](apps/api/db/README.md#supabase).
 
 ### Self-hosting
 
